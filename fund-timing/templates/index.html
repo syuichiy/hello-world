@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>投資信託 売り時・買い時サイン</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('plotly_js') }}"></script>
+</head>
+<body>
+  <header class="site-header">
+    <h1>📈 投資信託 売り時・買い時サイン</h1>
+    <p class="tagline">過去の基準価額から、テクニカル指標で売買タイミングの目安を表示します</p>
+    {% if demo %}<p class="demo-badge">DEMOモード（ダミーデータ）</p>{% endif %}
+  </header>
+
+  <main>
+    <section class="controls card">
+      <label class="field-label" for="query">ファンドを指定</label>
+      <div class="input-row">
+        <input id="query" type="text" placeholder="投信ライブラリーのURL、または「ISIN,協会コード」を貼り付け">
+        <button id="analyze-btn" type="button">分析する</button>
+      </div>
+      <p class="hint">
+        例：<code>JP90C000H1T1,0331418A</code> ／
+        <a href="https://toushin-lib.fwg.ne.jp/" target="_blank" rel="noopener">投信総合検索ライブラリー</a>
+        で対象ファンドを開き、そのページのURLを貼り付けてもOK
+      </p>
+
+      <div class="presets">
+        <span class="presets-label">人気の投信：</span>
+        {% for f in presets %}
+        <button class="preset-chip" type="button"
+                data-isin="{{ f.isin }}" data-code="{{ f.assoc_code }}" data-name="{{ f.name }}">
+          {{ f.name }}
+        </button>
+        {% endfor %}
+      </div>
+
+      <div class="range-row">
+        <span class="presets-label">期間：</span>
+        <div class="range-group" id="range-group">
+          <button class="range-btn" data-range="6m">6ヶ月</button>
+          <button class="range-btn" data-range="1y">1年</button>
+          <button class="range-btn active" data-range="3y">3年</button>
+          <button class="range-btn" data-range="5y">5年</button>
+          <button class="range-btn" data-range="all">全期間</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="status" class="status" hidden></section>
+
+    <section id="result" class="result" hidden>
+      <div class="verdict-card card" id="verdict-card">
+        <div class="verdict-main">
+          <span id="verdict-emoji" class="verdict-emoji">⏳</span>
+          <div>
+            <div id="verdict-label" class="verdict-label">—</div>
+            <div id="fund-name" class="fund-name">—</div>
+          </div>
+        </div>
+        <div class="score-wrap">
+          <div class="score-bar-track">
+            <div class="score-mid"></div>
+            <div id="score-bar" class="score-bar"></div>
+          </div>
+          <div class="score-scale"><span>売り</span><span>中立</span><span>買い</span></div>
+        </div>
+      </div>
+
+      <div class="stats-row" id="stats-row"></div>
+
+      <div class="chart card">
+        <div id="price-chart"></div>
+      </div>
+      <div class="chart card">
+        <div id="rsi-chart"></div>
+      </div>
+
+      <div class="card reasons-card">
+        <h2>現在の判断の根拠</h2>
+        <ul id="reasons-list"></ul>
+      </div>
+
+      <div class="card signals-card">
+        <h2>過去の売買サイン（直近20件）</h2>
+        <table class="signals-table">
+          <thead><tr><th>日付</th><th>種別</th><th>基準価額</th><th>理由</th></tr></thead>
+          <tbody id="signals-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="disclaimer">
+      ⚠️ 本アプリが表示するサインは、過去の値動きに基づくテクニカル指標の機械的な目安です。
+      将来の価格や投資成果を保証するものではありません。投資判断はご自身の責任で行ってください。
+    </p>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
