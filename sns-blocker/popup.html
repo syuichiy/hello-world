@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
+  <title>だめ！ SNSブロック設定</title>
+</head>
+<body>
+  <header class="app-header">
+    <div class="cat-badge" aria-hidden="true">🐱</div>
+    <div class="head-text">
+      <h1>だめ！</h1>
+      <p class="subtitle">見たくないサイトをブロック</p>
+    </div>
+  </header>
+
+  <form id="add-form" class="add-form" autocomplete="off">
+    <input
+      id="site-input"
+      class="site-input"
+      type="text"
+      placeholder="例）x.com を追加"
+      aria-label="ブロックするサイトを追加"
+    />
+    <button id="add-btn" class="add-btn" type="submit" aria-label="追加">＋</button>
+  </form>
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <ul id="site-list" class="site-list" aria-label="ブロック中のサイト一覧"></ul>
+
+  <p id="empty" class="empty" hidden>ブロック中のサイトはありません 🐾</p>
+
+  <footer class="app-footer">
+    <button id="reset-btn" class="reset-btn" type="button">おすすめの初期設定に戻す</button>
+  </footer>
+
+  <script src="storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
