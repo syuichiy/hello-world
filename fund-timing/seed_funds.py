@@ -31,4 +31,12 @@ SEED_FUNDS = [
         "name": "SBI・V・S&P500インデックス・ファンド",
         "isin": "JP90C000H4Z3", "assoc_code": "89311199", "category": "米国株式",
     },
+    {
+        "name": "楽天・プラス・SOXインデックス・ファンド",
+        "isin": "JP90C000QF30", "assoc_code": "9I315241", "category": "米国株式（半導体）",
+    },
+    {
+        "name": "野村インデックスファンド・外国株式（Funds-i 外国株式）",
+        "isin": "JP90C0007DP8", "assoc_code": "0131410B", "category": "先進国株式",
+    },
 ]

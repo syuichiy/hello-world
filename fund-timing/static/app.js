@@ -144,8 +144,15 @@ async function doSearch() {
   } catch (e) { return; }
   const results = data.results || [];
   if (!results.length) {
-    box.innerHTML = `<div class="search-empty">該当なし。「＋ 新しい投信を登録」から追加できます。</div>`;
+    const kw = q ? escapeHtml(q) : "";
+    box.innerHTML = `<div class="search-empty">
+      <p>「${kw}」は内蔵リストに見つかりませんでした。</p>
+      <button class="si-add" id="empty-register">＋ この投信を登録する</button>
+      <p class="search-empty-note">どの投信でも、コードを入れれば登録できます（次回から名前で検索可）。</p>
+    </div>`;
     box.hidden = false;
+    const btn = document.getElementById("empty-register");
+    if (btn) btn.addEventListener("click", () => openRegisterPrefilled(q));
     return;
   }
   box.innerHTML = results.map((r) => `
@@ -175,6 +182,17 @@ async function removeFromWatch(catalogId) {
     body: JSON.stringify({ catalog_id: Number(catalogId) }),
   });
   loadWatchlist();
+}
+
+function openRegisterPrefilled(keyword) {
+  $("search-results").hidden = true;
+  $("register-form").hidden = false;
+  $("reg-name").value = keyword || "";
+  // みんかぶ検索リンクを入力キーワードで更新
+  const ml = document.getElementById("minkabu-link");
+  if (ml && keyword) ml.href = "https://itf.minkabu.jp/search?keyword=" + encodeURIComponent(keyword);
+  $("register-form").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("reg-code").focus();
 }
 
 async function registerFund() {

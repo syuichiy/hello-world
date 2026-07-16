@@ -32,13 +32,20 @@
         </p>
 
         <div id="register-form" class="register-form" hidden>
-          <input id="reg-name" type="text" placeholder="投信の名前（例：eMAXIS Slim 国内株式）">
-          <input id="reg-code" type="text" placeholder="投信ライブラリーのURL、または「ISIN,協会コード」">
+          <input id="reg-name" type="text" placeholder="投信の名前（例：野村インデックスファンド・外国株式）">
+          <input id="reg-code" type="text" placeholder="ISIN,協会コード（例：JP90C0007DP8,0131410B）">
           <button id="reg-submit" type="button">登録して一覧に追加</button>
-          <p class="hint">
-            <a href="https://toushin-lib.fwg.ne.jp/" target="_blank" rel="noopener">投信総合検索ライブラリー</a>
-            で対象ファンドを開き、そのページのURLを貼り付けてください。
-          </p>
+          <div class="hint reg-help">
+            <p><strong>コードの調べ方</strong>（どの投信でも登録できます）：</p>
+            <ol>
+              <li><a id="minkabu-link" href="https://itf.minkabu.jp/" target="_blank" rel="noopener">みんかぶ投資信託</a>
+                や <a href="https://finance.yahoo.co.jp/" target="_blank" rel="noopener">Yahoo!ファイナンス</a>
+                で投信名を検索。URLや見出しの<strong>8桁のコード（例 0131410B）が「協会コード」</strong>です。</li>
+              <li>証券会社（例：楽天証券）のファンド詳細ページのURLにある<strong>「JP90…」で始まる12桁が「ISIN」</strong>です。</li>
+              <li>上の欄に <code>ISIN,協会コード</code> の形式で入力（または投信協会ライブラリーのCSVダウンロードURLを貼り付け）。</li>
+            </ol>
+            <p>登録した投信は内部DBに保存され、次回から名前で検索できます。</p>
+          </div>
         </div>
       </div>
 
