@@ -129,6 +129,49 @@ function sparkline(vals, verdict) {
     <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
 }
 
+// ============================================================ 注目ランキング
+async function loadRanking() {
+  const st = $("ranking-status");
+  st.hidden = false; st.className = "status loading";
+  st.textContent = "全銘柄を分析中… ⏳（初回は少し時間がかかります）";
+  $("ranking-table").hidden = true;
+  $("ranking-note").hidden = true;
+  let data;
+  try {
+    data = await (await fetch(`/api/ranking?range=${encodeURIComponent(dashRange)}`)).json();
+  } catch (e) {
+    st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
+  }
+  st.hidden = true;
+  renderRanking(data.items || []);
+}
+
+function renderRanking(items) {
+  const ok = items.filter((x) => x.ok);
+  const body = $("ranking-body");
+  body.innerHTML = ok.map((s, i) => {
+    const rank = i + 1;
+    const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
+    const chg = s.change_pct == null ? "—"
+      : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
+    const action = s.in_watchlist
+      ? '<span class="si-added">✓ 追加済</span>'
+      : `<button class="si-add rank-add" data-id="${s.catalog_id}">＋ 追加</button>`;
+    return `<tr class="rank-row" data-id="${s.catalog_id}">
+      <td class="rank-no">${medal}</td>
+      <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
+        <div class="fund-sub">${escapeHtml(s.category || s.isin)}</div></td>
+      <td>${verdictBadge(s.verdict, s.verdict_label)}</td>
+      <td>${scoreChip(s.score)}</td>
+      <td class="num">${chg}</td>
+      <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
+      <td>${action}</td>
+    </tr>`;
+  }).join("");
+  $("ranking-table").hidden = false;
+  $("ranking-note").hidden = false;
+}
+
 // ============================================================ 検索
 let searchTimer = null;
 function onSearchInput() {
@@ -378,6 +421,18 @@ $("dash-range").addEventListener("click", (e) => {
   b.classList.add("active"); dashRange = b.dataset.range; loadWatchlist();
 });
 $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
+
+$("ranking-btn").addEventListener("click", loadRanking);
+$("ranking-body").addEventListener("click", (e) => {
+  const add = e.target.closest(".rank-add");
+  if (add) {
+    e.stopPropagation();
+    addToWatch(add.dataset.id).then(loadRanking);
+    return;
+  }
+  const row = e.target.closest("tr[data-id]");
+  if (row) openDetail(Number(row.dataset.id));
+});
 
 $("detail-range").addEventListener("click", (e) => {
   const b = e.target.closest(".range-btn"); if (!b) return;

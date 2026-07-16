@@ -83,6 +83,35 @@
           ウォッチリストが空です。上の検索から投信を追加してください。
         </p>
       </div>
+
+      <!-- 注目の投信ランキング（テクニカル） -->
+      <div class="card ranking-card">
+        <div class="ranking-head">
+          <div>
+            <h2>📊 注目の投信ランキング（テクニカル勢い）</h2>
+            <p class="ranking-sub">内蔵リストの投信を、現在の買いシグナルの強さで順位付け。ウォッチリスト外の候補も見つかります。</p>
+          </div>
+          <button id="ranking-btn" type="button" class="ghost-btn">ランキングを計算</button>
+        </div>
+        <div id="ranking-status" class="status" hidden></div>
+        <table class="watch-table ranking-table" id="ranking-table" hidden>
+          <thead>
+            <tr>
+              <th>順位</th>
+              <th>ファンド名</th>
+              <th>判定</th>
+              <th>シグナル強度</th>
+              <th class="num">期間騰落</th>
+              <th>値動き</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="ranking-body"></tbody>
+        </table>
+        <p class="ranking-note" id="ranking-note" hidden>
+          ⚠️ 順位は過去の値動きに基づくテクニカル指標の目安です。将来の値上がりや利益を保証するものではありません。
+        </p>
+      </div>
     </section>
 
     <!-- ========================= 詳細ビュー ========================= -->

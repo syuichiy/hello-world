@@ -142,7 +142,7 @@ def plotly_js():
 def api_search():
     q = request.args.get("q", "")
     results = db.search_catalog(q, limit=30)
-    watched = {w["catalog_id"] if "catalog_id" in w else w["id"] for w in db.list_watchlist()}
+    watched = {w["id"] for w in db.list_watchlist()}
     for r in results:
         r["watched"] = r["id"] in watched
     return jsonify({"ok": True, "results": results})
@@ -196,46 +196,71 @@ def api_watchlist_remove():
     return jsonify({"ok": True})
 
 
+def _summarize_fund(row, range_key, force=False):
+    """カタログ1件の現在の判定サマリを返す（一覧・ランキング共通）。"""
+    summary = {
+        "catalog_id": row["id"],
+        "name": row["name"],
+        "isin": row["isin"],
+        "category": row.get("category", ""),
+    }
+    try:
+        series = load_series(row["isin"], row["assoc_code"], row["name"], force=force)
+        dates, prices, _ = _apply_range(series, range_key)
+        if len(prices) < 5:
+            raise fund_data.FundDataError("データが不足しています")
+        a = signal_mod.analyze(dates, prices)
+        change = None
+        if prices[0]:
+            change = round((prices[-1] - prices[0]) / prices[0] * 100, 2)
+        summary.update({
+            "ok": True,
+            "verdict": a.verdict,
+            "verdict_label": a.verdict_label,
+            "score": a.score,
+            "latest_price": a.stats.get("latest_price"),
+            "latest_date": dates[-1],
+            "rsi": a.stats.get("rsi"),
+            "deviation_pct": a.stats.get("deviation_pct"),
+            "uptrend": (a.stats.get("sma_short") or 0) >= (a.stats.get("sma_long") or 0),
+            "change_pct": change,
+            "spark": _downsample([p for p in prices if p is not None], 60),
+        })
+    except fund_data.FundDataError as e:
+        summary.update({"ok": False, "error": str(e)})
+    return summary
+
+
 @app.route("/api/watchlist/analyze")
 def api_watchlist_analyze():
     """ウォッチリスト各投信の現在の判定サマリを返す（一覧比較用）。"""
     range_key = request.args.get("range", "1y")
     force = request.args.get("force") in ("1", "true", "yes")
-    items = db.list_watchlist()
-    summaries = []
-    for it in items:
-        summary = {
-            "catalog_id": it["id"],
-            "name": it["name"],
-            "isin": it["isin"],
-            "category": it.get("category", ""),
-        }
-        try:
-            series = load_series(it["isin"], it["assoc_code"], it["name"], force=force)
-            dates, prices, _ = _apply_range(series, range_key)
-            if len(prices) < 5:
-                raise fund_data.FundDataError("データが不足しています")
-            a = signal_mod.analyze(dates, prices)
-            change = None
-            if prices[0]:
-                change = round((prices[-1] - prices[0]) / prices[0] * 100, 2)
-            summary.update({
-                "ok": True,
-                "verdict": a.verdict,
-                "verdict_label": a.verdict_label,
-                "score": a.score,
-                "latest_price": a.stats.get("latest_price"),
-                "latest_date": dates[-1],
-                "rsi": a.stats.get("rsi"),
-                "deviation_pct": a.stats.get("deviation_pct"),
-                "uptrend": (a.stats.get("sma_short") or 0) >= (a.stats.get("sma_long") or 0),
-                "change_pct": change,
-                "spark": _downsample([p for p in prices if p is not None], 60),
-            })
-        except fund_data.FundDataError as e:
-            summary.update({"ok": False, "error": str(e)})
-        summaries.append(summary)
+    summaries = [_summarize_fund(it, range_key, force) for it in db.list_watchlist()]
     return jsonify({"ok": True, "range": range_key, "items": summaries})
+
+
+@app.route("/api/ranking")
+def api_ranking():
+    """内蔵カタログ全体をテクニカル勢い（スコア）で順位付けして返す。
+
+    「今後利益が出る保証」ではなく、あくまで過去データに基づくテクニカル指標の
+    順位付け。ウォッチリスト外の“注目候補”を見つける用途。
+    """
+    range_key = request.args.get("range", "1y")
+    force = request.args.get("force") in ("1", "true", "yes")
+    watched = {w["id"] for w in db.list_watchlist()}
+    rows = db.search_catalog("", limit=500)
+    summaries = []
+    for row in rows:
+        s = _summarize_fund(row, range_key, force)
+        s["in_watchlist"] = row["id"] in watched
+        summaries.append(s)
+    ok = [s for s in summaries if s.get("ok")]
+    ok.sort(key=lambda x: (x.get("score") or -999), reverse=True)
+    failed = [s for s in summaries if not s.get("ok")]
+    return jsonify({"ok": True, "range": range_key, "items": ok + failed,
+                    "count": len(ok)})
 
 
 # ------------------------------------------------------------------ 詳細分析
