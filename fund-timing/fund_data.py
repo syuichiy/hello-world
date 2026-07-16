@@ -48,17 +48,23 @@ def set_fetch_override(func):
 def _download_csv(isin: str, assoc_code: str, timeout: int = 30) -> str:
     if _fetch_override is not None:
         return _fetch_override(isin, assoc_code)
-    # 協会コードが分かっていれば併記する。ISINだけでも取得を試みる。
-    params = {"isinCd": isin}
+    # 協会コード・ISINのどちらか（または両方）で取得を試みる。
+    # CSVは協会コードを主キーにしているため、可能なら両方送る。
+    params = {}
+    if isin:
+        params["isinCd"] = isin
     if assoc_code:
         params["associFundCd"] = assoc_code
+    referer = "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000"
+    if isin:
+        referer += "?isinCd=" + isin
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
                       "Chrome/125.0 Safari/537.36",
         "Accept": "text/csv,application/csv,text/plain,*/*",
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000?isinCd=" + isin,
+        "Referer": referer,
     }
     try:
         resp = requests.get(CSV_URL, params=params, headers=headers, timeout=timeout)
@@ -76,10 +82,11 @@ def _download_csv(isin: str, assoc_code: str, timeout: int = 30) -> str:
     resp.encoding = "cp932"
     text = resp.text
     if not text or "," not in text:
-        hint = ("ISINコードが正しいか確認してください。"
-                if assoc_code else
-                "ISINだけでは取得できませんでした。協会コード（8桁）も追加してください"
-                "（みんかぶ/Yahooファイナンスで投信名を検索すると分かります）。")
+        if not assoc_code:
+            hint = ("ISINだけでは取得できませんでした。協会コード（8桁）を入力してください"
+                    "（みんかぶ/Yahooファイナンスで投信名を検索し、URLや見出しの8桁コードが協会コードです）。")
+        else:
+            hint = "協会コード（8桁）が正しいか確認してください。"
         raise FundDataError("データが空でした。" + hint)
     return text
 
@@ -166,10 +173,10 @@ def parse_csv(text: str, isin: str, assoc_code: str, name: str = "") -> FundSeri
 
 
 def get_fund_series(isin: str, assoc_code: str, name: str = "") -> FundSeries:
-    """ISINから基準価額の履歴を取得する。協会コードは分かれば併用する（無くても可）。"""
+    """協会コードまたはISINから基準価額の履歴を取得する（両方あればなお確実）。"""
     isin = (isin or "").strip().upper()
     assoc_code = (assoc_code or "").strip()
-    if not isin:
-        raise FundDataError("ISINコードを指定してください。")
+    if not isin and not assoc_code:
+        raise FundDataError("協会コード（8桁）またはISINコードを指定してください。")
     text = _download_csv(isin, assoc_code)
     return parse_csv(text, isin, assoc_code, name)

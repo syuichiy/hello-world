@@ -118,10 +118,10 @@ def add_catalog(name: str, isin: str, assoc_code: str, category: str = "",
     name = (name or "").strip()
     isin = (isin or "").strip().upper()
     assoc_code = (assoc_code or "").strip()
-    if not isin:
-        raise ValueError("ISINコードが必要です。")
+    if not isin and not assoc_code:
+        raise ValueError("協会コード（8桁）またはISINコードが必要です。")
     if not name:
-        name = isin
+        name = isin or assoc_code
     with _conn(db_path) as c:
         existing = c.execute(
             "SELECT * FROM catalog WHERE isin=? AND assoc_code=?", (isin, assoc_code)
