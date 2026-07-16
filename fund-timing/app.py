@@ -14,7 +14,9 @@ import argparse
 import datetime as dt
 import math
 import re
+import socket
 import threading
+import time
 import webbrowser
 from urllib.parse import urlparse, parse_qs
 
@@ -285,7 +287,42 @@ def api_analyze():
 
 
 # ------------------------------------------------------------------ 起動
-def _open_browser(url):
+def _port_is_free(port, host="127.0.0.1"):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def _find_free_port(preferred, host="127.0.0.1"):
+    """preferred が空いていればそれを、ダメなら別の空きポートを返す。
+
+    macOSでは 5000 を AirPlay 受信機能が使うため、既定は 8765 にしている。
+    """
+    if _port_is_free(preferred, host):
+        return preferred
+    # 近くの候補をいくつか試す
+    for p in (preferred + 1, preferred + 2, 8000, 8080, 8888, 3000):
+        if _port_is_free(p, host):
+            return p
+    # 最後はOSに空きポートを割り当ててもらう
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def _open_when_ready(url, host, port, timeout=20.0):
+    """サーバが接続を受け付けられるようになってからブラウザを開く。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                break
+        except OSError:
+            time.sleep(0.3)
     try:
         webbrowser.open(url)
     except Exception:
@@ -296,7 +333,8 @@ def main():
     global DEMO_MODE
     parser = argparse.ArgumentParser(description="投資信託 売り時・買い時サイン アプリ")
     parser.add_argument("--demo", action="store_true", help="ダミーデータで起動（ネット不要）")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--port", type=int, default=8765,
+                        help="ポート番号（既定: 8765。使用中なら自動で別のポートを探します）")
     parser.add_argument("--no-browser", action="store_true", help="ブラウザを自動で開かない")
     parser.add_argument("--db", default=None, help="内部DBファイルのパス（既定: funds.db）")
     args = parser.parse_args()
@@ -316,12 +354,18 @@ def main():
         db.clear_cache()  # デモは毎回新しいダミーで（テーブル作成後に実行）
         print(f"[demo] ダミーデータで起動します（DB: {db.DB_PATH}）")
 
-    url = f"http://127.0.0.1:{args.port}"
+    host = "127.0.0.1"
+    port = _find_free_port(args.port, host)
+    url = f"http://{host}:{port}"
+    if port != args.port:
+        print(f"ポート {args.port} は使用中のため、{port} で起動します"
+              "（macOSではポート5000はAirPlayが使用します）。")
     print(f"投資信託サインアプリを起動しました → {url}")
+    print("ブラウザが自動で開かない場合は、上のURLをブラウザに貼り付けてください。")
     print("終了するには Ctrl+C を押してください。")
     if not args.no_browser:
-        threading.Timer(1.0, _open_browser, args=(url,)).start()
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+        threading.Thread(target=_open_when_ready, args=(url, host, port), daemon=True).start()
+    app.run(host=host, port=port, debug=False)
 
 
 if __name__ == "__main__":
