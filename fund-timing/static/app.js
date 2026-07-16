@@ -305,9 +305,7 @@ function renderDetail(data) {
 
   drawPriceChart(data);
   drawRsiChart(data);
-  $("reasons-list").innerHTML = (data.reasons && data.reasons.length)
-    ? data.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")
-    : "<li>判断材料が不足しています。</li>";
+  renderReasons(data.reasons, data.score);
   renderSignals(data.signals);
 }
 
@@ -360,6 +358,39 @@ function hline(y, color) {
   return { type: "line", xref: "paper", x0: 0, x1: 1, y0: y, y1: y,
     line: { color, width: 1, dash: "dash" }, opacity: 0.6 };
 }
+function renderReasons(reasons, score) {
+  const el = $("reasons-list");
+  if (!reasons || !reasons.length) {
+    el.innerHTML = "<li>判断材料が不足しています。</li>";
+    return;
+  }
+  // 文字列（旧形式）にも一応対応
+  if (typeof reasons[0] === "string") {
+    el.innerHTML = reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+    return;
+  }
+  const buys = reasons.filter((r) => r.dir === "buy");
+  const sells = reasons.filter((r) => r.dir === "sell");
+  const summary = score >= 30
+    ? `買い材料が売り材料を上回っています（総合スコア +${score}）。`
+    : score <= -30
+      ? `売り材料が買い材料を上回っています（総合スコア ${score}）。`
+      : `買い材料と売り材料が拮抗しています（総合スコア ${score > 0 ? "+" : ""}${score}）。`;
+  const item = (r) => {
+    const cls = r.dir === "buy" ? "buy" : r.dir === "sell" ? "sell" : "neutral";
+    const tag = r.dir === "buy" ? "買い材料" : r.dir === "sell" ? "売り材料" : "中立";
+    const pts = r.points > 0 ? `+${r.points}` : `${r.points}`;
+    return `<li class="reason-item">
+      <span class="reason-tag ${cls}">${tag}</span>
+      <span class="reason-text">${escapeHtml(r.text)}</span>
+      <span class="reason-pts ${cls}">${pts}</span></li>`;
+  };
+  el.innerHTML =
+    `<li class="reason-summary">${summary}</li>` +
+    buys.map(item).join("") + sells.map(item).join("") +
+    reasons.filter((r) => r.dir === "neutral").map(item).join("");
+}
+
 function renderSignals(signals) {
   const recent = signals.slice(-20).reverse();
   $("signals-body").innerHTML = recent.length

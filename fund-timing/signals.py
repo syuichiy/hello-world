@@ -192,7 +192,6 @@ def _current_verdict(s, sma_short, sma_long, rsi, bb_upper, bb_lower, bb_mid):
     同じスコアに張り付いていた。ここでは各指標を滑らかな連続値[-1,1]に変換し、
     重み付けして -100〜+100 の連続スコアにする（投信ごとに差が出るように）。
     """
-    reasons = []
     last = len(s) - 1
     price = float(s.iloc[last])
 
@@ -200,37 +199,43 @@ def _current_verdict(s, sma_short, sma_long, rsi, bb_upper, bb_lower, bb_mid):
     r = rsi.iloc[last]
     up, lo = bb_upper.iloc[last], bb_lower.iloc[last]
 
+    weights = {"trend": 28, "mom": 22, "rsi": 22, "bb": 16, "dev": 12}
     terms = {}
+    texts = {}
 
-    # トレンド：短期線と長期線の乖離（連続）。上向きほど＋。
+    # トレンド：短期線と長期線の乖離（連続）。上向きほど＋（買い材料）。
     if not (pd.isna(ss) or pd.isna(sl)) and sl:
         gap = (ss - sl) / sl
         terms["trend"] = float(np.tanh(gap * 25))
-        if ss > sl:
-            reasons.append("短期移動平均が長期移動平均を上回る（上昇トレンド寄り）")
-        else:
-            reasons.append("短期移動平均が長期移動平均を下回る（下降トレンド寄り）")
+        texts["trend"] = ("上昇トレンド（短期線が長期線を上回る）" if ss > sl
+                          else "下降トレンド（短期線が長期線を下回る）")
     else:
         terms["trend"] = 0.0
 
-    # モメンタム：直近約60営業日の騰落率（連続）。勢いが強いほど＋。
+    # モメンタム：直近約60営業日の騰落率（連続）。勢いが強いほど＋（買い材料）。
     look = min(60, last)
     base = float(s.iloc[last - look]) if look > 0 else 0.0
     if base:
         ret = price / base - 1.0
         terms["mom"] = float(np.tanh(ret * 5))
+        texts["mom"] = f"直近約3ヶ月の勢い（騰落率 {ret * 100:+.1f}%）"
     else:
         terms["mom"] = 0.0
 
-    # RSI：50からの距離で連続評価（売られすぎ＝＋、買われすぎ＝−、逆張り寄り）
+    # RSI：50からの距離で連続評価（売られすぎ＝＋の買い材料、買われすぎ＝−の売り材料）
     if not pd.isna(r):
         terms["rsi"] = _clamp((50.0 - float(r)) / 25.0)
-        if r <= RSI_OVERSOLD:
-            reasons.append(f"RSIが{r:.0f}で売られすぎ圏（反発期待＝買い寄り）")
-        elif r >= RSI_OVERBOUGHT:
-            reasons.append(f"RSIが{r:.0f}で買われすぎ圏（過熱＝売り寄り）")
+        if r >= RSI_OVERBOUGHT:
+            rlabel = "買われすぎ"
+        elif r <= RSI_OVERSOLD:
+            rlabel = "売られすぎ"
+        elif r >= 60:
+            rlabel = "やや過熱"
+        elif r <= 40:
+            rlabel = "やや軟調"
         else:
-            reasons.append(f"RSIは{r:.0f}")
+            rlabel = "中立圏"
+        texts["rsi"] = f"RSI {r:.0f}（{rlabel}）"
     else:
         terms["rsi"] = 0.0
 
@@ -238,28 +243,40 @@ def _current_verdict(s, sma_short, sma_long, rsi, bb_upper, bb_lower, bb_mid):
     if not (pd.isna(up) or pd.isna(lo)) and up != lo:
         pos = (price - lo) / (up - lo)   # 0=下限, 1=上限
         terms["bb"] = _clamp((0.5 - pos) * 2.0)
-        if pos <= 0.15:
-            reasons.append("価格がボリンジャーバンド下限付近（割安圏＝買い寄り）")
-        elif pos >= 0.85:
-            reasons.append("価格がボリンジャーバンド上限付近（割高圏＝売り寄り）")
+        if pos >= 0.85:
+            texts["bb"] = "ボリンジャーバンド上限付近（割高圏）"
+        elif pos >= 0.6:
+            texts["bb"] = "ボリンジャーバンドやや上寄り（やや割高）"
+        elif pos <= 0.15:
+            texts["bb"] = "ボリンジャーバンド下限付近（割安圏）"
+        elif pos <= 0.4:
+            texts["bb"] = "ボリンジャーバンドやや下寄り（やや割安）"
+        else:
+            texts["bb"] = "ボリンジャーバンド中位"
     else:
         terms["bb"] = 0.0
 
     # 長期線からの乖離率（連続）。上に離れすぎ＝過熱＝−、下に離れすぎ＝割安＝＋
-    dev = None
     if not pd.isna(sl) and sl != 0:
         dev = (price - sl) / sl * 100.0
         terms["dev"] = float(-np.tanh(dev / 12.0))
-        if dev <= -8:
-            reasons.append(f"長期線から{dev:.1f}%下方乖離（売られすぎ気味）")
-        elif dev >= 8:
-            reasons.append(f"長期線から+{dev:.1f}%上方乖離（買われすぎ気味）")
+        texts["dev"] = f"長期線からの乖離 {dev:+.1f}%"
     else:
         terms["dev"] = 0.0
 
-    weights = {"trend": 28, "mom": 22, "rsi": 22, "bb": 16, "dev": 12}
     raw = sum(weights[k] * terms[k] for k in weights)
     score = int(round(_clamp(raw, -100, 100)))
+
+    # 各要因を「買い材料／売り材料」に方向付けして根拠リストにする
+    reasons = []
+    for k in weights:
+        if k not in texts:
+            continue
+        pts = int(round(weights[k] * terms[k]))
+        direction = "buy" if pts >= 1 else "sell" if pts <= -1 else "neutral"
+        reasons.append({"text": texts[k], "dir": direction, "points": pts})
+    # 寄与の大きい順（買い材料・売り材料が分かるように）
+    reasons.sort(key=lambda x: abs(x["points"]), reverse=True)
 
     if score >= 30:
         verdict, label = "buy", "買い時サイン"
