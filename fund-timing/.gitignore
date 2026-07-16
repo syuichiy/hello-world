@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+funds.db
+funds.demo.db
+*.db

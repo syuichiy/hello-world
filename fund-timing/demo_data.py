@@ -36,8 +36,12 @@ def _generate_series(days: int = 800, seed: int = 42):
 
 
 def demo_csv(isin: str, assoc_code: str) -> str:
-    """fund_data.set_fetch_override に渡す関数。生CSVテキストを返す。"""
-    rows = _generate_series()
+    """fund_data.set_fetch_override に渡す関数。生CSVテキストを返す。
+
+    ファンドごと（isin）に異なる値動きになるよう乱数シードを変える。
+    """
+    seed = abs(hash((isin or "") + (assoc_code or ""))) % (2 ** 31)
+    rows = _generate_series(seed=seed)
     buf = io.StringIO()
     buf.write("年月日,基準価額(円),純資産総額（百万円）,分配金,決算期\n")
     for d, nav, assets in rows:

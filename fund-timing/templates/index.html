@@ -11,48 +11,78 @@
 <body>
   <header class="site-header">
     <h1>📈 投資信託 売り時・買い時サイン</h1>
-    <p class="tagline">過去の基準価額から、テクニカル指標で売買タイミングの目安を表示します</p>
+    <p class="tagline">複数の投資信託を並べて、売り時・買い時を一覧で判断できます</p>
     {% if demo %}<p class="demo-badge">DEMOモード（ダミーデータ）</p>{% endif %}
   </header>
 
   <main>
-    <section class="controls card">
-      <label class="field-label" for="query">ファンドを指定</label>
-      <div class="input-row">
-        <input id="query" type="text" placeholder="投信ライブラリーのURL、または「ISIN,協会コード」を貼り付け">
-        <button id="analyze-btn" type="button">分析する</button>
-      </div>
-      <p class="hint">
-        例：<code>JP90C000H1T1,0331418A</code> ／
-        <a href="https://toushin-lib.fwg.ne.jp/" target="_blank" rel="noopener">投信総合検索ライブラリー</a>
-        で対象ファンドを開き、そのページのURLを貼り付けてもOK
-      </p>
-
-      <div class="presets">
-        <span class="presets-label">人気の投信：</span>
-        {% for f in presets %}
-        <button class="preset-chip" type="button"
-                data-isin="{{ f.isin }}" data-code="{{ f.assoc_code }}" data-name="{{ f.name }}">
-          {{ f.name }}
-        </button>
-        {% endfor %}
-      </div>
-
-      <div class="range-row">
-        <span class="presets-label">期間：</span>
-        <div class="range-group" id="range-group">
-          <button class="range-btn" data-range="6m">6ヶ月</button>
-          <button class="range-btn" data-range="1y">1年</button>
-          <button class="range-btn active" data-range="3y">3年</button>
-          <button class="range-btn" data-range="5y">5年</button>
-          <button class="range-btn" data-range="all">全期間</button>
+    <!-- ========================= 一覧ビュー ========================= -->
+    <section id="dashboard-view">
+      <div class="card search-card">
+        <label class="field-label" for="search-input">投信を名前で検索して一覧に追加</label>
+        <div class="search-wrap">
+          <input id="search-input" type="text" autocomplete="off"
+                 placeholder="例）オルカン、S&amp;P500、バランス…">
+          <div id="search-results" class="search-results" hidden></div>
         </div>
+        <p class="hint">
+          見つからない投信は
+          <button id="show-register" type="button" class="linklike">＋ 新しい投信を登録</button>
+          （内部DBに保存され、次回から名前で検索できます）
+        </p>
+
+        <div id="register-form" class="register-form" hidden>
+          <input id="reg-name" type="text" placeholder="投信の名前（例：eMAXIS Slim 国内株式）">
+          <input id="reg-code" type="text" placeholder="投信ライブラリーのURL、または「ISIN,協会コード」">
+          <button id="reg-submit" type="button">登録して一覧に追加</button>
+          <p class="hint">
+            <a href="https://toushin-lib.fwg.ne.jp/" target="_blank" rel="noopener">投信総合検索ライブラリー</a>
+            で対象ファンドを開き、そのページのURLを貼り付けてください。
+          </p>
+        </div>
+      </div>
+
+      <div class="dashboard-toolbar">
+        <div class="range-group" id="dash-range">
+          <button class="range-btn" data-range="6m">6ヶ月</button>
+          <button class="range-btn active" data-range="1y">1年</button>
+          <button class="range-btn" data-range="3y">3年</button>
+          <button class="range-btn" data-range="5y">5年</button>
+        </div>
+        <div class="toolbar-right">
+          <span id="sort-hint" class="sort-hint"></span>
+          <button id="refresh-btn" type="button" class="ghost-btn">↻ 最新に更新</button>
+        </div>
+      </div>
+
+      <div id="dash-status" class="status" hidden></div>
+
+      <div class="card table-card">
+        <table class="watch-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-key="name">ファンド名</th>
+              <th class="sortable" data-key="verdict">判定</th>
+              <th class="sortable" data-key="score">シグナル強度 ▼</th>
+              <th class="sortable num" data-key="latest_price">最新基準価額</th>
+              <th class="sortable num" data-key="change_pct">期間騰落</th>
+              <th class="sortable num" data-key="rsi">RSI</th>
+              <th>値動き</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="watch-body"></tbody>
+        </table>
+        <p id="empty-watch" class="empty-watch" hidden>
+          ウォッチリストが空です。上の検索から投信を追加してください。
+        </p>
       </div>
     </section>
 
-    <section id="status" class="status" hidden></section>
+    <!-- ========================= 詳細ビュー ========================= -->
+    <section id="detail-view" hidden>
+      <button id="back-btn" type="button" class="ghost-btn back-btn">← 一覧に戻る</button>
 
-    <section id="result" class="result" hidden>
       <div class="verdict-card card" id="verdict-card">
         <div class="verdict-main">
           <span id="verdict-emoji" class="verdict-emoji">⏳</span>
@@ -70,14 +100,19 @@
         </div>
       </div>
 
-      <div class="stats-row" id="stats-row"></div>
+      <div class="detail-toolbar">
+        <div class="range-group" id="detail-range">
+          <button class="range-btn" data-range="6m">6ヶ月</button>
+          <button class="range-btn" data-range="1y">1年</button>
+          <button class="range-btn active" data-range="3y">3年</button>
+          <button class="range-btn" data-range="5y">5年</button>
+          <button class="range-btn" data-range="all">全期間</button>
+        </div>
+      </div>
 
-      <div class="chart card">
-        <div id="price-chart"></div>
-      </div>
-      <div class="chart card">
-        <div id="rsi-chart"></div>
-      </div>
+      <div class="stats-row" id="stats-row"></div>
+      <div class="chart card"><div id="price-chart"></div></div>
+      <div class="chart card"><div id="rsi-chart"></div></div>
 
       <div class="card reasons-card">
         <h2>現在の判断の根拠</h2>

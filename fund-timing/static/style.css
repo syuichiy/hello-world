@@ -12,6 +12,9 @@
 
 * { box-sizing: border-box; }
 
+/* hidden属性は常にdisplayルールより優先させる（display:flex等の上書き対策） */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -184,4 +187,86 @@ main { max-width: 940px; margin: 0 auto; padding: 8px 16px 40px; }
   .status.loading { background: #23304d; }
   .status.error { background: #48262a; }
   .disclaimer { background: #332c1a; border-color: #4a4327; }
+}
+
+/* ============================== 一覧ビュー追加分 ============================== */
+.field-label { font-weight: 700; font-size: 14px; }
+.linklike { border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; }
+
+/* 検索 */
+.search-wrap { position: relative; margin-top: 8px; }
+#search-input {
+  width: 100%; padding: 12px 14px; border: 1.5px solid var(--line);
+  border-radius: 10px; font-size: 15px; background: var(--bg); color: var(--ink);
+}
+#search-input:focus { outline: none; border-color: var(--accent); }
+.search-results {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12); max-height: 320px; overflow-y: auto;
+}
+.search-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.search-item:last-child { border-bottom: none; }
+.si-name { font-size: 14px; font-weight: 600; }
+.si-sub { font-size: 11.5px; color: var(--ink-soft); }
+.si-add { border: none; background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.si-add:hover { filter: brightness(1.05); }
+.si-added { font-size: 12px; color: var(--buy); white-space: nowrap; }
+.search-empty { padding: 14px; font-size: 13px; color: var(--ink-soft); }
+
+/* 登録フォーム */
+.register-form { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; padding: 14px; background: var(--bg); border-radius: 10px; }
+.register-form input { padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 8px; font-size: 13px; background: var(--card); color: var(--ink); }
+.register-form button { align-self: flex-start; border: none; background: var(--accent); color: #fff; padding: 9px 16px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+
+/* ツールバー */
+.dashboard-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 10px; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 12px; }
+.sort-hint { font-size: 12px; color: var(--ink-soft); }
+.ghost-btn { border: 1.5px solid var(--line); background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+.ghost-btn:hover { border-color: var(--accent); color: var(--accent); }
+.back-btn { margin-bottom: 14px; }
+.detail-toolbar { margin-bottom: 14px; }
+
+/* 一覧テーブル */
+.table-card { padding: 6px; overflow-x: auto; }
+.watch-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 720px; }
+.watch-table th { text-align: left; padding: 12px 12px; color: var(--ink-soft); font-weight: 600; font-size: 12.5px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+.watch-table th.sortable { cursor: pointer; user-select: none; }
+.watch-table th.sortable:hover { color: var(--accent); }
+.watch-table th.num, .watch-table td.num { text-align: right; }
+.watch-table td { padding: 12px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.watch-row { cursor: pointer; transition: background .1s ease; }
+.watch-row:hover { background: rgba(59,111,212,0.06); }
+.fund-nm { font-weight: 600; }
+.fund-sub { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.err-msg { color: var(--sell); font-size: 12.5px; }
+.up { color: var(--buy); font-weight: 600; }
+.down { color: var(--sell); font-weight: 600; }
+.row-del { border: none; background: transparent; color: var(--ink-soft); cursor: pointer; font-size: 15px; padding: 4px 6px; border-radius: 6px; }
+.row-del:hover { background: rgba(227,52,47,0.12); color: var(--sell); }
+.empty-watch { text-align: center; color: var(--ink-soft); padding: 30px 10px; }
+
+/* 判定バッジ */
+.vbadge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.vbadge.buy { background: rgba(31,157,85,0.14); color: var(--buy); }
+.vbadge.sell { background: rgba(227,52,47,0.14); color: var(--sell); }
+.vbadge.neutral { background: rgba(198,154,26,0.16); color: #a17c12; }
+
+/* スコアチップ */
+.score-chip { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.score-chip-track { position: relative; flex: 1; height: 7px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.score-chip-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; }
+.score-chip-mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink-soft); opacity: .5; }
+.score-chip-num { font-size: 12px; font-weight: 700; width: 30px; text-align: right; }
+.spark-cell { width: 128px; }
+.spark { display: block; }
+
+@media (prefers-color-scheme: dark) {
+  .watch-row:hover { background: rgba(90,130,220,0.12); }
+  .vbadge.neutral { color: #e6c357; }
+}
+
+@media (max-width: 620px) {
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
 }
