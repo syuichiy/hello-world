@@ -339,6 +339,18 @@ def _find_free_port(preferred, host="127.0.0.1"):
         return s.getsockname()[1]
 
 
+def _lan_ip():
+    """このMacのLAN内IPアドレスを推定する（外部へは通信しない）。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return None
+    finally:
+        s.close()
+
+
 def _open_when_ready(url, host, port, timeout=20.0):
     """サーバが接続を受け付けられるようになってからブラウザを開く。"""
     deadline = time.time() + timeout
@@ -362,6 +374,8 @@ def main():
                         help="ポート番号（既定: 8765。使用中なら自動で別のポートを探します）")
     parser.add_argument("--no-browser", action="store_true", help="ブラウザを自動で開かない")
     parser.add_argument("--db", default=None, help="内部DBファイルのパス（既定: funds.db）")
+    parser.add_argument("--lan", action="store_true",
+                        help="同じWi-Fi内の他端末（スマホ等）からもアクセスできるようにする")
     args = parser.parse_args()
 
     if args.db:
@@ -379,18 +393,33 @@ def main():
         db.clear_cache()  # デモは毎回新しいダミーで（テーブル作成後に実行）
         print(f"[demo] ダミーデータで起動します（DB: {db.DB_PATH}）")
 
-    host = "127.0.0.1"
-    port = _find_free_port(args.port, host)
-    url = f"http://{host}:{port}"
+    # --lan 指定時は全インターフェイスで待ち受け、他端末からアクセス可能にする
+    bind_host = "0.0.0.0" if args.lan else "127.0.0.1"
+    port = _find_free_port(args.port, bind_host)
+    local_url = f"http://127.0.0.1:{port}"
+
     if port != args.port:
         print(f"ポート {args.port} は使用中のため、{port} で起動します"
               "（macOSではポート5000はAirPlayが使用します）。")
-    print(f"投資信託サインアプリを起動しました → {url}")
+    print(f"投資信託サインアプリを起動しました → {local_url}")
+    if args.lan:
+        ip = _lan_ip()
+        if ip:
+            print("─" * 48)
+            print("📱 他の端末（同じWi-Fi）からは次のURLを開いてください：")
+            print(f"    http://{ip}:{port}")
+            print("─" * 48)
+            print("※ 同じWi-Fi/LANに接続している必要があります。")
+            print("※ このURLを知っている同一ネットワーク内の端末は誰でも閲覧できます。")
+        else:
+            print("LAN内のIPアドレスを取得できませんでした。ネットワーク接続を確認してください。")
+    else:
+        print("（他の端末からアクセスするには、いったん終了して `--lan` を付けて起動してください）")
     print("ブラウザが自動で開かない場合は、上のURLをブラウザに貼り付けてください。")
     print("終了するには Ctrl+C を押してください。")
     if not args.no_browser:
-        threading.Thread(target=_open_when_ready, args=(url, host, port), daemon=True).start()
-    app.run(host=host, port=port, debug=False)
+        threading.Thread(target=_open_when_ready, args=(local_url, "127.0.0.1", port), daemon=True).start()
+    app.run(host=bind_host, port=port, debug=False)
 
 
 if __name__ == "__main__":
