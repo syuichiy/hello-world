@@ -33,17 +33,17 @@
 
         <div id="register-form" class="register-form" hidden>
           <input id="reg-name" type="text" placeholder="投信の名前（例：野村世界業種別投資シリーズ 世界半導体株投資）">
-          <input id="reg-code" type="text" placeholder="協会コード8桁（例：01313098）／ISINでも可">
+          <input id="reg-code" type="text" placeholder="ISIN,協会コード（例：JP90C0006G52,01313098）">
           <button id="reg-submit" type="button">登録して一覧に追加</button>
           <div class="hint reg-help">
-            <p><strong>「協会コード（8桁）」を入れるのが確実です。</strong>調べ方：</p>
+            <p><strong>「ISIN」と「協会コード（8桁）」を両方、カンマ区切りで入力してください。</strong>調べ方：</p>
             <ol>
-              <li><a id="minkabu-link" href="https://itf.minkabu.jp/" target="_blank" rel="noopener">みんかぶ投資信託</a>
-                や <a href="https://finance.yahoo.co.jp/" target="_blank" rel="noopener">Yahoo!ファイナンス</a>
-                で投信名を検索して開きます。</li>
-              <li>URLや見出しに出る<strong>8桁のコード（例 01313098, 0331418A, 9I315241）が「協会コード」</strong>です。それを上の欄に入力。</li>
+              <li><strong>ISIN（JP90…の12桁）</strong>：証券会社（例：<a href="https://www.rakuten-sec.co.jp/web/fund/" target="_blank" rel="noopener">楽天証券</a>）のファンド詳細ページのURLにあります。</li>
+              <li><strong>協会コード（8桁, 例 01313098）</strong>：<a id="minkabu-link" href="https://itf.minkabu.jp/" target="_blank" rel="noopener">みんかぶ投資信託</a>
+                や <a href="https://finance.yahoo.co.jp/" target="_blank" rel="noopener">Yahoo!ファイナンス</a> で投信名を検索。URLや見出しの8桁コードです。</li>
+              <li><code>ISIN,協会コード</code> の形式で上の欄に入力（投信協会ライブラリーのCSVダウンロードURLを貼り付けてもOK）。</li>
             </ol>
-            <p class="reg-note">※ ISIN（証券会社ページの「JP90…」12桁）だけでは取得できない投信があります。その場合は協会コードを使ってください。両方入れても構いません（<code>JP90…,協会コード</code>）。</p>
+            <p class="reg-note">※ 内蔵の人気投信は名前で検索して追加すれば、コード入力は不要です。</p>
           </div>
         </div>
       </div>

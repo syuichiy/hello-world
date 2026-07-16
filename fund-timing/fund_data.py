@@ -45,29 +45,43 @@ def set_fetch_override(func):
     _fetch_override = func
 
 
+DETAIL_URL = "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000"
+
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/125.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,text/csv,*/*",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+}
+
+
 def _download_csv(isin: str, assoc_code: str, timeout: int = 30) -> str:
     if _fetch_override is not None:
         return _fetch_override(isin, assoc_code)
-    # 協会コード・ISINのどちらか（または両方）で取得を試みる。
-    # CSVは協会コードを主キーにしているため、可能なら両方送る。
+
     params = {}
     if isin:
         params["isinCd"] = isin
     if assoc_code:
         params["associFundCd"] = assoc_code
-    referer = "https://toushin-lib.fwg.ne.jp/FdsWeb/FDST030000"
-    if isin:
-        referer += "?isinCd=" + isin
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/125.0 Safari/537.36",
-        "Accept": "text/csv,application/csv,text/plain,*/*",
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": referer,
-    }
+
+    sess = requests.Session()
+    sess.headers.update(_BROWSER_HEADERS)
+
+    # まずファンド詳細ページを開いてセッション（Cookie）を確立してからCSVを取得する。
+    # このサイトは詳細ページを経ないとCSVを返さないことがあるため。
+    referer = DETAIL_URL
     try:
-        resp = requests.get(CSV_URL, params=params, headers=headers, timeout=timeout)
+        d = sess.get(DETAIL_URL, params=params, timeout=timeout)
+        referer = d.url or DETAIL_URL
+    except requests.RequestException:
+        pass  # 事前アクセスが失敗しても本取得を試みる
+
+    try:
+        resp = sess.get(CSV_URL, params=params, timeout=timeout,
+                        headers={"Referer": referer,
+                                 "Accept": "text/csv,application/csv,text/plain,*/*"})
     except requests.RequestException as e:
         raise FundDataError(
             "ネットワークに接続できませんでした。インターネット接続を確認してください。\n"
@@ -76,17 +90,27 @@ def _download_csv(isin: str, assoc_code: str, timeout: int = 30) -> str:
     if resp.status_code != 200:
         raise FundDataError(
             f"データ取得に失敗しました（HTTP {resp.status_code}）。"
-            "ISINコード・協会コードが正しいか確認してください。"
+            "しばらく時間をおいて再度お試しください。"
         )
-    # 文字コードはcp932（Shift-JIS）
-    resp.encoding = "cp932"
-    text = resp.text
-    if not text or "," not in text:
-        if not assoc_code:
-            hint = ("ISINだけでは取得できませんでした。協会コード（8桁）を入力してください"
-                    "（みんかぶ/Yahooファイナンスで投信名を検索し、URLや見出しの8桁コードが協会コードです）。")
+
+    resp.encoding = "cp932"  # Shift-JIS
+    text = resp.text or ""
+    stripped = text.lstrip()
+
+    # HTMLが返ってきた場合（アクセス制限ページ等）
+    if stripped[:1] == "<" or "<html" in stripped[:2000].lower():
+        raise FundDataError(
+            "サイトからデータ（CSV）ではなくWebページが返りました。"
+            "アクセスが一時的に制限された可能性があります。少し時間をおいて再度お試しください。"
+        )
+
+    if "," not in text:
+        both = isin and assoc_code
+        if not both:
+            hint = ("この投信は「ISIN」と「協会コード」の両方が必要です。"
+                    "『ISIN,協会コード』の形式で入力してください（例：JP90C0006G52,01313098）。")
         else:
-            hint = "協会コード（8桁）が正しいか確認してください。"
+            hint = "ISIN・協会コードの組み合わせが正しいか確認してください。"
         raise FundDataError("データが空でした。" + hint)
     return text
 
