@@ -181,57 +181,86 @@ def _dedupe_signals(signals):
     return out
 
 
+def _clamp(x, lo=-1.0, hi=1.0):
+    return max(lo, min(hi, x))
+
+
 def _current_verdict(s, sma_short, sma_long, rsi, bb_upper, bb_lower, bb_mid):
-    """最新時点の総合判断。各指標に点数を付けて合算する。"""
-    score = 0
+    """最新時点の総合判断。各指標を「連続値」で評価して合算する。
+
+    以前は各指標を段階的（±25/±30…）に加点していたため、似た値動きの投信が
+    同じスコアに張り付いていた。ここでは各指標を滑らかな連続値[-1,1]に変換し、
+    重み付けして -100〜+100 の連続スコアにする（投信ごとに差が出るように）。
+    """
     reasons = []
     last = len(s) - 1
     price = float(s.iloc[last])
 
-    # トレンド（短期 vs 長期）
     ss, sl = sma_short.iloc[last], sma_long.iloc[last]
-    if not (pd.isna(ss) or pd.isna(sl)):
+    r = rsi.iloc[last]
+    up, lo = bb_upper.iloc[last], bb_lower.iloc[last]
+
+    terms = {}
+
+    # トレンド：短期線と長期線の乖離（連続）。上向きほど＋。
+    if not (pd.isna(ss) or pd.isna(sl)) and sl:
+        gap = (ss - sl) / sl
+        terms["trend"] = float(np.tanh(gap * 25))
         if ss > sl:
-            score += 25
             reasons.append("短期移動平均が長期移動平均を上回る（上昇トレンド寄り）")
         else:
-            score -= 25
             reasons.append("短期移動平均が長期移動平均を下回る（下降トレンド寄り）")
+    else:
+        terms["trend"] = 0.0
 
-    # RSI
-    r = rsi.iloc[last]
+    # モメンタム：直近約60営業日の騰落率（連続）。勢いが強いほど＋。
+    look = min(60, last)
+    base = float(s.iloc[last - look]) if look > 0 else 0.0
+    if base:
+        ret = price / base - 1.0
+        terms["mom"] = float(np.tanh(ret * 5))
+    else:
+        terms["mom"] = 0.0
+
+    # RSI：50からの距離で連続評価（売られすぎ＝＋、買われすぎ＝−、逆張り寄り）
     if not pd.isna(r):
+        terms["rsi"] = _clamp((50.0 - float(r)) / 25.0)
         if r <= RSI_OVERSOLD:
-            score += 35
             reasons.append(f"RSIが{r:.0f}で売られすぎ圏（反発期待＝買い寄り）")
         elif r >= RSI_OVERBOUGHT:
-            score -= 35
             reasons.append(f"RSIが{r:.0f}で買われすぎ圏（過熱＝売り寄り）")
         else:
-            reasons.append(f"RSIは{r:.0f}で中立圏")
+            reasons.append(f"RSIは{r:.0f}")
+    else:
+        terms["rsi"] = 0.0
 
-    # ボリンジャーバンド上の位置
-    up, lo, mid = bb_upper.iloc[last], bb_lower.iloc[last], bb_mid.iloc[last]
+    # ボリンジャーバンド内の位置（連続）。下限寄り＝割安＝＋、上限寄り＝割高＝−
     if not (pd.isna(up) or pd.isna(lo)) and up != lo:
-        pos = (price - lo) / (up - lo)  # 0=下限, 1=上限
-        if pos <= 0.1:
-            score += 30
+        pos = (price - lo) / (up - lo)   # 0=下限, 1=上限
+        terms["bb"] = _clamp((0.5 - pos) * 2.0)
+        if pos <= 0.15:
             reasons.append("価格がボリンジャーバンド下限付近（割安圏＝買い寄り）")
-        elif pos >= 0.9:
-            score -= 30
+        elif pos >= 0.85:
             reasons.append("価格がボリンジャーバンド上限付近（割高圏＝売り寄り）")
+    else:
+        terms["bb"] = 0.0
 
-    # 移動平均からの乖離率
+    # 長期線からの乖離率（連続）。上に離れすぎ＝過熱＝−、下に離れすぎ＝割安＝＋
+    dev = None
     if not pd.isna(sl) and sl != 0:
-        dev = (price - sl) / sl * 100
-        if dev <= -10:
-            score += 10
+        dev = (price - sl) / sl * 100.0
+        terms["dev"] = float(-np.tanh(dev / 12.0))
+        if dev <= -8:
             reasons.append(f"長期線から{dev:.1f}%下方乖離（売られすぎ気味）")
-        elif dev >= 10:
-            score -= 10
+        elif dev >= 8:
             reasons.append(f"長期線から+{dev:.1f}%上方乖離（買われすぎ気味）")
+    else:
+        terms["dev"] = 0.0
 
-    score = int(max(-100, min(100, score)))
+    weights = {"trend": 28, "mom": 22, "rsi": 22, "bb": 16, "dev": 12}
+    raw = sum(weights[k] * terms[k] for k in weights)
+    score = int(round(_clamp(raw, -100, 100)))
+
     if score >= 30:
         verdict, label = "buy", "買い時サイン"
     elif score <= -30:
