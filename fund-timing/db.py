@@ -118,8 +118,8 @@ def add_catalog(name: str, isin: str, assoc_code: str, category: str = "",
     name = (name or "").strip()
     isin = (isin or "").strip().upper()
     assoc_code = (assoc_code or "").strip()
-    if not isin or not assoc_code:
-        raise ValueError("ISINコードと協会コードが必要です。")
+    if not isin:
+        raise ValueError("ISINコードが必要です。")
     if not name:
         name = isin
     with _conn(db_path) as c:

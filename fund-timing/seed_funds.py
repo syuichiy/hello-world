@@ -39,4 +39,8 @@ SEED_FUNDS = [
         "name": "野村インデックスファンド・外国株式（Funds-i 外国株式）",
         "isin": "JP90C0007DP8", "assoc_code": "0131410B", "category": "先進国株式",
     },
+    {
+        "name": "野村世界業種別投資シリーズ（世界半導体株投資）",
+        "isin": "JP90C0006G52", "assoc_code": "01313098", "category": "海外株式（半導体）",
+    },
 ]

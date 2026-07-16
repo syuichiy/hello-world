@@ -154,12 +154,12 @@ def api_catalog_add():
     name = (data.get("name") or "").strip()
     query = (data.get("query") or "").strip()
     isin, assoc = parse_identifier(query)
-    if not isin or not assoc:
+    if not isin:
         return jsonify({"ok": False, "error":
-                        "ISINコードと協会コードを読み取れませんでした。"
-                        "投信ライブラリーのURL、または「ISIN,協会コード」を入力してください。"}), 400
+                        "ISINコード（JP90…で始まる12桁）を読み取れませんでした。"
+                        "「ISIN」または「ISIN,協会コード」の形式で入力してください。"}), 400
     try:
-        row = db.add_catalog(name, isin, assoc, data.get("category", ""))
+        row = db.add_catalog(name, isin, assoc or "", data.get("category", ""))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     # 追加と同時にウォッチリストへ入れる
@@ -254,9 +254,9 @@ def api_analyze():
     else:
         isin, assoc = parse_identifier(request.args.get("q", ""))
 
-    if not isin or not assoc:
+    if not isin:
         return jsonify({"ok": False, "error":
-                        "ISINコードと協会コードを読み取れませんでした。"}), 400
+                        "ISINコードを読み取れませんでした。"}), 400
 
     try:
         series = load_series(isin, assoc, name, force=force)
