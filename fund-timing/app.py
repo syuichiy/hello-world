@@ -366,6 +366,57 @@ def _open_when_ready(url, host, port, timeout=20.0):
         pass
 
 
+def _run_check(codes):
+    """指定コードで実際にデータ取得を試し、サイトの応答内容を表示する診断ツール。"""
+    import requests
+    isin, assoc = parse_identifier(codes)
+    print("=" * 56)
+    print("診断: データ取得テスト")
+    print(f"  入力: {codes}")
+    print(f"  ISIN     : {isin}")
+    print(f"  協会コード : {assoc}")
+    print("=" * 56)
+    params = {}
+    if isin:
+        params["isinCd"] = isin
+    if assoc:
+        params["associFundCd"] = assoc
+
+    sess = requests.Session()
+    sess.headers.update(fund_data._BROWSER_HEADERS)
+    try:
+        d = sess.get(fund_data.DETAIL_URL, params=params, timeout=30)
+        print(f"[1] 詳細ページ: HTTP {d.status_code}  {d.headers.get('content-type','')}"
+              f"  {len(d.content)} bytes")
+    except Exception as e:
+        print(f"[1] 詳細ページ: 例外 {e}")
+
+    try:
+        r = sess.get(fund_data.CSV_URL, params=params, timeout=30,
+                     headers={"Referer": fund_data.DETAIL_URL,
+                              "Accept": "text/csv,application/csv,text/plain,*/*"})
+        print(f"[2] CSV取得  : HTTP {r.status_code}  {r.headers.get('content-type','')}"
+              f"  {len(r.content)} bytes")
+        r.encoding = "cp932"
+        text = r.text or ""
+        print("---- 応答の先頭400文字 ----")
+        print(text[:400])
+        print("---------------------------")
+        if "," in text and not text.lstrip()[:1] == "<":
+            try:
+                series = fund_data.parse_csv(text, isin or "", assoc or "", "")
+                print(f"[3] 解析OK: {len(series.dates)}件 "
+                      f"（{series.dates[0]} 〜 {series.dates[-1]}）")
+            except Exception as e:
+                print(f"[3] 解析エラー: {e}")
+        else:
+            print("[3] CSVらしいデータではありません（上の先頭400文字を確認してください）。")
+    except Exception as e:
+        print(f"[2] CSV取得: 例外 {e}")
+    print("=" * 56)
+    print("この出力をそのままコピーして共有してください。")
+
+
 def main():
     global DEMO_MODE
     parser = argparse.ArgumentParser(description="投資信託 売り時・買い時サイン アプリ")
@@ -376,7 +427,13 @@ def main():
     parser.add_argument("--db", default=None, help="内部DBファイルのパス（既定: funds.db）")
     parser.add_argument("--lan", action="store_true",
                         help="同じWi-Fi内の他端末（スマホ等）からもアクセスできるようにする")
+    parser.add_argument("--check", metavar="ISIN,協会コード",
+                        help="診断: 指定コードで実際の取得を試し、サイトの応答を表示する")
     args = parser.parse_args()
+
+    if args.check:
+        _run_check(args.check)
+        return
 
     if args.db:
         db.DB_PATH = args.db
