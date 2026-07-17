@@ -15,19 +15,54 @@ from typing import Optional
 
 import seed_funds
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "funds.db")
+
+def _default_db_path() -> str:
+    """アプリ更新（フォルダ入れ替え）でも消えないよう、ホーム直下に保存する。"""
+    base = os.path.join(os.path.expanduser("~"), ".fund-timing")
+    return os.path.join(base, "funds.db")
+
+
+# アプリ本体と別の場所（ホーム）に保存 → フォルダを差し替えても引き継がれる
+DB_PATH = _default_db_path()
+# 旧バージョンがアプリ内に作った funds.db（あれば初回に引き継ぐ）
+LEGACY_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "funds.db")
 CACHE_TTL_HOURS = 12
 
 
+def _ensure_parent(path: str):
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+
+
 def _conn(db_path: Optional[str] = None):
-    conn = sqlite3.connect(db_path or DB_PATH)
+    path = db_path or DB_PATH
+    _ensure_parent(path)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
+def _maybe_migrate_legacy(path: str):
+    """新しい保存先が空で、旧フォルダ内の funds.db がある場合は引き継ぐ。"""
+    if os.path.exists(path):
+        return
+    legacy = LEGACY_DB_PATH
+    if os.path.exists(legacy) and os.path.abspath(legacy) != os.path.abspath(path):
+        try:
+            import shutil
+            _ensure_parent(path)
+            shutil.copy2(legacy, path)
+            print(f"以前の登録内容を引き継ぎました: {legacy} → {path}")
+        except Exception as e:
+            print(f"旧DBの引き継ぎに失敗しました（新規作成します）: {e}")
+
+
 def init_db(db_path: Optional[str] = None, seed: bool = True):
-    with _conn(db_path) as c:
+    path = db_path or DB_PATH
+    _maybe_migrate_legacy(path)
+    with _conn(path) as c:
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS catalog (

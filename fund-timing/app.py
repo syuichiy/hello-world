@@ -40,6 +40,8 @@ def parse_identifier(text: str):
     """ユーザー入力から (isin, assoc_code) を取り出す。
     受け付ける形式:
       - toushin-libのURL（isinCd/associFundCd を含む）
+      - みんかぶ/Yahoo!ファイナンス/日経のURL（協会コードを含む）
+      - 楽天証券などのURL（ISINを含む）
       - "JP90C000H1T1,0331418A" / "JP90C000H1T1 0331418A"
     """
     text = (text or "").strip()
@@ -58,6 +60,21 @@ def parse_identifier(text: str):
                 assoc = q["associFundCd"][0].strip()
         except Exception:
             pass
+
+    # 各種金融サイトのURLからコードを抽出（貼り付けでの登録を楽にする）
+    if isin is None:
+        m = re.search(r"[?&]ID=([A-Za-z]{2}[A-Za-z0-9]{9}\d)", text)  # 楽天証券
+        if m:
+            isin = m.group(1).upper()
+    if assoc is None:
+        for pat in (r"itf\.minkabu\.jp/fund/([0-9A-Za-z]{8})",        # みんかぶ
+                    r"finance\.yahoo\.co\.jp/quote/([0-9A-Za-z]{8})",  # Yahoo
+                    r"[?&]fcode=([0-9A-Za-z]{8})",                     # 日経
+                    r"KEY1=([0-9A-Za-z]{8})"):                         # 野村/三菱UFJ 等
+            m = re.search(pat, text)
+            if m:
+                assoc = m.group(1)
+                break
 
     if isin is None or assoc is None:
         parts = re.split(r"[,\s]+", text)
@@ -449,6 +466,9 @@ def main():
     if args.demo:
         db.clear_cache()  # デモは毎回新しいダミーで（テーブル作成後に実行）
         print(f"[demo] ダミーデータで起動します（DB: {db.DB_PATH}）")
+    else:
+        print(f"設定・登録の保存先（内部DB）: {db.DB_PATH}")
+        print("　※ この場所に保存されるため、アプリのフォルダを入れ替えても引き継がれます。")
 
     # --lan 指定時は全インターフェイスで待ち受け、他端末からアクセス可能にする
     bind_host = "0.0.0.0" if args.lan else "127.0.0.1"
