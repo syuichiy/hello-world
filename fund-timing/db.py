@@ -97,11 +97,10 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
 
 
 def seed_catalog(db_path: Optional[str] = None):
-    """カタログが空のときだけ、既定の人気投信を投入する。"""
+    """既定の人気投信を投入する。毎回 INSERT OR IGNORE で「不足分だけ」追加するので、
+    アプリを新しい版に更新すると、増えた内蔵投信が既存DBにも自動で反映される
+    （ユーザーが自分で登録した投信は UNIQUE 制約により保持される）。"""
     with _conn(db_path) as c:
-        n = c.execute("SELECT COUNT(*) FROM catalog").fetchone()[0]
-        if n > 0:
-            return
         for f in seed_funds.SEED_FUNDS:
             c.execute(
                 "INSERT OR IGNORE INTO catalog(name, isin, assoc_code, category) VALUES (?,?,?,?)",
