@@ -21,6 +21,8 @@ SEED_FUNDS = [
      "isin": "JP90C000ENC5", "assoc_code": "03319172", "category": "先進国株式"},
     {"name": "eMAXIS Slim 国内株式（TOPIX）",
      "isin": "JP90C000ENA9", "assoc_code": "03317172", "category": "国内株式"},
+    {"name": "eMAXIS Slim 国内株式（日経平均）",
+     "isin": "JP90C000FXV1", "assoc_code": "03311182", "category": "国内株式"},
     {"name": "eMAXIS Slim バランス（8資産均等型）",
      "isin": "JP90C000EWV6", "assoc_code": "03312175", "category": "バランス"},
 
@@ -49,18 +51,26 @@ SEED_FUNDS = [
      "isin": "JP90C000CMK4", "assoc_code": "4731B15C", "category": "先進国株式"},
     {"name": "iFreeNEXT NASDAQ100インデックス",
      "isin": "JP90C000GUN2", "assoc_code": "04317188", "category": "米国株式（NASDAQ）"},
+    {"name": "ニッセイ・S米国グロース株式メガ10インデックスファンド（メガ10）",
+     "isin": "JP90C000S9M6", "assoc_code": "2931225B", "category": "米国株式（グロース）"},
 
     # --- 野村 ---
     {"name": "野村インデックスファンド・外国株式（Funds-i 外国株式）",
      "isin": "JP90C0007DP8", "assoc_code": "0131410B", "category": "先進国株式"},
     {"name": "野村世界業種別投資シリーズ（世界半導体株投資）",
      "isin": "JP90C0006G52", "assoc_code": "01313098", "category": "海外株式（半導体）"},
+    {"name": "野村インデックスファンド・日経半導体株（Funds-i 日経半導体株）",
+     "isin": "JP90C000R9E4", "assoc_code": "0131124A", "category": "国内株式（半導体）"},
 
     # --- Tracers（アモーヴァ/旧日興） ---
     {"name": "Tracers MSCIオール・カントリー・ゴールドプラス",
      "isin": "JP90C000SNW3", "assoc_code": "02311263", "category": "バランス（株式＋金）"},
+    {"name": "Tracers S&P500ゴールドプラス",
+     "isin": "JP90C000NS46", "assoc_code": "02315228", "category": "バランス（株式＋金）"},
 
     # --- アクティブ / 分配型 ---
     {"name": "インベスコ 世界厳選株式オープン＜為替ヘッジなし＞（毎月決算型）（世界のベスト）",
      "isin": "JP90C0002EX1", "assoc_code": "18312991", "category": "先進国株式（分配型）"},
+    {"name": "WCM 世界成長株厳選ファンド（予想分配金提示型）（ネクスト・ジェネレーション）",
+     "isin": "JP90C000MED5", "assoc_code": "6831221A", "category": "世界株式（アクティブ・分配型）"},
 ]
