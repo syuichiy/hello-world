@@ -429,3 +429,114 @@ def _horizon_advice(key, score, r, ret, dev, drawdown):
         if drawdown <= -20:
             c += f"（期間高値から{drawdown:.1f}%の調整局面にあります）"
     return stance, stance_label, c
+
+
+# ===========================================================================
+# 保有全体（ポートフォリオ）の時間軸別アドバイス
+# ===========================================================================
+
+def portfolio_advice(funds: list):
+    """ウォッチリスト全体を「保有している」前提で、期間ごとの全体アドバイスを返す。
+
+    funds: [{name, ok, value(評価額・None可), hz:[{key,ok,score},...]}, ...]
+    評価額があれば評価額加重、無ければ等ウェイトで全体スコアを合成する。
+
+    ※ テクニカル指標による機械的な目安であり、投資助言ではない。
+    """
+    ok_funds = [f for f in funds if f.get("ok") and f.get("hz")]
+    if not ok_funds:
+        return None
+
+    any_units = any((f.get("value") or 0) > 0 for f in ok_funds)
+    total_value = round(sum(f.get("value") or 0 for f in ok_funds)) if any_units else None
+    for f in ok_funds:
+        f["_w"] = float(f.get("value") or 0) if any_units else 1.0
+    wsum = sum(f["_w"] for f in ok_funds) or 1.0
+
+    labels = {"short": "短期（〜1ヶ月）", "mid": "中期（3ヶ月〜1年）", "long": "長期（1年〜）"}
+    horizons = []
+    for key in ("short", "mid", "long"):
+        entries = []
+        for f in ok_funds:
+            h = next((x for x in f["hz"] if x.get("key") == key and x.get("ok")), None)
+            if h is not None and f["_w"] > 0:
+                entries.append((f, int(h["score"])))
+        if not entries:
+            horizons.append({"key": key, "label": labels[key], "ok": False,
+                             "comment": "判定に必要な履歴（または保有口数）のある銘柄がありません。"})
+            continue
+        ew = sum(f["_w"] for f, _ in entries) or 1.0
+        score = int(round(sum(f["_w"] * sc for f, sc in entries) / ew))
+        if score >= 30:
+            stance, stance_label = "add", "買い増し検討の水準"
+        elif score <= -30:
+            stance, stance_label = "trim", "一部売却検討の水準"
+        else:
+            stance, stance_label = "hold", "ホールド（様子見）"
+
+        buys = sorted([(f, sc) for f, sc in entries if sc >= 30], key=lambda x: -x[1])
+        sells = sorted([(f, sc) for f, sc in entries if sc <= -30], key=lambda x: x[1])
+        buy_share = sum(f["_w"] for f, _ in buys) / ew * 100
+        sell_share = sum(f["_w"] for f, _ in sells) / ew * 100
+        comment = _pf_comment(key, stance, buys, sells, buy_share, sell_share)
+        horizons.append({"key": key, "label": labels[key], "ok": True, "score": score,
+                         "stance": stance, "stance_label": stance_label,
+                         "comment": comment})
+
+    # 集中リスクの注意（評価額ベースのときのみ）
+    note = None
+    if any_units:
+        top = max(ok_funds, key=lambda f: f["_w"])
+        share = top["_w"] / wsum * 100
+        if share >= 40:
+            note = (f"「{_short_name(top['name'])}」が評価額全体の{share:.0f}%を占めています。"
+                    "全体の値動きがこの1本に大きく左右されるため、分散の観点では"
+                    "配分の見直しも検討材料です。")
+    else:
+        note = ("保有口数が未登録のため、全銘柄を同じ比率とみなして評価しています。"
+                "一覧の「保有口数」を入力すると、評価額に応じた判定になります。")
+
+    return {"ok": True, "total_value": total_value,
+            "weights_mode": "value" if any_units else "equal",
+            "horizons": horizons, "note": note}
+
+
+def _short_name(name, limit=20):
+    return name if len(name) <= limit else name[:limit] + "…"
+
+
+def _names(pairs, n=2):
+    return "、".join(_short_name(f["name"], 16) for f, _ in pairs[:n])
+
+
+def _pf_comment(key, stance, buys, sells, buy_share, sell_share):
+    if key == "short":
+        if stance == "add":
+            c = (f"保有全体では短期的に買い寄りです。{_names(buys)}（全体の{buy_share:.0f}%）に"
+                 "押し目・反発のサインが出ており、積立の継続やスポットの買い増しを検討できる水準です。")
+        elif stance == "trim":
+            c = (f"保有全体では短期的に過熱寄りです。特に{_names(sells)}（全体の{sell_share:.0f}%）が"
+                 "過熱圏にあります。利益確定を検討するなら、比率の高いこれらの銘柄からが目安です。")
+        else:
+            c = "保有全体では短期は中立で、急いで売買する必要のない水準です。"
+            if buys and sells:
+                c += (f"（買い寄り：{_names(buys)}／売り寄り：{_names(sells)}と強弱が混在しています）")
+    elif key == "mid":
+        if stance == "add":
+            c = (f"中期トレンドが上向きの銘柄が中心です（{_names(buys)}など全体の{buy_share:.0f}%）。"
+                 "トレンドに沿った積立継続・買い増しを検討できる水準です。")
+        elif stance == "trim":
+            c = (f"中期トレンドが下向きの銘柄が全体の{sell_share:.0f}%を占めます（{_names(sells)}など）。"
+                 "ナンピンは慎重に。含み益のある銘柄は一部利益確定、含み損の銘柄は保有継続の是非を検討する水準です。")
+        else:
+            c = "中期は全体として見極め局面です。積立は継続しつつ、大きな追加投資や売却は急がない水準です。"
+    else:  # long
+        if stance == "add":
+            c = (f"長期では上昇トレンドの銘柄が大半です（全体の{buy_share:.0f}%）。"
+                 "長期保有・積立継続に追い風の状態で、配分を大きく崩す必要のない水準です。")
+        elif stance == "trim":
+            c = (f"長期トレンドが崩れている銘柄が全体の{sell_share:.0f}%を占めます（{_names(sells)}など）。"
+                 "保有目的（老後資金・教育資金など）に照らして、資産配分の見直しを検討する水準です。")
+        else:
+            c = "長期では強弱が混在または横ばいで、大きな配分変更を急ぐ状況ではありません。積立の継続が基本の水準です。"
+    return c

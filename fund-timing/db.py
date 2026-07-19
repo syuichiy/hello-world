@@ -91,6 +91,10 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
             CREATE INDEX IF NOT EXISTS idx_catalog_name ON catalog(name);
             """
         )
+        # マイグレーション: 保有口数カラム（旧バージョンのDBに追加）
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(watchlist)")]
+        if "units" not in cols:
+            c.execute("ALTER TABLE watchlist ADD COLUMN units REAL DEFAULT 0")
     if seed:
         seed_catalog(db_path)
         _seed_default_watchlist(db_path)
@@ -184,11 +188,19 @@ def delete_catalog(catalog_id: int, db_path: Optional[str] = None):
 def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
-            "SELECT w.id AS watch_id, w.sort_order, c.* "
+            "SELECT w.id AS watch_id, w.sort_order, w.units, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def set_units(catalog_id: int, units: float, db_path: Optional[str] = None):
+    """保有口数を設定する（0で未保有扱い）。"""
+    units = max(0.0, float(units or 0))
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET units=? WHERE catalog_id=?", (units, catalog_id))
+    return units
 
 
 def add_watch(catalog_id: int, db_path: Optional[str] = None):

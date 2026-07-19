@@ -63,6 +63,20 @@
 
       <div id="dash-status" class="status" hidden></div>
 
+      <!-- 保有全体（ポートフォリオ）の目安 -->
+      <div class="card portfolio-card" id="portfolio-card" hidden>
+        <div class="pf-head">
+          <h2>💼 保有全体の目安（ポートフォリオ）</h2>
+          <div class="pf-total" id="pf-total" hidden>
+            <span class="pf-total-key">総評価額</span>
+            <span class="pf-total-val" id="pf-total-val">—</span>
+          </div>
+        </div>
+        <div id="pf-horizons"></div>
+        <p class="pf-note" id="pf-note" hidden></p>
+        <p class="hz-note">⚠️ 過去の値動きに基づくテクニカル指標の機械的な目安です。投資助言ではなく、将来の成果を保証するものではありません。</p>
+      </div>
+
       <div class="card table-card">
         <table class="watch-table">
           <thead>
@@ -71,8 +85,9 @@
               <th class="sortable" data-key="verdict">判定</th>
               <th class="sortable" data-key="score">シグナル強度 ▼</th>
               <th class="sortable num" data-key="latest_price">最新基準価額</th>
+              <th class="num">保有口数</th>
+              <th class="sortable num" data-key="value">評価額</th>
               <th class="sortable num" data-key="change_pct">期間騰落</th>
-              <th class="sortable num" data-key="rsi">RSI</th>
               <th>値動き</th>
               <th></th>
             </tr>

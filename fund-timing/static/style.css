@@ -324,3 +324,21 @@ main { max-width: 940px; margin: 0 auto; padding: 8px 16px 40px; }
 @media (prefers-color-scheme: dark) {
   .hz-note { background: #332c1a; border-color: #4a4327; }
 }
+
+/* ポートフォリオ全体の目安カード */
+.pf-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.pf-head h2 { font-size: 17px; margin: 0; }
+.pf-total { text-align: right; }
+.pf-total-key { display: block; font-size: 11px; color: var(--ink-soft); }
+.pf-total-val { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pf-note { font-size: 12px; color: var(--ink-soft); margin: 10px 0 0; }
+
+/* 保有口数入力 */
+.units-input {
+  width: 90px; padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 8px;
+  font-size: 13px; text-align: right; background: var(--bg); color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.units-input:focus { outline: none; border-color: var(--accent); }
+.units-input::placeholder { color: var(--ink-soft); opacity: .6; }
+.value-cell { font-weight: 600; white-space: nowrap; }

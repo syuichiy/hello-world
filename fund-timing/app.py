@@ -230,6 +230,9 @@ def _summarize_fund(row, range_key, force=False):
         change = None
         if prices[0]:
             change = round((prices[-1] - prices[0]) / prices[0] * 100, 2)
+        # 時間軸別スコア（ポートフォリオ全体判定用・全履歴で計算）
+        hz_full = signal_mod.analyze_horizons(series["dates"], series["nav"])
+        hz = [{"key": h["key"], "ok": h["ok"], "score": h.get("score")} for h in hz_full]
         summary.update({
             "ok": True,
             "verdict": a.verdict,
@@ -242,6 +245,7 @@ def _summarize_fund(row, range_key, force=False):
             "uptrend": (a.stats.get("sma_short") or 0) >= (a.stats.get("sma_long") or 0),
             "change_pct": change,
             "spark": _downsample([p for p in prices if p is not None], 60),
+            "hz": hz,
         })
     except fund_data.FundDataError as e:
         summary.update({"ok": False, "error": str(e)})
@@ -250,11 +254,42 @@ def _summarize_fund(row, range_key, force=False):
 
 @app.route("/api/watchlist/analyze")
 def api_watchlist_analyze():
-    """ウォッチリスト各投信の現在の判定サマリを返す（一覧比較用）。"""
+    """ウォッチリスト各投信の判定サマリ＋保有全体（ポートフォリオ）の目安を返す。"""
     range_key = request.args.get("range", "1y")
     force = request.args.get("force") in ("1", "true", "yes")
-    summaries = [_summarize_fund(it, range_key, force) for it in db.list_watchlist()]
-    return jsonify({"ok": True, "range": range_key, "items": summaries})
+    summaries = []
+    for it in db.list_watchlist():
+        s = _summarize_fund(it, range_key, force)
+        units = float(it.get("units") or 0)
+        s["units"] = units
+        # 投信の慣例: 評価額 = 基準価額 × 口数 ÷ 10,000（基準価額は1万口あたり）
+        if s.get("ok") and units > 0 and s.get("latest_price"):
+            s["value"] = round(s["latest_price"] * units / 10000)
+        else:
+            s["value"] = None
+        summaries.append(s)
+    portfolio = signal_mod.portfolio_advice(summaries)
+    for s in summaries:
+        s.pop("_w", None)  # portfolio_adviceが付ける内部ウェイトは返さない
+    return jsonify({"ok": True, "range": range_key, "items": summaries,
+                    "portfolio": portfolio})
+
+
+@app.route("/api/watchlist/units", methods=["POST"])
+def api_watchlist_units():
+    """保有口数を登録する。"""
+    data = request.get_json(silent=True) or {}
+    catalog_id = data.get("catalog_id")
+    if catalog_id is None:
+        return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
+    try:
+        units = float(data.get("units") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "口数は数値で入力してください。"}), 400
+    if units < 0:
+        return jsonify({"ok": False, "error": "口数は0以上で入力してください。"}), 400
+    saved = db.set_units(int(catalog_id), units)
+    return jsonify({"ok": True, "units": saved})
 
 
 @app.route("/api/ranking")

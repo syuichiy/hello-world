@@ -36,6 +36,64 @@ async function loadWatchlist(force) {
   setDashStatus("");
   lastSummaries = data.items || [];
   renderWatchTable();
+  renderPortfolio(data.portfolio);
+}
+
+// 保有全体（ポートフォリオ）の目安カード
+function renderPortfolio(pf) {
+  const card = $("portfolio-card");
+  if (!pf || !pf.ok) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const totalWrap = $("pf-total");
+  if (pf.total_value != null) {
+    totalWrap.hidden = false;
+    $("pf-total-val").textContent = Number(pf.total_value).toLocaleString() + " 円";
+  } else {
+    totalWrap.hidden = true;
+  }
+
+  const stanceInfo = {
+    add:  { cls: "buy",     emoji: "🟢" },
+    hold: { cls: "neutral", emoji: "🟡" },
+    trim: { cls: "sell",    emoji: "🔴" },
+  };
+  $("pf-horizons").innerHTML = (pf.horizons || []).map((h) => {
+    if (!h.ok) {
+      return `<div class="hz-row"><div class="hz-head">
+        <span class="hz-label">${escapeHtml(h.label)}</span>
+        <span class="vbadge neutral">— 判定不可</span></div>
+        <p class="hz-comment">${escapeHtml(h.comment)}</p></div>`;
+    }
+    const si = stanceInfo[h.stance] || stanceInfo.hold;
+    return `<div class="hz-row">
+      <div class="hz-head">
+        <span class="hz-label">${escapeHtml(h.label)}</span>
+        <span class="vbadge ${si.cls}">${si.emoji} ${escapeHtml(h.stance_label)}</span>
+        <span class="hz-score">全体スコア ${h.score > 0 ? "+" : ""}${h.score}</span>
+      </div>
+      <p class="hz-comment">${escapeHtml(h.comment)}</p>
+    </div>`;
+  }).join("");
+
+  const note = $("pf-note");
+  if (pf.note) { note.hidden = false; note.textContent = "ℹ️ " + pf.note; }
+  else { note.hidden = true; }
+}
+
+// 保有口数の保存
+async function saveUnits(catalogId, units) {
+  try {
+    const resp = await fetch("/api/watchlist/units", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalog_id: Number(catalogId), units: Number(units) || 0 }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { alert("⚠️ " + (data.error || "保存に失敗しました")); return; }
+    loadWatchlist();  // 評価額と全体判定を更新
+  } catch (e) {
+    alert("通信エラー: " + e.message);
+  }
 }
 
 function setDashStatus(msg, kind) {
@@ -69,7 +127,7 @@ function renderWatchTable() {
       return `<tr class="err-row" data-id="${s.catalog_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
           <div class="fund-sub">${escapeHtml(s.isin)}</div></td>
-        <td colspan="5" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
+        <td colspan="6" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
         <td></td>
         <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td></tr>`;
     }
@@ -77,7 +135,8 @@ function renderWatchTable() {
     const chg = s.change_pct == null ? "—"
       : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
     const price = s.latest_price == null ? "—" : Number(s.latest_price).toLocaleString() + " 円";
-    const rsi = s.rsi == null ? "—" : s.rsi.toFixed(1);
+    const unitsVal = s.units > 0 ? s.units : "";
+    const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
     return `<tr class="watch-row" data-id="${s.catalog_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
@@ -86,8 +145,11 @@ function renderWatchTable() {
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
       <td class="num">${price}</td>
+      <td class="num"><input class="units-input" type="number" min="0" step="1"
+            data-id="${s.catalog_id}" value="${unitsVal}" placeholder="口数"
+            title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
+      <td class="num value-cell">${value}</td>
       <td class="num">${chg}</td>
-      <td class="num">${rsi}</td>
       <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
       <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td>
     </tr>`;
@@ -456,8 +518,18 @@ $("reg-submit").addEventListener("click", registerFund);
 $("watch-body").addEventListener("click", (e) => {
   const del = e.target.closest(".row-del");
   if (del) { e.stopPropagation(); removeFromWatch(del.dataset.id); return; }
+  if (e.target.closest(".units-input")) return;  // 口数入力中は詳細を開かない
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
+});
+
+// 保有口数の入力（変更確定で保存）
+$("watch-body").addEventListener("change", (e) => {
+  const input = e.target.closest(".units-input");
+  if (input) saveUnits(input.dataset.id, input.value);
+});
+$("watch-body").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.closest(".units-input")) e.target.blur();
 });
 
 document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
