@@ -313,8 +313,13 @@ def api_analyze():
     stats = dict(analysis.stats)
     stats["latest_date"] = dates[-1]
 
+    # 時間軸別の保有者向け目安は、表示期間に関係なく全履歴で判定する
+    # （長期判定には200日以上の履歴が必要なため）
+    horizons = signal_mod.analyze_horizons(series["dates"], series["nav"])
+
     return jsonify({
         "ok": True,
+        "horizons": horizons,
         "fund": {"name": series["name"], "isin": series["isin"],
                  "assoc_code": series["assoc_code"], "catalog_id": int(catalog_id) if catalog_id else None},
         "indicators": analysis.indicators.__dict__,

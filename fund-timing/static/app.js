@@ -305,6 +305,7 @@ function renderDetail(data) {
 
   drawPriceChart(data);
   drawRsiChart(data);
+  renderHorizons(data.horizons);
   renderReasons(data.reasons, data.score);
   renderSignals(data.signals);
 }
@@ -358,6 +359,35 @@ function hline(y, color) {
   return { type: "line", xref: "paper", x0: 0, x1: 1, y0: y, y1: y,
     line: { color, width: 1, dash: "dash" }, opacity: 0.6 };
 }
+function renderHorizons(horizons) {
+  const el = $("horizons-list");
+  if (!horizons || !horizons.length) { el.innerHTML = ""; return; }
+  const stanceInfo = {
+    add:  { cls: "buy",     emoji: "🟢" },
+    hold: { cls: "neutral", emoji: "🟡" },
+    trim: { cls: "sell",    emoji: "🔴" },
+  };
+  el.innerHTML = horizons.map((h) => {
+    if (!h.ok) {
+      return `<div class="hz-row">
+        <div class="hz-head"><span class="hz-label">${escapeHtml(h.label)}</span>
+          <span class="vbadge neutral">— 判定不可</span></div>
+        <p class="hz-comment">${escapeHtml(h.comment)}</p></div>`;
+    }
+    const si = stanceInfo[h.stance] || stanceInfo.hold;
+    const factors = (h.factors || []).map((f) => `<span class="hz-factor">${escapeHtml(f)}</span>`).join("");
+    return `<div class="hz-row">
+      <div class="hz-head">
+        <span class="hz-label">${escapeHtml(h.label)}</span>
+        <span class="vbadge ${si.cls}">${si.emoji} ${escapeHtml(h.stance_label)}</span>
+        <span class="hz-score">スコア ${h.score > 0 ? "+" : ""}${h.score}</span>
+      </div>
+      <p class="hz-comment">${escapeHtml(h.comment)}</p>
+      <div class="hz-factors">${factors}</div>
+    </div>`;
+  }).join("");
+}
+
 function renderReasons(reasons, score) {
   const el = $("reasons-list");
   if (!reasons || !reasons.length) {

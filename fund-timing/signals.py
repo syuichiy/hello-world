@@ -294,3 +294,138 @@ def _current_verdict(s, sma_short, sma_long, rsi, bb_upper, bb_lower, bb_mid):
         "deviation_pct": None if pd.isna(sl) or sl == 0 else round(float((price - sl) / sl * 100), 2),
     }
     return verdict, label, score, reasons, stats
+
+
+# ===========================================================================
+# 保有者向け：短期・中期・長期の時間軸別アドバイス（テクニカル目安）
+# ===========================================================================
+
+def analyze_horizons(dates: list, prices: list) -> list:
+    """保有している前提で、短期・中期・長期それぞれの状況とスタンスの目安を返す。
+
+    返り値: [{key, label, ok, score, stance, stance_label, comment, factors[]}, ...]
+    stance: "add"（買い増し検討）/ "hold"（ホールド）/ "trim"（一部売却検討）
+
+    ※ テクニカル指標による機械的な目安であり、投資助言・利益の保証ではない。
+    """
+    s = pd.Series(prices, dtype="float64")
+    return [
+        _horizon(s, "short", "短期（〜1ヶ月）", sw=5, lw=25, mom_days=20, need=30,
+                 weights={"trend": 20, "mom": 20, "rsi": 32, "bb": 28, "dev": 0}),
+        _horizon(s, "mid", "中期（3ヶ月〜1年）", sw=25, lw=75, mom_days=60, need=90,
+                 weights={"trend": 32, "mom": 26, "rsi": 16, "bb": 8, "dev": 18}),
+        _horizon(s, "long", "長期（1年〜）", sw=75, lw=200, mom_days=250, need=220,
+                 weights={"trend": 34, "mom": 30, "rsi": 8, "bb": 0, "dev": 28}),
+    ]
+
+
+def _horizon(s, key, label, sw, lw, mom_days, need, weights):
+    n = len(s)
+    if n < need:
+        return {"key": key, "label": label, "ok": False,
+                "comment": f"判定に必要なデータ（約{need}営業日）がありません。"
+                           "設定から日が浅いファンドでは長期判定はできません。",
+                "factors": []}
+
+    price = float(s.iloc[-1])
+    sma_s = float(s.rolling(sw).mean().iloc[-1])
+    sma_l = float(s.rolling(lw).mean().iloc[-1])
+    r = float(_rsi(s, RSI_PERIOD).iloc[-1])
+
+    bb_mid = s.rolling(BB_WINDOW).mean().iloc[-1]
+    bb_std = s.rolling(BB_WINDOW).std(ddof=0).iloc[-1]
+    bb_pos = None
+    if not pd.isna(bb_std) and bb_std:
+        upv = bb_mid + BB_SIGMA * bb_std
+        lov = bb_mid - BB_SIGMA * bb_std
+        bb_pos = (price - lov) / (upv - lov)
+
+    base = float(s.iloc[-min(mom_days, n - 1) - 1])
+    ret = price / base - 1.0 if base else 0.0
+    dev = (price - sma_l) / sma_l * 100.0 if sma_l else 0.0
+
+    # 高値からの下落率（長期の判断材料）
+    peak = float(s.max())
+    drawdown = (price / peak - 1.0) * 100.0 if peak else 0.0
+
+    terms = {
+        "trend": float(np.tanh((sma_s - sma_l) / sma_l * 25)) if sma_l else 0.0,
+        "mom": float(np.tanh(ret * (5 if mom_days <= 60 else 2.5))),
+        "rsi": _clamp((50.0 - r) / 25.0),
+        "bb": _clamp((0.5 - bb_pos) * 2.0) if bb_pos is not None else 0.0,
+        "dev": float(-np.tanh(dev / 12.0)),
+    }
+    raw = sum(weights[k] * terms[k] for k in weights)
+    total_w = sum(abs(v) for v in weights.values()) or 1
+    score = int(round(_clamp(raw / total_w * 100, -100, 100)))
+
+    factors = _horizon_factors(key, sw, lw, mom_days, price, sma_s, sma_l, r,
+                               bb_pos, ret, dev, drawdown)
+    stance, stance_label, comment = _horizon_advice(key, score, r, ret, dev, drawdown)
+
+    return {"key": key, "label": label, "ok": True, "score": score,
+            "stance": stance, "stance_label": stance_label,
+            "comment": comment, "factors": factors}
+
+
+def _horizon_factors(key, sw, lw, mom_days, price, sma_s, sma_l, r, bb_pos, ret, dev, drawdown):
+    f = []
+    f.append(f"{sw}日線が{lw}日線を{'上回る（上向き）' if sma_s >= sma_l else '下回る（下向き）'}")
+    f.append(f"直近{mom_days}営業日の騰落率 {ret*100:+.1f}%")
+    f.append(f"RSI {r:.0f}")
+    if key == "short" and bb_pos is not None:
+        f.append(f"ボリンジャーバンド内位置 {bb_pos*100:.0f}%（0%=下限,100%=上限）")
+    if key != "short":
+        f.append(f"{lw}日線からの乖離 {dev:+.1f}%")
+    if key == "long":
+        f.append(f"期間高値からの位置 {drawdown:+.1f}%")
+    return f
+
+
+def _horizon_advice(key, score, r, ret, dev, drawdown):
+    """スタンス（add/hold/trim）と保有者向けコメントを生成する。"""
+    if score >= 30:
+        stance, stance_label = "add", "買い増し検討の水準"
+    elif score <= -30:
+        stance, stance_label = "trim", "一部売却検討の水準"
+    else:
+        stance, stance_label = "hold", "ホールド（様子見）"
+
+    if key == "short":
+        if stance == "add":
+            c = ("短期指標は買い寄りです。押し目と見て買い増し・積立継続を検討できる水準です。"
+                 "ただし短期の反発狙いはブレも大きい点に注意してください。")
+        elif stance == "trim":
+            c = ("短期的に過熱気味です。急いで買い増す局面ではなく、"
+                 "利益が乗っている場合は一部利益確定も選択肢に入る水準です。")
+        else:
+            c = "短期は方向感が乏しく、慌てて売買せず様子見が無難な水準です。"
+        if r >= RSI_OVERBOUGHT:
+            c += f"（RSI {r:.0f} と買われすぎ圏です）"
+        elif r <= RSI_OVERSOLD:
+            c += f"（RSI {r:.0f} と売られすぎ圏で、反発が起きやすい状態です）"
+    elif key == "mid":
+        if stance == "add":
+            c = ("中期トレンドは上向きです。トレンドに沿った買い増し・積立継続を"
+                 "検討できる水準です。")
+        elif stance == "trim":
+            c = ("中期トレンドが下向きです。ナンピン（下がるたびの買い増し）は慎重に。"
+                 "含み益がある場合は一部利益確定、含み損の場合は保有継続の是非を"
+                 "検討する水準です。")
+        else:
+            c = "中期はトレンド転換の見極め局面です。積立は継続しつつ、追加の一括買いは急がない水準です。"
+        if dev >= 10:
+            c += f"（{'75' if key=='mid' else ''}日線から+{dev:.1f}%と上振れしており、押し目を待つ選択肢もあります）"
+    else:  # long
+        if stance == "add":
+            c = ("長期トレンドは上向きです。長期保有・積立継続に追い風の状態です。"
+                 "高値圏でも時間分散（積立）を保てば大きな問題になりにくい水準です。")
+        elif stance == "trim":
+            c = ("長期トレンドが崩れています。保有目的（老後資金など）と照らして、"
+                 "配分の見直しや一部売却を検討する水準です。積立自体は下落局面の"
+                 "取得単価を下げる効果もあるため、目的次第で継続も選択肢です。")
+        else:
+            c = "長期は横ばい圏です。積立は継続し、大きな配分変更は急がない水準です。"
+        if drawdown <= -20:
+            c += f"（期間高値から{drawdown:.1f}%の調整局面にあります）"
+    return stance, stance_label, c
