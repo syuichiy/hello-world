@@ -25,6 +25,8 @@ SEED_FUNDS = [
      "isin": "JP90C000FXV1", "assoc_code": "03311182", "category": "国内株式"},
     {"name": "eMAXIS Slim バランス（8資産均等型）",
      "isin": "JP90C000EWV6", "assoc_code": "03312175", "category": "バランス"},
+    {"name": "eMAXIS Slim 新興国株式インデックス",
+     "isin": "JP90C000F7H5", "assoc_code": "0331C177", "category": "新興国株式"},
 
     # --- SBI・V シリーズ ---
     {"name": "SBI・V・S&P500インデックス・ファンド",
@@ -41,6 +43,10 @@ SEED_FUNDS = [
      "isin": "JP90C000Q2U6", "assoc_code": "9I31223A", "category": "米国株式"},
     {"name": "楽天・プラス・SOXインデックス・ファンド",
      "isin": "JP90C000QF30", "assoc_code": "9I315241", "category": "米国株式（半導体）"},
+    {"name": "楽天・プラス・オールカントリー株式インデックス・ファンド",
+     "isin": "JP90C000Q2W2", "assoc_code": "9I31123A", "category": "全世界株式"},
+    {"name": "楽天・プラス・NASDAQ-100インデックス・ファンド",
+     "isin": "JP90C000QF22", "assoc_code": "9I314241", "category": "米国株式（NASDAQ）"},
 
     # --- ニッセイ / たわら / iFreeNEXT ---
     {"name": "ニッセイ外国株式インデックスファンド",
@@ -51,6 +57,10 @@ SEED_FUNDS = [
      "isin": "JP90C000CMK4", "assoc_code": "4731B15C", "category": "先進国株式"},
     {"name": "iFreeNEXT NASDAQ100インデックス",
      "isin": "JP90C000GUN2", "assoc_code": "04317188", "category": "米国株式（NASDAQ）"},
+    {"name": "iFreeNEXT FANG+インデックス",
+     "isin": "JP90C000FZD4", "assoc_code": "04311181", "category": "米国株式（FANG+）"},
+    {"name": "ニッセイ日経225インデックスファンド",
+     "isin": "JP90C0001R39", "assoc_code": "29311041", "category": "国内株式"},
     {"name": "ニッセイ・S米国グロース株式メガ10インデックスファンド（メガ10）",
      "isin": "JP90C000S9M6", "assoc_code": "2931225B", "category": "米国株式（グロース）"},
 
@@ -73,4 +83,8 @@ SEED_FUNDS = [
      "isin": "JP90C0002EX1", "assoc_code": "18312991", "category": "先進国株式（分配型）"},
     {"name": "WCM 世界成長株厳選ファンド（予想分配金提示型）（ネクスト・ジェネレーション）",
      "isin": "JP90C000MED5", "assoc_code": "6831221A", "category": "世界株式（アクティブ・分配型）"},
+    {"name": "アライアンス・バーンスタイン・米国成長株投信Dコース（H無・予想分配金提示型）",
+     "isin": "JP90C000ATX6", "assoc_code": "39312149", "category": "米国株式（アクティブ・分配型）"},
+    {"name": "ひふみプラス",
+     "isin": "JP90C0008CH5", "assoc_code": "9C311125", "category": "国内外株式（アクティブ）"},
 ]

@@ -21,8 +21,35 @@ function showDetail() {
   window.scrollTo(0, 0);
 }
 
+// ============================================================ トースト通知
+let toastTimer = null;
+function toast(msg, kind) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.className = kind === "error" ? "error" : "";
+  requestAnimationFrame(() => el.classList.add("show"));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
 // ============================================================ 一覧（ウォッチリスト）
+function showSkeleton() {
+  const body = $("watch-body");
+  if (!body.children.length) {
+    const cell = (w) => `<td><span class="skel" style="width:${w}px"></span></td>`;
+    body.innerHTML = Array.from({ length: 4 }, () =>
+      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
+    ).join("");
+  }
+}
+
 async function loadWatchlist(force) {
+  showSkeleton();
   setDashStatus("各投信を分析中… ⏳", "loading");
   let data;
   try {
@@ -89,10 +116,10 @@ async function saveUnits(catalogId, units) {
       body: JSON.stringify({ catalog_id: Number(catalogId), units: Number(units) || 0 }),
     });
     const data = await resp.json();
-    if (!data.ok) { alert("⚠️ " + (data.error || "保存に失敗しました")); return; }
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
     loadWatchlist();  // 評価額と全体判定を更新
   } catch (e) {
-    alert("通信エラー: " + e.message);
+    toast("通信エラー: " + e.message, "error");
   }
 }
 
@@ -240,13 +267,16 @@ function onSearchInput() {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(doSearch, 180);
 }
+let searchSeq = 0;
 async function doSearch() {
   const q = $("search-input").value.trim();
   const box = $("search-results");
+  const seq = ++searchSeq;
   let data;
   try {
     data = await (await fetch(`/api/search?q=${encodeURIComponent(q)}`)).json();
   } catch (e) { return; }
+  if (seq !== searchSeq) return;  // 古い検索の応答は捨てる（後追い上書き防止）
   const results = data.results || [];
   if (!results.length) {
     const kw = q ? escapeHtml(q) : "";
@@ -269,6 +299,7 @@ async function doSearch() {
         : `<button class="si-add" data-id="${r.id}">＋ 一覧に追加</button>`}
     </div>`).join("");
   box.hidden = false;
+  searchSel = -1;
 }
 
 async function addToWatch(catalogId) {
@@ -278,6 +309,7 @@ async function addToWatch(catalogId) {
   });
   $("search-results").hidden = true;
   $("search-input").value = "";
+  toast("✓ ウォッチリストに追加しました");
   loadWatchlist();
 }
 
@@ -303,15 +335,16 @@ function openRegisterPrefilled(keyword) {
 async function registerFund() {
   const name = $("reg-name").value.trim();
   const query = $("reg-code").value.trim();
-  if (!query) { alert("URLまたはISIN,協会コードを入力してください。"); return; }
+  if (!query) { toast("URLまたはISIN,協会コードを入力してください。", "error"); return; }
   const resp = await fetch("/api/catalog", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, query, watch: true }),
   });
   const data = await resp.json();
-  if (!data.ok) { alert("⚠️ " + (data.error || "登録に失敗しました")); return; }
+  if (!data.ok) { toast(data.error || "登録に失敗しました", "error"); return; }
   $("reg-name").value = ""; $("reg-code").value = "";
   $("register-form").hidden = true;
+  toast("✓ 登録して一覧に追加しました");
   loadWatchlist();
 }
 
@@ -329,8 +362,8 @@ async function analyzeDetail() {
   let data;
   try {
     data = await (await fetch("/api/analyze?" + params.toString())).json();
-  } catch (e) { alert("通信エラー: " + e.message); return; }
-  if (!data.ok) { alert("⚠️ " + (data.error || "分析に失敗しました")); return; }
+  } catch (e) { toast("通信エラー: " + e.message, "error"); return; }
+  if (!data.ok) { toast(data.error || "分析に失敗しました", "error"); return; }
   renderDetail(data);
 }
 
@@ -503,6 +536,47 @@ $("search-input").addEventListener("input", onSearchInput);
 $("search-input").addEventListener("focus", onSearchInput);
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".search-wrap")) $("search-results").hidden = true;
+});
+
+// --- 検索のキーボード操作（↑↓で候補移動 / Enterで追加 / Escで閉じる）---
+let searchSel = -1;
+function updateSearchSel(items) {
+  items.forEach((el, i) => el.classList.toggle("sel", i === searchSel));
+  if (searchSel >= 0 && items[searchSel]) {
+    items[searchSel].scrollIntoView({ block: "nearest" });
+  }
+}
+$("search-input").addEventListener("keydown", (e) => {
+  const box = $("search-results");
+  const items = Array.from(box.querySelectorAll(".search-item"));
+  if (e.key === "Escape") { box.hidden = true; e.target.blur(); return; }
+  if (box.hidden || !items.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    searchSel = (searchSel + 1) % items.length;
+    updateSearchSel(items);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    searchSel = (searchSel - 1 + items.length) % items.length;
+    updateSearchSel(items);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const target = items[searchSel >= 0 ? searchSel : 0];
+    if (!target) return;
+    const add = target.querySelector(".si-add");
+    if (add) add.click();
+    else toast("この投信は追加済みです");
+  }
+});
+
+// --- 「/」キーでどこからでも検索にフォーカス ---
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !e.metaKey && !e.ctrlKey
+      && !e.target.closest("input, textarea, select")
+      && !$("dashboard-view").hidden) {
+    e.preventDefault();
+    $("search-input").focus();
+  }
 });
 
 $("search-results").addEventListener("click", (e) => {
