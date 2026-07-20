@@ -342,10 +342,36 @@ def _fetch_stock_yahoo(ticker: str):
     return rows
 
 
+def _fetch_stock_yfinance(ticker: str):
+    """yfinanceライブラリ経由（ブラウザ偽装通信でYahooのbot判定を回避できる）。"""
+    try:
+        import yfinance as yf
+    except ImportError:
+        raise FundDataError("yfinance未導入（pip install yfinance）")
+    symbol = ticker.upper()
+    if symbol.endswith(".JP"):
+        symbol = symbol[:-3] + ".T"
+    try:
+        hist = yf.Ticker(symbol).history(period="10y", interval="1d", auto_adjust=True)
+    except Exception as e:
+        raise FundDataError(f"yfinance: {e}")
+    if hist is None or len(hist) == 0 or "Close" not in hist:
+        raise FundDataError("yfinance: データが空")
+    rows = []
+    for idx, close in hist["Close"].items():
+        if pd.isna(close):
+            continue
+        rows.append((idx.date(), float(close)))
+    if not rows:
+        raise FundDataError("yfinance: 有効なデータなし")
+    return rows
+
+
 def get_stock_series(ticker: str, name: str = "") -> FundSeries:
     """個別株の日次終値を取得する（ticker例: '6501.JP'）。
 
-    Stooq → Yahoo!ファイナンス の順に試す（Stooqは回数制限で空になることがあるため）。
+    Stooq → yfinance → Yahoo直接 の順に試す
+    （Stooqは回数制限、Yahoo直接はTLS指紋によるbot判定で失敗することがあるため）。
     """
     ticker = (ticker or "").strip()
     if not ticker:
@@ -358,7 +384,7 @@ def get_stock_series(ticker: str, name: str = "") -> FundSeries:
     else:
         rows = None
         errors = []
-        for fetcher in (_fetch_stock_stooq, _fetch_stock_yahoo):
+        for fetcher in (_fetch_stock_stooq, _fetch_stock_yfinance, _fetch_stock_yahoo):
             try:
                 rows = fetcher(ticker)
                 break

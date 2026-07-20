@@ -545,6 +545,7 @@ def _run_check(codes):
         print(f"診断: 個別株の株価取得テスト（{ticker}）")
         print("=" * 56)
         for label, fetcher in (("Stooq", fund_data._fetch_stock_stooq),
+                               ("yfinance", fund_data._fetch_stock_yfinance),
                                ("Yahoo", fund_data._fetch_stock_yahoo)):
             try:
                 rows = fetcher(ticker)

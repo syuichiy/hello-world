@@ -2,3 +2,4 @@ Flask>=3.0
 pandas>=2.0
 plotly>=5.18
 requests>=2.31
+yfinance>=0.2.40
