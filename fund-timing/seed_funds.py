@@ -31,6 +31,8 @@ SEED_FUNDS = [
     # --- SBI・V シリーズ ---
     {"name": "SBI・V・S&P500インデックス・ファンド",
      "isin": "JP90C000J569", "assoc_code": "89311199", "category": "米国株式"},
+    {"name": "SBI日本高配当株式（分配）ファンド（年4回決算型）",
+     "isin": "JP90C000Q9K2", "assoc_code": "8931123C", "category": "国内株式（高配当・分配型）"},
     {"name": "SBI・V・全米株式インデックス・ファンド",
      "isin": "JP90C000LY16", "assoc_code": "89311216", "category": "米国株式"},
 
