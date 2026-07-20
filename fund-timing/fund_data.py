@@ -244,10 +244,16 @@ def _parse_stock_csv(text: str):
 
 
 def _fetch_stock_stooq(ticker: str):
+    sess = requests.Session()
+    sess.headers.update(_BROWSER_HEADERS)
+    # 先に銘柄ページを開いてCookieを確立（直接CSVを叩くと空になることがある）
     try:
-        resp = requests.get(STOCK_CSV_URL,
-                            params={"s": ticker.lower(), "i": "d"},
-                            headers=_BROWSER_HEADERS, timeout=30)
+        sess.get(f"https://stooq.com/q/?s={ticker.lower()}", timeout=20)
+    except requests.RequestException:
+        pass
+    try:
+        resp = sess.get(STOCK_CSV_URL,
+                        params={"s": ticker.lower(), "i": "d"}, timeout=30)
     except requests.RequestException as e:
         raise FundDataError(f"Stooqに接続できませんでした（{e}）")
     if resp.status_code != 200:
