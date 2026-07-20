@@ -258,19 +258,74 @@ def _fetch_stock_stooq(ticker: str):
     return rows
 
 
+_yahoo_session = None
+_yahoo_crumb = None
+
+
+def _get_yahoo_session():
+    """Yahoo用セッション（Cookie＋crumbを取得して使い回す）。
+
+    Yahooのチャート取得は、Cookieとcrumbトークンなしだと429で拒否されるため、
+    yfinanceライブラリと同じ手順（fc.yahoo.comでCookie→getcrumbでトークン）を踏む。
+    """
+    global _yahoo_session, _yahoo_crumb
+    if _yahoo_session is not None:
+        return _yahoo_session, _yahoo_crumb
+    sess = requests.Session()
+    sess.headers.update({
+        "User-Agent": _BROWSER_HEADERS["User-Agent"],
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    })
+    try:
+        sess.get("https://fc.yahoo.com", timeout=15)  # Cookie取得（404が返るが正常）
+    except requests.RequestException:
+        pass
+    crumb = None
+    try:
+        r = sess.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=15)
+        if r.status_code == 200 and r.text and "<" not in r.text:
+            crumb = r.text.strip()
+    except requests.RequestException:
+        pass
+    _yahoo_session, _yahoo_crumb = sess, crumb
+    return sess, crumb
+
+
 def _fetch_stock_yahoo(ticker: str):
     """Yahoo!ファイナンスのチャートAPI（例: 6501.JP → 6501.T）。"""
+    global _yahoo_session, _yahoo_crumb
     symbol = ticker.upper()
     if symbol.endswith(".JP"):
         symbol = symbol[:-3] + ".T"
-    try:
-        resp = requests.get(YAHOO_CHART_URL.format(symbol=symbol),
-                            params={"range": "10y", "interval": "1d"},
-                            headers=_BROWSER_HEADERS, timeout=30)
-    except requests.RequestException as e:
-        raise FundDataError(f"Yahooに接続できませんでした（{e}）")
-    if resp.status_code != 200:
-        raise FundDataError(f"Yahoo: HTTP {resp.status_code}")
+
+    sess, crumb = _get_yahoo_session()
+    params = {"range": "10y", "interval": "1d"}
+    if crumb:
+        params["crumb"] = crumb
+
+    resp = None
+    last_err = None
+    for host in ("query1", "query2"):
+        url = f"https://{host}.finance.yahoo.com/v8/finance/chart/{symbol}"
+        try:
+            resp = sess.get(url, params=params, timeout=30)
+        except requests.RequestException as e:
+            last_err = f"Yahooに接続できませんでした（{e}）"
+            continue
+        if resp.status_code == 200:
+            break
+        last_err = f"Yahoo: HTTP {resp.status_code}"
+        if resp.status_code in (401, 403, 429):
+            # セッションを作り直して次のホストで再試行
+            _yahoo_session = None
+            sess, crumb = _get_yahoo_session()
+            if crumb:
+                params["crumb"] = crumb
+        resp = None
+    if resp is None:
+        raise FundDataError(last_err or "Yahoo: 取得失敗")
+
     try:
         result = resp.json()["chart"]["result"][0]
         stamps = result["timestamp"]

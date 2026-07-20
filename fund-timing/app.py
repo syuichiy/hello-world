@@ -98,24 +98,40 @@ def parse_identifier(text: str):
 
 
 # ------------------------------------------------------------------ データ取得（キャッシュ利用）
+# 取得失敗の再試行を一定時間抑制する（データ源の回数制限・連続アクセスの保護）
+_FAIL_TTL_SEC = 600
+_fail_cache: dict = {}
+
+
 def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
                 kind: str = "fund") -> dict:
     """価格シリーズをdictで返す。内部DBのキャッシュを使い、無ければ取得して保存。
 
-    kind="fund" は投信協会CSV（基準価額）、kind="stock" はStooqの株価CSV。
+    kind="fund" は投信協会CSV（基準価額）、kind="stock" は株価（Stooq→Yahoo）。
+    取得失敗は10分間キャッシュし、画面更新のたびに再アクセスして
+    データ源の回数制限を消費しないようにする（「最新に更新」なら再試行）。
     """
     isin = (isin or "").strip().upper()
     assoc = (assoc or "").strip()
+    key = (isin, assoc)
     if not force:
         cached = db.get_cached_series(isin, assoc)
         if cached:
             if name and not cached.get("name"):
                 cached["name"] = name
             return cached
-    if kind == "stock":
-        series = fund_data.get_stock_series(isin, name)
-    else:
-        series = fund_data.get_fund_series(isin, assoc, name)
+        failed = _fail_cache.get(key)
+        if failed and (time.time() - failed[0]) < _FAIL_TTL_SEC:
+            raise fund_data.FundDataError(failed[1])
+    try:
+        if kind == "stock":
+            series = fund_data.get_stock_series(isin, name)
+        else:
+            series = fund_data.get_fund_series(isin, assoc, name)
+    except fund_data.FundDataError as e:
+        _fail_cache[key] = (time.time(), str(e))
+        raise
+    _fail_cache.pop(key, None)
     d = series.to_dict()
     db.set_cached_series(isin, assoc, d["name"], d)
     return d
