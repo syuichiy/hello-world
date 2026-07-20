@@ -222,27 +222,14 @@ def set_stock_override(func):
     _stock_fetch_override = func
 
 
-def get_stock_series(ticker: str, name: str = "") -> FundSeries:
-    """個別株の日次終値を取得する（ticker例: '6501.JP'）。"""
-    ticker = (ticker or "").strip()
-    if not ticker:
-        raise FundDataError("ティッカー（例: 6501.JP）を指定してください。")
-    if _stock_fetch_override is not None:
-        text = _stock_fetch_override(ticker)
-    else:
-        try:
-            resp = requests.get(STOCK_CSV_URL,
-                                params={"s": ticker.lower(), "i": "d"},
-                                headers=_BROWSER_HEADERS, timeout=30)
-        except requests.RequestException as e:
-            raise FundDataError(f"株価データに接続できませんでした: {e}")
-        if resp.status_code != 200:
-            raise FundDataError(f"株価データの取得に失敗しました（HTTP {resp.status_code}）。")
-        text = resp.text or ""
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+def _parse_stock_csv(text: str):
+    """Stooq形式CSV（Date,Open,High,Low,Close,Volume）を (date, close) のリストに。"""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not lines or "," not in lines[0]:
-        raise FundDataError("株価データが空でした。ティッカーが正しいか確認してください。")
+        return []
     rows = []
     for line in lines[1:]:
         parts = line.split(",")
@@ -253,8 +240,79 @@ def get_stock_series(ticker: str, name: str = "") -> FundSeries:
         if d is None or close is None:
             continue
         rows.append((d, close))
+    return rows
+
+
+def _fetch_stock_stooq(ticker: str):
+    try:
+        resp = requests.get(STOCK_CSV_URL,
+                            params={"s": ticker.lower(), "i": "d"},
+                            headers=_BROWSER_HEADERS, timeout=30)
+    except requests.RequestException as e:
+        raise FundDataError(f"Stooqに接続できませんでした（{e}）")
+    if resp.status_code != 200:
+        raise FundDataError(f"Stooq: HTTP {resp.status_code}")
+    rows = _parse_stock_csv(resp.text)
     if not rows:
-        raise FundDataError("有効な株価データが1件もありませんでした。")
+        raise FundDataError("Stooq: データが空（回数制限の可能性）")
+    return rows
+
+
+def _fetch_stock_yahoo(ticker: str):
+    """Yahoo!ファイナンスのチャートAPI（例: 6501.JP → 6501.T）。"""
+    symbol = ticker.upper()
+    if symbol.endswith(".JP"):
+        symbol = symbol[:-3] + ".T"
+    try:
+        resp = requests.get(YAHOO_CHART_URL.format(symbol=symbol),
+                            params={"range": "10y", "interval": "1d"},
+                            headers=_BROWSER_HEADERS, timeout=30)
+    except requests.RequestException as e:
+        raise FundDataError(f"Yahooに接続できませんでした（{e}）")
+    if resp.status_code != 200:
+        raise FundDataError(f"Yahoo: HTTP {resp.status_code}")
+    try:
+        result = resp.json()["chart"]["result"][0]
+        stamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise FundDataError("Yahoo: 応答の形式が想定外")
+    rows = []
+    for ts, close in zip(stamps, closes):
+        if ts is None or close is None:
+            continue
+        rows.append((dt.date.fromtimestamp(ts), float(close)))
+    if not rows:
+        raise FundDataError("Yahoo: データが空")
+    return rows
+
+
+def get_stock_series(ticker: str, name: str = "") -> FundSeries:
+    """個別株の日次終値を取得する（ticker例: '6501.JP'）。
+
+    Stooq → Yahoo!ファイナンス の順に試す（Stooqは回数制限で空になることがあるため）。
+    """
+    ticker = (ticker or "").strip()
+    if not ticker:
+        raise FundDataError("ティッカー（例: 6501.JP）を指定してください。")
+
+    if _stock_fetch_override is not None:
+        rows = _parse_stock_csv(_stock_fetch_override(ticker))
+        if not rows:
+            raise FundDataError("有効な株価データが1件もありませんでした。")
+    else:
+        rows = None
+        errors = []
+        for fetcher in (_fetch_stock_stooq, _fetch_stock_yahoo):
+            try:
+                rows = fetcher(ticker)
+                break
+            except FundDataError as e:
+                errors.append(str(e))
+        if not rows:
+            raise FundDataError("株価データを取得できませんでした（" + " / ".join(errors) + "）。"
+                                "時間をおいて「最新に更新」をお試しください。")
+
     rows.sort(key=lambda x: x[0])
     return FundSeries(
         isin=ticker.upper(), assoc_code="", name=name or ticker.upper(),

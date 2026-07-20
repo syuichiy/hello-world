@@ -520,6 +520,26 @@ def _open_when_ready(url, host, port, timeout=20.0):
 def _run_check(codes):
     """指定コードで実際にデータ取得を試し、サイトの応答内容を表示する診断ツール。"""
     import requests
+
+    # 個別株ティッカー（例: 6501.JP / 6501.T）なら株価の診断
+    m = re.fullmatch(r"(\d{4})\.(JP|T)", codes.strip().upper())
+    if m:
+        ticker = m.group(1) + ".JP"
+        print("=" * 56)
+        print(f"診断: 個別株の株価取得テスト（{ticker}）")
+        print("=" * 56)
+        for label, fetcher in (("Stooq", fund_data._fetch_stock_stooq),
+                               ("Yahoo", fund_data._fetch_stock_yahoo)):
+            try:
+                rows = fetcher(ticker)
+                print(f"[{label}] OK: {len(rows)}件（{rows[0][0]} 〜 {rows[-1][0]}） "
+                      f"最新終値 {rows[-1][1]}")
+            except Exception as e:
+                print(f"[{label}] エラー: {e}")
+        print("=" * 56)
+        print("この出力をそのままコピーして共有してください。")
+        return
+
     isin, assoc = parse_identifier(codes)
     print("=" * 56)
     print("診断: データ取得テスト")

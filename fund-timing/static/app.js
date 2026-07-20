@@ -258,7 +258,7 @@ function renderWatchTable() {
     if (!s.ok) {
       return `<tr class="err-row" data-id="${s.catalog_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
-          <div class="fund-sub">${escapeHtml(s.isin)}</div></td>
+          <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
         <td colspan="6" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
         <td></td>
         <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td></tr>`;
