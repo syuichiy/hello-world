@@ -55,9 +55,16 @@ async function loadWatchlist(force) {
   try {
     const url = `/api/watchlist/analyze?range=${encodeURIComponent(dashRange)}`
       + (force ? "&force=1" : "");
-    data = await (await fetch(url)).json();
+    const resp = await fetch(url);
+    try {
+      data = await resp.json();
+    } catch (_) {
+      throw new Error(`サーバーが応答を返せませんでした（HTTP ${resp.status}）。`
+        + "ターミナルのエラー表示を確認してください。");
+    }
+    if (!data.ok && data.error) throw new Error(data.error);
   } catch (e) {
-    setDashStatus("⚠️ 通信エラー: " + e.message, "error");
+    setDashStatus("⚠️ " + e.message, "error");
     return;
   }
   setDashStatus("");

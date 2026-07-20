@@ -31,6 +31,17 @@ app = Flask(__name__)
 DEMO_MODE = False
 
 
+@app.errorhandler(Exception)
+def _handle_error(e):
+    """APIは必ずJSONでエラーを返す（HTMLエラーページでフロントが壊れるのを防ぐ）。"""
+    import traceback
+    traceback.print_exc()
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False,
+                        "error": f"サーバー内部エラー: {type(e).__name__}: {e}"}), 500
+    raise e
+
+
 # ------------------------------------------------------------------ 入力解析
 ISIN_RE = re.compile(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b")
 ASSOC_RE = re.compile(r"associFundCd=([A-Za-z0-9]+)")
@@ -275,6 +286,8 @@ def _summarize_fund(row, range_key, force=False):
         })
     except fund_data.FundDataError as e:
         summary.update({"ok": False, "error": str(e)})
+    except Exception as e:  # 想定外エラーでも一覧全体を壊さず行単位で表示する
+        summary.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
     return summary
 
 

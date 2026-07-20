@@ -346,8 +346,9 @@ def _fetch_stock_yfinance(ticker: str):
     """yfinanceライブラリ経由（ブラウザ偽装通信でYahooのbot判定を回避できる）。"""
     try:
         import yfinance as yf
-    except ImportError:
-        raise FundDataError("yfinance未導入（pip install yfinance）")
+    except Exception as e:  # ImportError以外（依存関係の不整合等）も握る
+        raise FundDataError(f"yfinanceを読み込めませんでした（{type(e).__name__}: {e}）。"
+                            "ターミナルで ./.venv/bin/pip install -U yfinance を実行してください")
     symbol = ticker.upper()
     if symbol.endswith(".JP"):
         symbol = symbol[:-3] + ".T"
