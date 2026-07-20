@@ -399,3 +399,32 @@ tr:hover .row-del { opacity: 1; }
   .score-bar-track { background: linear-gradient(90deg, #4c1d2b 0%, #423a12 50%, #14401f 100%); }
   #toast { background: #3a3d4d; }
 }
+
+/* ------------------------------------------------ 資産配分・リバランス */
+.allocation-card h2 { font-size: 17px; margin: 0 0 8px; }
+.alloc-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.alloc-chart-title { text-align: center; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); margin: 4px 0 0; }
+.alloc-table { min-width: 640px; margin-top: 6px; }
+.alloc-cls { font-weight: 700; white-space: nowrap; border-left: 3px solid var(--cc, var(--line)); padding-left: 8px; }
+.alloc-amount { font-size: 11.5px; color: var(--ink-soft); margin-left: 6px; white-space: nowrap; }
+.alloc-edit { margin-top: 10px; }
+.targets-form { margin-top: 10px; padding: 14px; background: var(--bg); border-radius: 12px; border: 1px dashed var(--line); }
+.targets-inputs { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.target-item { font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.target-item .units-input { width: 64px; }
+.targets-actions { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.targets-sum { font-size: 13px; font-weight: 700; }
+.targets-sum.bad { color: var(--sell); }
+
+/* 分類チップ（一覧の各行） */
+.class-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  border: 1px solid var(--cc, var(--line)); color: var(--cc, var(--ink-soft));
+  border-radius: 999px; padding: 0 7px; margin-right: 4px; white-space: nowrap;
+}
+.kind-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  background: var(--ink); color: var(--card);
+  border-radius: 5px; padding: 0 5px; margin-right: 4px;
+}
+@media (max-width: 680px) { .alloc-charts { grid-template-columns: 1fr; } }

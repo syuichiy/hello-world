@@ -98,8 +98,12 @@ def parse_identifier(text: str):
 
 
 # ------------------------------------------------------------------ データ取得（キャッシュ利用）
-def load_series(isin: str, assoc: str, name: str = "", force: bool = False) -> dict:
-    """基準価額シリーズをdictで返す。内部DBのキャッシュを使い、無ければ取得して保存。"""
+def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
+                kind: str = "fund") -> dict:
+    """価格シリーズをdictで返す。内部DBのキャッシュを使い、無ければ取得して保存。
+
+    kind="fund" は投信協会CSV（基準価額）、kind="stock" はStooqの株価CSV。
+    """
     isin = (isin or "").strip().upper()
     assoc = (assoc or "").strip()
     if not force:
@@ -108,7 +112,10 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False) -> d
             if name and not cached.get("name"):
                 cached["name"] = name
             return cached
-    series = fund_data.get_fund_series(isin, assoc, name)
+    if kind == "stock":
+        series = fund_data.get_stock_series(isin, name)
+    else:
+        series = fund_data.get_fund_series(isin, assoc, name)
     d = series.to_dict()
     db.set_cached_series(isin, assoc, d["name"], d)
     return d
@@ -220,9 +227,12 @@ def _summarize_fund(row, range_key, force=False):
         "name": row["name"],
         "isin": row["isin"],
         "category": row.get("category", ""),
+        "asset_class": row.get("asset_class", "") or "",
+        "kind": row.get("kind", "fund") or "fund",
     }
     try:
-        series = load_series(row["isin"], row["assoc_code"], row["name"], force=force)
+        series = load_series(row["isin"], row["assoc_code"], row["name"], force=force,
+                             kind=row.get("kind", "fund") or "fund")
         dates, prices, _ = _apply_range(series, range_key)
         if len(prices) < 5:
             raise fund_data.FundDataError("データが不足しています")
@@ -262,17 +272,99 @@ def api_watchlist_analyze():
         s = _summarize_fund(it, range_key, force)
         units = float(it.get("units") or 0)
         s["units"] = units
-        # 投信の慣例: 評価額 = 基準価額 × 口数 ÷ 10,000（基準価額は1万口あたり）
         if s.get("ok") and units > 0 and s.get("latest_price"):
-            s["value"] = round(s["latest_price"] * units / 10000)
+            if s.get("kind") == "stock":
+                # 個別株: 評価額 = 株価 × 株数
+                s["value"] = round(s["latest_price"] * units)
+            else:
+                # 投信の慣例: 評価額 = 基準価額 × 口数 ÷ 10,000
+                s["value"] = round(s["latest_price"] * units / 10000)
         else:
             s["value"] = None
         summaries.append(s)
     portfolio = signal_mod.portfolio_advice(summaries)
     for s in summaries:
         s.pop("_w", None)  # portfolio_adviceが付ける内部ウェイトは返さない
+    allocation = _build_allocation(summaries)
     return jsonify({"ok": True, "range": range_key, "items": summaries,
-                    "portfolio": portfolio})
+                    "portfolio": portfolio, "allocation": allocation})
+
+
+def _build_allocation(summaries):
+    """資産クラスごとの配分と、理想ポートフォリオとのリバランス指標を返す。"""
+    import seed_funds
+    ok_items = [s for s in summaries if s.get("ok")]
+    if not ok_items:
+        return None
+    any_units = any((s.get("value") or 0) > 0 for s in ok_items)
+    total = sum(s.get("value") or 0 for s in ok_items) if any_units else len(ok_items)
+
+    by_class = {}
+    for s in ok_items:
+        cls = s.get("asset_class") or seed_funds.classify(s["name"], s.get("category", ""))
+        w = (s.get("value") or 0) if any_units else 1
+        by_class[cls] = by_class.get(cls, 0) + w
+
+    targets = db.get_setting("targets", None) or dict(seed_funds.DEFAULT_TARGETS)
+    classes = []
+    for name, icon, color in seed_funds.ASSET_CLASSES:
+        val = by_class.get(name, 0)
+        share = (val / total * 100) if total else 0.0
+        tgt = float(targets.get(name, 0))
+        diff = share - tgt
+        if abs(diff) <= 5:
+            action, action_label = "ok", "✅ 適正"
+        elif diff < 0:
+            action, action_label = "buy", "⬆️ 買い足し"
+        else:
+            action, action_label = "reduce", "⬇️ 減らす"
+        amount = round(abs(diff) / 100 * total) if (any_units and abs(diff) > 5) else None
+        classes.append({
+            "name": name, "icon": icon, "color": color,
+            "value": round(val) if any_units else None,
+            "share": round(share, 1), "target": tgt,
+            "diff": round(diff, 1), "action": action,
+            "action_label": action_label, "amount": amount,
+        })
+    # 分類がASSET_CLASSES以外になることは無い想定だが、あれば末尾に追加
+    known = {c["name"] for c in classes}
+    for cls, val in by_class.items():
+        if cls not in known:
+            share = (val / total * 100) if total else 0.0
+            classes.append({"name": cls, "icon": "❓", "color": "#94a3b8",
+                            "value": round(val) if any_units else None,
+                            "share": round(share, 1), "target": 0,
+                            "diff": round(share, 1), "action": "reduce",
+                            "action_label": "⬇️ 減らす", "amount": None})
+    return {"ok": True, "weights_mode": "value" if any_units else "equal",
+            "total_value": round(total) if any_units else None,
+            "classes": classes, "targets": targets}
+
+
+@app.route("/api/targets", methods=["GET", "POST"])
+def api_targets():
+    """理想ポートフォリオ（クラス別目標%）の取得・保存。"""
+    import seed_funds
+    if request.method == "GET":
+        t = db.get_setting("targets", None) or dict(seed_funds.DEFAULT_TARGETS)
+        return jsonify({"ok": True, "targets": t})
+    data = request.get_json(silent=True) or {}
+    raw = data.get("targets") or {}
+    targets = {}
+    for name in seed_funds.ASSET_CLASS_NAMES:
+        try:
+            v = float(raw.get(name, 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": f"{name} の値が数値ではありません。"}), 400
+        if v < 0 or v > 100:
+            return jsonify({"ok": False, "error": f"{name} は0〜100で入力してください。"}), 400
+        targets[name] = v
+    total = sum(targets.values())
+    if abs(total - 100) > 0.5:
+        return jsonify({"ok": False,
+                        "error": f"合計が100%になるようにしてください（現在 {total:.0f}%）。"}), 400
+    db.set_setting("targets", targets)
+    return jsonify({"ok": True, "targets": targets})
 
 
 @app.route("/api/watchlist/units", methods=["POST"])
@@ -322,12 +414,14 @@ def api_analyze():
     force = request.args.get("force") in ("1", "true", "yes")
     name = request.args.get("name", "")
 
+    kind = "fund"
     catalog_id = request.args.get("catalog_id")
     if catalog_id:
         row = db.get_catalog(int(catalog_id))
         if not row:
             return jsonify({"ok": False, "error": "指定の投信が見つかりません。"}), 404
         isin, assoc, name = row["isin"], row["assoc_code"], row["name"]
+        kind = row.get("kind", "fund") or "fund"
     else:
         isin, assoc = parse_identifier(request.args.get("q", ""))
 
@@ -336,7 +430,7 @@ def api_analyze():
                         "協会コードまたはISINコードを読み取れませんでした。"}), 400
 
     try:
-        series = load_series(isin, assoc, name, force=force)
+        series = load_series(isin, assoc, name, force=force, kind=kind)
     except fund_data.FundDataError as e:
         return jsonify({"ok": False, "error": str(e)}), 502
 
@@ -498,6 +592,7 @@ def main():
         DEMO_MODE = True
         import demo_data
         fund_data.set_fetch_override(demo_data.demo_csv)
+        fund_data.set_stock_override(demo_data.demo_stock_csv)
         if not args.db:
             db.DB_PATH = db.os.path.join(db.os.path.dirname(db.DB_PATH), "funds.demo.db")
 

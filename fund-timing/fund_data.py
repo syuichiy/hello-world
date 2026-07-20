@@ -204,3 +204,61 @@ def get_fund_series(isin: str, assoc_code: str, name: str = "") -> FundSeries:
         raise FundDataError("協会コード（8桁）またはISINコードを指定してください。")
     text = _download_csv(isin, assoc_code)
     return parse_csv(text, isin, assoc_code, name)
+
+
+# ===========================================================================
+# 個別株の株価取得（Stooqの公開CSV: https://stooq.com/q/d/l/?s=6501.jp&i=d）
+# 形式: Date,Open,High,Low,Close,Volume
+# ===========================================================================
+
+STOCK_CSV_URL = "https://stooq.com/q/d/l/"
+
+_stock_fetch_override = None
+
+
+def set_stock_override(func):
+    """デモ/テスト用に、株価CSVテキストを返す関数へ差し替える。"""
+    global _stock_fetch_override
+    _stock_fetch_override = func
+
+
+def get_stock_series(ticker: str, name: str = "") -> FundSeries:
+    """個別株の日次終値を取得する（ticker例: '6501.JP'）。"""
+    ticker = (ticker or "").strip()
+    if not ticker:
+        raise FundDataError("ティッカー（例: 6501.JP）を指定してください。")
+    if _stock_fetch_override is not None:
+        text = _stock_fetch_override(ticker)
+    else:
+        try:
+            resp = requests.get(STOCK_CSV_URL,
+                                params={"s": ticker.lower(), "i": "d"},
+                                headers=_BROWSER_HEADERS, timeout=30)
+        except requests.RequestException as e:
+            raise FundDataError(f"株価データに接続できませんでした: {e}")
+        if resp.status_code != 200:
+            raise FundDataError(f"株価データの取得に失敗しました（HTTP {resp.status_code}）。")
+        text = resp.text or ""
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines or "," not in lines[0]:
+        raise FundDataError("株価データが空でした。ティッカーが正しいか確認してください。")
+    rows = []
+    for line in lines[1:]:
+        parts = line.split(",")
+        if len(parts) < 5:
+            continue
+        d = _parse_date(parts[0])
+        close = _to_float(parts[4])
+        if d is None or close is None:
+            continue
+        rows.append((d, close))
+    if not rows:
+        raise FundDataError("有効な株価データが1件もありませんでした。")
+    rows.sort(key=lambda x: x[0])
+    return FundSeries(
+        isin=ticker.upper(), assoc_code="", name=name or ticker.upper(),
+        dates=[r[0].isoformat() for r in rows],
+        nav=[r[1] for r in rows],
+        net_assets=[float("nan")] * len(rows),
+    )

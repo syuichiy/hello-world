@@ -64,6 +64,111 @@ async function loadWatchlist(force) {
   lastSummaries = data.items || [];
   renderWatchTable();
   renderPortfolio(data.portfolio);
+  renderAllocation(data.allocation);
+}
+
+// ============================================================ 資産配分・リバランス
+const ASSET_CLASS_META = {
+  "米国":       { icon: "🇺🇸", color: "#5b8def" },
+  "グローバル": { icon: "🌐", color: "#8b5cf6" },
+  "非米国":     { icon: "🌏", color: "#10b981" },
+  "高配当":     { icon: "💰", color: "#f59e0b" },
+  "高リターン": { icon: "🚀", color: "#ef4444" },
+  "バリュー":   { icon: "💎", color: "#0ea5e9" },
+};
+function classChip(cls) {
+  const m = ASSET_CLASS_META[cls];
+  if (!m) return "";
+  return `<span class="class-chip" style="--cc:${m.color}">${m.icon} ${escapeHtml(cls)}</span>`;
+}
+
+let lastAllocation = null;
+function renderAllocation(alloc) {
+  const card = $("allocation-card");
+  if (!alloc || !alloc.ok) { card.hidden = true; return; }
+  card.hidden = false;
+  lastAllocation = alloc;
+
+  const classes = alloc.classes || [];
+  const withValue = classes.filter((c) => c.share > 0);
+  const pieOpts = { responsive: true, displayModeBar: false };
+  const pieLayout = {
+    height: 235, margin: { l: 10, r: 10, t: 6, b: 6 },
+    paper_bgcolor: "rgba(0,0,0,0)", showlegend: false,
+    font: { family: "Hiragino Sans, sans-serif",
+            color: isDark() ? "#e7e8ef" : "#1e2130" },
+  };
+  Plotly.newPlot("pie-current", [{
+    type: "pie", hole: 0.5, sort: false,
+    labels: withValue.map((c) => c.icon + " " + c.name),
+    values: withValue.map((c) => c.share),
+    marker: { colors: withValue.map((c) => c.color) },
+    textinfo: "label+percent", textposition: "auto",
+    hovertemplate: "%{label}: %{value:.1f}%<extra></extra>",
+  }], pieLayout, pieOpts);
+  const tgt = classes.filter((c) => c.target > 0);
+  Plotly.newPlot("pie-target", [{
+    type: "pie", hole: 0.5, sort: false,
+    labels: tgt.map((c) => c.icon + " " + c.name),
+    values: tgt.map((c) => c.target),
+    marker: { colors: tgt.map((c) => c.color) },
+    textinfo: "label+percent", textposition: "auto",
+    hovertemplate: "%{label}: %{value:.0f}%<extra></extra>",
+  }], pieLayout, pieOpts);
+
+  // リバランス表
+  $("alloc-body").innerHTML = classes.map((c) => {
+    const badgeCls = c.action === "ok" ? "buy" : c.action === "buy" ? "neutral" : "sell";
+    const amount = c.amount != null
+      ? `<span class="alloc-amount">目安 ${Number(c.amount).toLocaleString()} 円</span>` : "";
+    const val = c.value != null ? Number(c.value).toLocaleString() + " 円" : "—";
+    const diff = `${c.diff > 0 ? "+" : ""}${c.diff}pt`;
+    return `<tr>
+      <td><span class="alloc-cls" style="--cc:${c.color}">${c.icon} ${escapeHtml(c.name)}</span></td>
+      <td class="num">${val}</td>
+      <td class="num">${c.share}%</td>
+      <td class="num">${c.target}%</td>
+      <td class="num ${c.diff > 5 ? "down" : c.diff < -5 ? "up" : ""}">${diff}</td>
+      <td><span class="vbadge ${badgeCls}">${escapeHtml(c.action_label)}</span> ${amount}</td>
+    </tr>`;
+  }).join("");
+
+  buildTargetInputs(alloc.targets || {});
+}
+
+function buildTargetInputs(targets) {
+  const wrap = $("targets-inputs");
+  wrap.innerHTML = Object.keys(ASSET_CLASS_META).map((name) => {
+    const m = ASSET_CLASS_META[name];
+    const v = targets[name] != null ? targets[name] : 0;
+    return `<label class="target-item">${m.icon} ${escapeHtml(name)}
+      <input type="number" class="target-input units-input" data-cls="${escapeHtml(name)}"
+             min="0" max="100" step="1" value="${v}">%</label>`;
+  }).join("");
+  updateTargetsSum();
+}
+function updateTargetsSum() {
+  const sum = Array.from(document.querySelectorAll(".target-input"))
+    .reduce((a, el) => a + (Number(el.value) || 0), 0);
+  const el = $("targets-sum");
+  el.textContent = `合計 ${sum}%`;
+  el.classList.toggle("bad", Math.abs(sum - 100) > 0.5);
+  return sum;
+}
+async function saveTargets() {
+  const targets = {};
+  document.querySelectorAll(".target-input").forEach((el) => {
+    targets[el.dataset.cls] = Number(el.value) || 0;
+  });
+  const resp = await fetch("/api/targets", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targets }),
+  });
+  const data = await resp.json();
+  if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+  toast("✓ 理想の配分を保存しました");
+  $("targets-form").hidden = true;
+  loadWatchlist();
 }
 
 // 保有全体（ポートフォリオ）の目安カード
@@ -167,7 +272,7 @@ function renderWatchTable() {
     return `<tr class="watch-row" data-id="${s.catalog_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
-        <div class="fund-sub">${escapeHtml(s.category || s.isin)}</div>
+        <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
@@ -628,6 +733,13 @@ $("dash-range").addEventListener("click", (e) => {
   b.classList.add("active"); dashRange = b.dataset.range; loadWatchlist();
 });
 $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
+
+// 理想配分の編集
+$("edit-targets-btn").addEventListener("click", () => {
+  const f = $("targets-form"); f.hidden = !f.hidden;
+});
+$("targets-inputs").addEventListener("input", updateTargetsSum);
+$("targets-save").addEventListener("click", saveTargets);
 
 $("ranking-btn").addEventListener("click", loadRanking);
 $("ranking-body").addEventListener("click", (e) => {

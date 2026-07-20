@@ -51,3 +51,15 @@ def demo_csv(isin: str, assoc_code: str) -> str:
 
 if __name__ == "__main__":
     print(demo_csv("JP90C000H1T1", "0331418A")[:400])
+
+
+def demo_stock_csv(ticker: str) -> str:
+    """fund_data.set_stock_override に渡す関数。Stooq形式のCSVを返す。"""
+    seed = abs(hash("stock:" + (ticker or ""))) % (2 ** 31)
+    rows = _generate_series(seed=seed)
+    buf = io.StringIO()
+    buf.write("Date,Open,High,Low,Close,Volume\n")
+    for d, nav, _assets in rows:
+        px = nav / 3  # 株価らしい水準に
+        buf.write(f"{d.isoformat()},{px:.1f},{px*1.01:.1f},{px*0.99:.1f},{px:.1f},1000000\n")
+    return buf.getvalue()

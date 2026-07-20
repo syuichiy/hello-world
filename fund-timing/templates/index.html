@@ -78,6 +78,33 @@
         <p class="hz-note">⚠️ 過去の値動きに基づくテクニカル指標の機械的な目安です。投資助言ではなく、将来の成果を保証するものではありません。</p>
       </div>
 
+      <!-- 資産配分（分類×円グラフ×リバランス） -->
+      <div class="card allocation-card" id="allocation-card" hidden>
+        <h2>🧭 資産配分とリバランス</h2>
+        <div class="alloc-charts">
+          <div class="alloc-chart"><p class="alloc-chart-title">現在の配分</p><div id="pie-current"></div></div>
+          <div class="alloc-chart"><p class="alloc-chart-title">理想の配分（目標）</p><div id="pie-target"></div></div>
+        </div>
+        <table class="watch-table alloc-table">
+          <thead>
+            <tr><th>分類</th><th class="num">評価額</th><th class="num">現在</th>
+                <th class="num">目標</th><th class="num">乖離</th><th>リバランス指標</th></tr>
+          </thead>
+          <tbody id="alloc-body"></tbody>
+        </table>
+        <div class="alloc-edit">
+          <button id="edit-targets-btn" type="button" class="linklike">⚙ 理想の配分を編集</button>
+          <div id="targets-form" class="targets-form" hidden>
+            <div id="targets-inputs" class="targets-inputs"></div>
+            <div class="targets-actions">
+              <span id="targets-sum" class="targets-sum">合計 100%</span>
+              <button id="targets-save" type="button" class="si-add">保存</button>
+            </div>
+          </div>
+        </div>
+        <p class="hz-note">⚠️ リバランス指標は現在の配分と目標の機械的な差分です。投資助言ではありません。売買には税金・手数料等の影響があります。</p>
+      </div>
+
       <div class="card table-card">
         <table class="watch-table">
           <thead>

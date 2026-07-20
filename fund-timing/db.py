@@ -95,21 +95,75 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         cols = [r["name"] for r in c.execute("PRAGMA table_info(watchlist)")]
         if "units" not in cols:
             c.execute("ALTER TABLE watchlist ADD COLUMN units REAL DEFAULT 0")
+        # マイグレーション: 資産クラス・商品種別（投信/個別株）
+        ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
+        if "asset_class" not in ccols:
+            c.execute("ALTER TABLE catalog ADD COLUMN asset_class TEXT DEFAULT ''")
+        if "kind" not in ccols:
+            c.execute("ALTER TABLE catalog ADD COLUMN kind TEXT DEFAULT 'fund'")
+        # 設定（理想ポートフォリオ等）
+        c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     if seed:
         seed_catalog(db_path)
         _seed_default_watchlist(db_path)
+        _ensure_seed_stocks_watched(db_path)
 
 
 def seed_catalog(db_path: Optional[str] = None):
-    """既定の人気投信を投入する。毎回 INSERT OR IGNORE で「不足分だけ」追加するので、
-    アプリを新しい版に更新すると、増えた内蔵投信が既存DBにも自動で反映される
+    """既定の人気投信・個別株を投入する。毎回 INSERT OR IGNORE で「不足分だけ」追加するので、
+    アプリを新しい版に更新すると、増えた内蔵銘柄が既存DBにも自動で反映される
     （ユーザーが自分で登録した投信は UNIQUE 制約により保持される）。"""
     with _conn(db_path) as c:
-        for f in seed_funds.SEED_FUNDS:
+        for f in seed_funds.SEED_FUNDS + seed_funds.SEED_STOCKS:
             c.execute(
-                "INSERT OR IGNORE INTO catalog(name, isin, assoc_code, category) VALUES (?,?,?,?)",
-                (f["name"], f["isin"], f["assoc_code"], f.get("category", "")),
+                "INSERT OR IGNORE INTO catalog(name, isin, assoc_code, category, asset_class, kind) "
+                "VALUES (?,?,?,?,?,?)",
+                (f["name"], f["isin"], f["assoc_code"], f.get("category", ""),
+                 f.get("asset_class", ""), f.get("kind", "fund")),
             )
+            # 既存行の資産クラス・種別を補完（旧バージョンのDBに反映）
+            c.execute(
+                "UPDATE catalog SET asset_class=?, kind=? "
+                "WHERE isin=? AND assoc_code=? AND (asset_class IS NULL OR asset_class='')",
+                (f.get("asset_class", ""), f.get("kind", "fund"), f["isin"], f["assoc_code"]),
+            )
+        # ユーザー登録分など、まだ分類が無い行はキーワードで自動分類
+        for r in c.execute("SELECT id, name, category FROM catalog "
+                           "WHERE asset_class IS NULL OR asset_class=''").fetchall():
+            c.execute("UPDATE catalog SET asset_class=? WHERE id=?",
+                      (seed_funds.classify(r["name"], r["category"] or ""), r["id"]))
+
+
+def _ensure_seed_stocks_watched(db_path: Optional[str] = None):
+    """日立製作所などの内蔵個別株をポートフォリオ（ウォッチリスト）へ自動で組み込む。
+
+    ※ 既定ウォッチリストの投入後に呼ぶこと（先に呼ぶと初期リストがこれだけになる）。"""
+    with _conn(db_path) as c:
+        for s in seed_funds.SEED_STOCKS:
+            row = c.execute("SELECT id FROM catalog WHERE isin=? AND assoc_code=?",
+                            (s["isin"], s["assoc_code"])).fetchone()
+            if row:
+                c.execute("INSERT OR IGNORE INTO watchlist(catalog_id, sort_order, added_at) "
+                          "VALUES (?, (SELECT COALESCE(MAX(sort_order),-1)+1 FROM watchlist), ?)",
+                          (row["id"], dt.datetime.now().isoformat(timespec="seconds")))
+
+
+# ------------------------------------------------------------------ settings
+def get_setting(key: str, default=None, db_path: Optional[str] = None):
+    with _conn(db_path) as c:
+        r = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        if r is None:
+            return default
+        try:
+            return json.loads(r["value"])
+        except Exception:
+            return default
+
+
+def set_setting(key: str, value, db_path: Optional[str] = None):
+    with _conn(db_path) as c:
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)",
+                  (key, json.dumps(value)))
 
 
 def _seed_default_watchlist(db_path: Optional[str] = None):
