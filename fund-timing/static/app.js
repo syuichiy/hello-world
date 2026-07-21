@@ -18,9 +18,10 @@ function switchView(view) {
   $("detail-view").hidden = true;
   $("dashboard-view").hidden = view !== "dashboard";
   $("portfolio-view").hidden = view !== "portfolio";
+  $("price-view").hidden = view !== "price";
   document.querySelectorAll(".nav-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
-  // 非表示中に描画したPlotlyの円グラフはサイズが正しく取れないため、
+  // 非表示中に描画したPlotlyのグラフはサイズが正しく取れないため、
   // 表示に切り替えてレイアウトが確定してからリサイズする
   if (view === "portfolio") {
     requestAnimationFrame(() => {
@@ -29,6 +30,8 @@ function switchView(view) {
         if (el && el.data) Plotly.Plots.resize(el);
       });
     });
+  } else if (view === "price") {
+    loadPriceHistory();
   }
   window.scrollTo(0, 0);
 }
@@ -41,6 +44,7 @@ function showDetail() {
   $("main-nav").hidden = true;
   $("dashboard-view").hidden = true;
   $("portfolio-view").hidden = true;
+  $("price-view").hidden = true;
   $("detail-view").hidden = false;
   window.scrollTo(0, 0);
 }
@@ -67,7 +71,7 @@ function showSkeleton() {
   if (!body.children.length) {
     const cell = (w) => `<td><span class="skel" style="width:${w}px"></span></td>`;
     body.innerHTML = Array.from({ length: 4 }, () =>
-      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(100)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
+      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(80)}${cell(100)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
     ).join("");
   }
 }
@@ -301,9 +305,8 @@ function renderClassEditor() {
     <tr>
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
-        <div class="fund-sub">${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(s.category || s.isin || "")}</div>
+        <div class="fund-sub">${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${brokerChip(s.broker)}${escapeHtml(s.category || s.isin || "")}</div>
       </td>
-      <td>${brokerSelect(s.watch_id, s.broker, "broker-select")}</td>
       <td>${classSelect(s)}</td>
     </tr>`).join("");
 }
@@ -424,6 +427,94 @@ async function addPreset(catalogId, broker) {
   loadWatchlist();
 }
 
+// ============================================================ 価格推移（評価額 ÷ 投資金額）
+let priceRange = "1y";
+const PRICE_COLORS = ["#5b5bd6", "#e11d48", "#16a34a", "#f59e0b", "#0ea5e9",
+  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b"];
+
+async function loadPriceHistory() {
+  const st = $("price-status");
+  st.hidden = false; st.className = "status loading"; st.textContent = "価格を集計中… ⏳";
+  let data;
+  try {
+    data = await (await fetch(`/api/price-history?range=${encodeURIComponent(priceRange)}`)).json();
+  } catch (e) {
+    st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
+  }
+  if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
+  st.hidden = true;
+  const holdings = data.holdings || [];
+  renderPriceChart(holdings);
+  renderPriceTable(holdings);
+  renderPriceSkipped(data.skipped || []);
+}
+
+function renderPriceChart(holdings) {
+  const empty = $("price-empty");
+  if (!holdings.length) { empty.hidden = false; Plotly.purge("price-chart"); return; }
+  empty.hidden = true;
+  const traces = holdings.map((h, i) => ({
+    x: h.dates, y: h.ratio, name: h.label, mode: "lines",
+    line: { width: 2, color: PRICE_COLORS[i % PRICE_COLORS.length] },
+    hovertemplate: "%{x}<br>%{y:.1f}%<extra>" + escapeHtml(h.label) + "</extra>",
+  }));
+  const layout = baseLayout();
+  layout.height = 440;
+  layout.yaxis.title = "評価額 ÷ 投資金額 (%)";
+  layout.yaxis.ticksuffix = "%";
+  layout.margin = { l: 64, r: 20, t: 12, b: 40 };
+  layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
+    line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
+  layout.annotations = [{ xref: "paper", x: 0, y: 100, xanchor: "left", yanchor: "bottom",
+    text: "投資金額 (100%)", showarrow: false,
+    font: { size: 11, color: isDark() ? "#a8adbd" : "#64748b" } }];
+  Plotly.newPlot("price-chart", traces, layout, { responsive: true, displayModeBar: false });
+}
+
+function renderPriceTable(holdings) {
+  const card = $("price-table-card");
+  if (!holdings.length) { card.hidden = true; return; }
+  card.hidden = false;
+  // 各月末（その月の最後の値）に集約
+  const monthsSet = new Set();
+  const perHolding = holdings.map((h) => {
+    const m = {};
+    h.dates.forEach((d, i) => { const mm = d.slice(0, 7); m[mm] = h.ratio[i]; monthsSet.add(mm); });
+    return m;
+  });
+  const months = [...monthsSet].sort().reverse();   // 新しい月が上
+  $("price-table-head").innerHTML = `<th>月末</th>` +
+    holdings.map((h, i) => `<th class="num pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.label)}</th>`).join("");
+  $("price-table-body").innerHTML = months.map((mm) => {
+    const cells = perHolding.map((m) => {
+      const v = m[mm];
+      if (v == null) return `<td class="num">—</td>`;
+      const cls = v > 100 ? "up" : v < 100 ? "down" : "";
+      return `<td class="num ${cls}">${v.toFixed(1)}%</td>`;
+    }).join("");
+    return `<tr><td>${mm}</td>${cells}</tr>`;
+  }).join("");
+}
+
+function renderPriceSkipped(skipped) {
+  const el = $("price-skipped");
+  const need = skipped.filter((s) => s.need_units || s.need_invested);
+  const errs = skipped.filter((s) => s.error);
+  if (!need.length && !errs.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  let html = "";
+  if (need.length) {
+    html += `<p class="hint">▼ 口数・投資金額が未入力のため比率を表示できない商品（「銘柄一覧」で入力してください）：</p><ul class="skip-list">` +
+      need.map((s) => `<li>${escapeHtml(s.name)}${s.broker ? "（" + escapeHtml(s.broker) + "）" : ""}
+        <span class="skip-need">${[s.need_units ? "口数" : "", s.need_invested ? "投資金額" : ""].filter(Boolean).join("・")} が未入力</span></li>`).join("") + `</ul>`;
+  }
+  if (errs.length) {
+    html += `<p class="hint">▼ 価格を取得できなかった商品：</p><ul class="skip-list">` +
+      errs.map((s) => `<li>${escapeHtml(s.name)} — ${escapeHtml(s.error)}</li>`).join("") + `</ul>`;
+  }
+  el.innerHTML = html;
+}
+
 // 保有全体（ポートフォリオ）の目安カード
 function renderPortfolio(pf) {
   const card = $("portfolio-card");
@@ -497,6 +588,22 @@ async function saveUnits(watchId, units) {
   }
 }
 
+// 投資金額（元本）の保存 ※保有行(watch_id)単位
+async function saveInvested(watchId, invested) {
+  try {
+    const resp = await fetch("/api/watchlist/invested", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: Number(watchId), invested: Number(invested) || 0 }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    // 価格推移タブを開いていれば再計算
+    if (currentView === "price") loadPriceHistory();
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
+}
+
 function setDashStatus(msg, kind) {
   const el = $("dash-status");
   if (!msg) { el.hidden = true; return; }
@@ -528,14 +635,13 @@ function renderWatchTable() {
       return `<tr class="err-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
           <div class="fund-sub">${classChip(s.asset_class)}${brokerChip(s.broker)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
-        <td colspan="9" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
+        <td colspan="10" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
         <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td></tr>`;
     }
     const badge = verdictBadge(s.verdict, s.verdict_label);
     const chg = s.change_pct == null ? "—"
       : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
     const price = s.latest_price == null ? "—" : Number(s.latest_price).toLocaleString() + " 円";
-    const unitsVal = s.units > 0 ? s.units : "";
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
     return `<tr class="watch-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
@@ -545,10 +651,13 @@ function renderWatchTable() {
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
       <td class="num">${price}</td>
-      <td class="num"><input class="units-input" type="number" min="0" step="1"
-            data-watch="${s.watch_id}" value="${unitsVal}" placeholder="口数"
+      <td class="num"><input class="units-input num-comma" type="text" inputmode="numeric"
+            data-watch="${s.watch_id}" value="${fmtInt(s.units)}" placeholder="口数"
             title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
       <td class="num value-cell">${value}</td>
+      <td class="num"><input class="invested-input num-comma" type="text" inputmode="numeric"
+            data-watch="${s.watch_id}" value="${fmtInt(s.invested)}" placeholder="投資金額"
+            title="投資金額（元本）。価格推移タブの比率計算に使います"></td>
       <td>${brokerSelect(s.watch_id, s.broker, "broker-select row-broker")}</td>
       <td>${policySelect(s)}</td>
       <td class="num">${chg}</td>
@@ -914,6 +1023,32 @@ function renderSignals(signals) {
     : '<tr><td colspan="4">この期間にサインはありません。</td></tr>';
 }
 
+// 数値を3桁カンマ区切りに（0/空は空文字）
+function fmtInt(n) {
+  const v = Number(n);
+  if (!v || v <= 0) return "";
+  return Math.round(v).toLocaleString("en-US");
+}
+// カンマ入り文字列 → 整数
+function parseIntComma(s) {
+  const d = String(s == null ? "" : s).replace(/[^\d]/g, "");
+  return d ? parseInt(d, 10) : 0;
+}
+// 入力中に3桁カンマへ整形しつつ、カーソル位置を保つ
+function reformatCommaInput(el) {
+  const digits = el.value.replace(/[^\d]/g, "");
+  const caret = el.selectionStart || 0;
+  const digitsBefore = el.value.slice(0, caret).replace(/[^\d]/g, "").length;
+  const formatted = digits ? Number(digits).toLocaleString("en-US") : "";
+  el.value = formatted;
+  let pos = 0, seen = 0;
+  while (pos < formatted.length && seen < digitsBefore) {
+    if (/\d/.test(formatted[pos])) seen++;
+    pos++;
+  }
+  try { el.setSelectionRange(pos, pos); } catch (_) {}
+}
+
 function escapeHtml(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -981,23 +1116,31 @@ $("watch-body").addEventListener("click", (e) => {
   const del = e.target.closest(".row-del");
   if (del) { e.stopPropagation(); removeFromWatch(del.dataset.watch); return; }
   // 入力・設定中は詳細を開かない
-  if (e.target.closest(".units-input") || e.target.closest(".policy-select")
-      || e.target.closest(".row-broker")) return;
+  if (e.target.closest(".units-input") || e.target.closest(".invested-input")
+      || e.target.closest(".policy-select") || e.target.closest(".row-broker")) return;
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
 
-// 保有口数・売却属性・証券会社の変更（確定で保存）※すべて保有行(watch_id)単位
+// 数値入力を3桁カンマで整形（口数・投資金額）
+$("watch-body").addEventListener("input", (e) => {
+  const el = e.target.closest(".num-comma");
+  if (el) reformatCommaInput(el);
+});
+
+// 口数・投資金額・売却属性・証券会社の変更（確定で保存）※すべて保有行(watch_id)単位
 $("watch-body").addEventListener("change", (e) => {
-  const input = e.target.closest(".units-input");
-  if (input) { saveUnits(input.dataset.watch, input.value); return; }
+  const units = e.target.closest(".units-input");
+  if (units) { saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
+  const inv = e.target.closest(".invested-input");
+  if (inv) { saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
   const pol = e.target.closest(".policy-select");
   if (pol) { savePolicy(pol.dataset.watch, pol.value); return; }
   const brk = e.target.closest(".row-broker");
   if (brk) saveBroker(brk.dataset.watch, brk.value);
 });
 $("watch-body").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.closest(".units-input")) e.target.blur();
+  if (e.key === "Enter" && e.target.closest(".num-comma")) e.target.blur();
 });
 
 document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
@@ -1023,6 +1166,13 @@ $("dash-range").addEventListener("click", (e) => {
 });
 $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
 
+// 価格推移タブの期間切替
+$("price-range").addEventListener("click", (e) => {
+  const b = e.target.closest(".range-btn"); if (!b) return;
+  document.querySelectorAll("#price-range .range-btn").forEach((x) => x.classList.remove("active"));
+  b.classList.add("active"); priceRange = b.dataset.range; loadPriceHistory();
+});
+
 // メニュータブ切替
 $("main-nav").addEventListener("click", (e) => {
   const tab = e.target.closest(".nav-tab");
@@ -1040,12 +1190,10 @@ $("targets-form").addEventListener("click", (e) => {
   if (b) applyPreset(b.dataset.preset);
 });
 
-// 保有銘柄の設定（証券会社・資産クラス）の変更
+// 資産クラスの変更（商品(catalog)単位）
 $("class-edit-body").addEventListener("change", (e) => {
   const cls = e.target.closest(".class-select");
-  if (cls) { saveAssetClass(cls.dataset.id, cls.value); return; }  // 資産クラスは商品(catalog)単位
-  const brk = e.target.closest(".broker-select");
-  if (brk) saveBroker(brk.dataset.watch, brk.value);              // 証券会社は保有行(watch_id)単位
+  if (cls) saveAssetClass(cls.dataset.id, cls.value);
 });
 
 // 内蔵商品の追加（証券会社を選んで＋追加）

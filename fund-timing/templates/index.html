@@ -20,6 +20,7 @@
     <nav class="main-nav" id="main-nav">
       <button class="nav-tab active" data-view="dashboard">📋 銘柄一覧</button>
       <button class="nav-tab" data-view="portfolio">🧺 ポートフォリオ</button>
+      <button class="nav-tab" data-view="price">📈 価格推移</button>
     </nav>
 
     <!-- ========================= 一覧ビュー ========================= -->
@@ -80,6 +81,7 @@
               <th class="sortable num" data-key="latest_price">基準価額</th>
               <th class="num">口数</th>
               <th class="sortable num" data-key="value">評価額</th>
+              <th class="num" title="元本（買った合計金額）。価格推移の比率計算に使います">投資金額</th>
               <th title="保有先の証券会社">証券会社</th>
               <th title="リバランスで売却してよいかの設定">売却</th>
               <th class="sortable num" data-key="change_pct">騰落</th>
@@ -189,19 +191,19 @@
         </div>
       </div>
 
-      <!-- 保有銘柄の設定（証券会社・資産クラス） -->
+      <!-- 保有銘柄の資産クラス設定 -->
       <div class="card holdings-card" id="class-edit-card" hidden>
-        <h2>🗂 保有銘柄の設定</h2>
+        <h2>🗂 銘柄の資産クラス設定</h2>
         <p class="hint">
-          各銘柄の<strong>証券会社</strong>と<strong>資産クラス</strong>を設定できます。
+          各銘柄の<strong>資産クラス</strong>を設定できます。
           分類が実態と合わない場合はここで変更してください（毎月分配型など分配金重視の投信は「💰 高配当」にするとシーゲル流の配分に沿います）。
+          ※証券会社は「銘柄一覧」画面で設定できます。
         </p>
         <div class="table-scroll">
-          <table class="holdings-table">
+          <table class="holdings-table holdings-table-2col">
             <thead>
               <tr>
                 <th>ファンド名</th>
-                <th>証券会社</th>
                 <th>資産クラス</th>
               </tr>
             </thead>
@@ -209,7 +211,7 @@
           </table>
         </div>
         <p id="class-edit-empty" class="empty-watch" hidden>
-          一覧に投信を追加すると、ここで証券会社・資産クラスを調整できます。
+          一覧に投信を追加すると、ここで資産クラスを調整できます。
         </p>
       </div>
 
@@ -241,6 +243,48 @@
               </tr>
             </thead>
             <tbody id="preset-add-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================= 価格推移ビュー ========================= -->
+    <section id="price-view" hidden>
+      <div class="dashboard-toolbar">
+        <div class="range-group" id="price-range">
+          <button class="range-btn" data-range="6m">6ヶ月</button>
+          <button class="range-btn active" data-range="1y">1年</button>
+          <button class="range-btn" data-range="3y">3年</button>
+          <button class="range-btn" data-range="5y">5年</button>
+          <button class="range-btn" data-range="all">全期間</button>
+        </div>
+        <div class="toolbar-right">
+          <span class="sort-hint">縦軸＝評価額 ÷ 投資金額（%）／横軸＝日付</span>
+        </div>
+      </div>
+
+      <div id="price-status" class="status" hidden></div>
+
+      <div class="card price-chart-card">
+        <h2>📈 投資金額に対する評価額の推移（比率）</h2>
+        <p class="hint">
+          各商品を「投資金額＝100%」に正規化して比較します。100%より上なら含み益、下なら含み損の目安です。
+          価格の水準差があっても比べやすいよう、比率（%）で表示しています。
+          <br>※価格はアプリ起動時（初回取得時）のスナップショットを表示しています。
+        </p>
+        <div id="price-chart"></div>
+        <p id="price-empty" class="empty-watch" hidden>
+          比率を表示するには、「銘柄一覧」で各商品の<strong>口数</strong>と<strong>投資金額</strong>を入力してください。
+        </p>
+        <div id="price-skipped" class="price-skipped" hidden></div>
+      </div>
+
+      <div class="card price-table-card" id="price-table-card" hidden>
+        <h2>📋 比率の推移（月末・%）</h2>
+        <div class="table-scroll">
+          <table class="price-table" id="price-table">
+            <thead><tr id="price-table-head"></tr></thead>
+            <tbody id="price-table-body"></tbody>
           </table>
         </div>
       </div>

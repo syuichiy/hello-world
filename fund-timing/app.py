@@ -303,6 +303,7 @@ def api_watchlist_analyze():
         s["watch_id"] = it["watch_id"]
         units = float(it.get("units") or 0)
         s["units"] = units
+        s["invested"] = float(it.get("invested") or 0)
         s["sell_policy"] = it.get("sell_policy") or "full"
         s["broker"] = it.get("broker") or ""
         if s.get("ok") and units > 0 and s.get("latest_price"):
@@ -676,6 +677,79 @@ def api_watchlist_units():
         return jsonify({"ok": False, "error": "口数は0以上で入力してください。"}), 400
     saved = db.set_units(int(watch_id), units)
     return jsonify({"ok": True, "units": saved})
+
+
+@app.route("/api/watchlist/invested", methods=["POST"])
+def api_watchlist_invested():
+    """投資金額（元本）を登録する。watch_id は保有行（watchlist.id）。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    try:
+        invested = float(data.get("invested") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "投資金額は数値で入力してください。"}), 400
+    if invested < 0:
+        return jsonify({"ok": False, "error": "投資金額は0以上で入力してください。"}), 400
+    saved = db.set_invested(int(watch_id), invested)
+    return jsonify({"ok": True, "invested": saved})
+
+
+# 起動時の価格スナップショット（このセッション中は固定）。(isin, assoc) -> series dict
+_price_snapshot: dict = {}
+
+
+def _snapshot_series(isin, assoc, name, kind):
+    """価格シリーズを取得し、セッション内で固定（起動タイミングの価格を保持）。"""
+    key = (isin, assoc)
+    if key in _price_snapshot:
+        return _price_snapshot[key]
+    series = load_series(isin, assoc, name, kind=kind)   # DBキャッシュ経由
+    _price_snapshot[key] = series
+    return series
+
+
+@app.route("/api/price-history")
+def api_price_history():
+    """各保有について、時系列の「評価額 ÷ 投資金額」比率(％)を返す。
+    価格の水準差を吸収して比較しやすいよう、投資金額を基準(100%)に正規化する。
+    価格は起動時（初回取得時）のスナップショットを保持する。"""
+    range_key = request.args.get("range", "1y")
+    holdings, skipped = [], []
+    for it in db.list_watchlist():
+        name = it["name"]
+        units = float(it.get("units") or 0)
+        invested = float(it.get("invested") or 0)
+        broker = it.get("broker") or ""
+        label = name + (f"（{broker}）" if broker else "")
+        if units <= 0 or invested <= 0:
+            skipped.append({"name": name, "broker": broker,
+                            "need_units": units <= 0, "need_invested": invested <= 0})
+            continue
+        kind = it.get("kind", "fund") or "fund"
+        try:
+            series = _snapshot_series(it["isin"], it["assoc_code"], name, kind)
+            dates, prices, _ = _apply_range(series, range_key)
+            pts = [(d, p) for d, p in zip(dates, prices) if p is not None]
+            if len(pts) < 2:
+                raise fund_data.FundDataError("データが不足しています")
+            # 評価額(t) = 投信: 基準価額×口数÷10000 / 株: 株価×株数
+            div = 10000.0 if kind != "stock" else 1.0
+            out_dates = [d for d, _ in pts]
+            ratio = [round((p * units / div) / invested * 100, 2) for _, p in pts]
+            value_now = round(pts[-1][1] * units / div)
+            holdings.append({
+                "watch_id": it["watch_id"], "name": name, "label": label,
+                "broker": broker, "asset_class": it.get("asset_class", "") or "",
+                "kind": kind, "invested": invested, "units": units,
+                "value_now": value_now, "ratio_now": ratio[-1],
+                "dates": out_dates, "ratio": ratio,
+            })
+        except Exception as e:
+            skipped.append({"name": name, "broker": broker, "error": str(e)})
+    return jsonify({"ok": True, "range": range_key,
+                    "holdings": holdings, "skipped": skipped})
 
 
 @app.route("/api/ranking")

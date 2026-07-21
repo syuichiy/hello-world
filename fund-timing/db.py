@@ -101,6 +101,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         if "broker" not in cols:
             # 保有先の証券会社（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）
             c.execute("ALTER TABLE watchlist ADD COLUMN broker TEXT DEFAULT ''")
+        if "invested" not in cols:
+            # 投資金額（元本）。価格推移グラフの「評価額÷投資金額」比率に使う
+            c.execute("ALTER TABLE watchlist ADD COLUMN invested REAL DEFAULT 0")
         # マイグレーション: 同一商品を複数の証券会社で保有できるよう、
         # 旧スキーマの UNIQUE(catalog_id) 制約を外す（テーブル再構築）。
         idxs = c.execute("PRAGMA index_list(watchlist)").fetchall()
@@ -115,11 +118,13 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                     units      REAL DEFAULT 0,
                     sell_policy TEXT DEFAULT 'full',
                     broker     TEXT DEFAULT '',
+                    invested   REAL DEFAULT 0,
                     FOREIGN KEY(catalog_id) REFERENCES catalog(id) ON DELETE CASCADE
                 );
-                INSERT INTO watchlist_new(id, catalog_id, sort_order, added_at, units, sell_policy, broker)
+                INSERT INTO watchlist_new(id, catalog_id, sort_order, added_at, units, sell_policy, broker, invested)
                     SELECT id, catalog_id, sort_order, added_at,
-                           COALESCE(units, 0), COALESCE(sell_policy, 'full'), COALESCE(broker, '')
+                           COALESCE(units, 0), COALESCE(sell_policy, 'full'),
+                           COALESCE(broker, ''), COALESCE(invested, 0)
                     FROM watchlist;
                 DROP TABLE watchlist;
                 ALTER TABLE watchlist_new RENAME TO watchlist;
@@ -285,7 +290,7 @@ def delete_catalog(catalog_id: int, db_path: Optional[str] = None):
 def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
-            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, c.* "
+            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, w.invested, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -305,6 +310,14 @@ def set_units(watch_id: int, units: float, db_path: Optional[str] = None):
     with _conn(db_path) as c:
         c.execute("UPDATE watchlist SET units=? WHERE id=?", (units, watch_id))
     return units
+
+
+def set_invested(watch_id: int, invested: float, db_path: Optional[str] = None):
+    """投資金額（元本）を設定する。watch_id は保有行（watchlist.id）。"""
+    invested = max(0.0, float(invested or 0))
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET invested=? WHERE id=?", (invested, watch_id))
+    return invested
 
 
 def set_asset_class(catalog_id: int, asset_class: str, db_path: Optional[str] = None):

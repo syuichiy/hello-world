@@ -229,27 +229,25 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 
 /* 銘柄一覧テーブル：列幅を固定してレイアウト崩れ（列の潰れ・折返し）を防ぐ。
    ランキング表(.ranking-card内)は列構成が違うため対象外。 */
-.table-card .watch-table { table-layout: fixed; min-width: 1130px; }
-.table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 212px; }
-.table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 118px; }
-.table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 138px; }
-.table-card .watch-table th:nth-child(4),  .table-card .watch-table td:nth-child(4)  { width: 92px; }
-.table-card .watch-table th:nth-child(5),  .table-card .watch-table td:nth-child(5)  { width: 94px; }
-.table-card .watch-table th:nth-child(6),  .table-card .watch-table td:nth-child(6)  { width: 104px; }
-.table-card .watch-table th:nth-child(7),  .table-card .watch-table td:nth-child(7)  { width: 132px; }
-.table-card .watch-table th:nth-child(8),  .table-card .watch-table td:nth-child(8)  { width: 104px; }
-.table-card .watch-table th:nth-child(9),  .table-card .watch-table td:nth-child(9)  { width: 72px; }
-.table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 112px; }
-.table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 44px; }
+.table-card .watch-table { table-layout: fixed; min-width: 1274px; }
+.table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 200px; }
+.table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 116px; }
+.table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 130px; }
+.table-card .watch-table th:nth-child(4),  .table-card .watch-table td:nth-child(4)  { width: 90px; }
+.table-card .watch-table th:nth-child(5),  .table-card .watch-table td:nth-child(5)  { width: 92px; }
+.table-card .watch-table th:nth-child(6),  .table-card .watch-table td:nth-child(6)  { width: 100px; }
+.table-card .watch-table th:nth-child(7),  .table-card .watch-table td:nth-child(7)  { width: 100px; }
+.table-card .watch-table th:nth-child(8),  .table-card .watch-table td:nth-child(8)  { width: 128px; }
+.table-card .watch-table th:nth-child(9),  .table-card .watch-table td:nth-child(9)  { width: 100px; }
+.table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 68px; }
+.table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 108px; }
+.table-card .watch-table th:nth-child(12), .table-card .watch-table td:nth-child(12) { width: 42px; }
 .table-card .watch-table .fund-nm { white-space: normal; word-break: break-word; line-height: 1.35; }
 .table-card .watch-table .units-input,
+.table-card .watch-table .invested-input,
 .table-card .watch-table .policy-select,
 .table-card .watch-table .row-broker { width: 100%; max-width: 100%; box-sizing: border-box; }
-/* 数値入力のスピナーを消して桁を見やすく（口数が6桁でも切れない） */
-.units-input { -moz-appearance: textfield; appearance: textfield; }
-.units-input::-webkit-outer-spin-button,
-.units-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.table-card .watch-table .units-input { text-align: right; }
+.table-card .watch-table .num-comma { text-align: right; }
 .held-hint { font-size: 11px; color: var(--accent); font-weight: 700; margin-top: 4px; }
 .watch-table thead th {
   position: sticky; top: 0; z-index: 5;
@@ -281,13 +279,13 @@ tr:hover .row-del { opacity: 1; }
 .empty-watch { text-align: center; color: var(--ink-soft); padding: 34px 10px; }
 
 /* 保有口数・評価額 */
-.units-input {
+.units-input, .invested-input {
   width: 96px; padding: 7px 9px; border: 1.5px solid var(--line); border-radius: 9px;
   font-size: 13px; text-align: right; background: var(--bg); color: var(--ink);
   font-variant-numeric: tabular-nums; transition: all .15s ease;
 }
-.units-input:focus { outline: none; border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 3px rgba(91,91,214,.12); }
-.units-input::placeholder { color: var(--ink-soft); opacity: .55; }
+.units-input:focus, .invested-input:focus { outline: none; border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 3px rgba(91,91,214,.12); }
+.units-input::placeholder, .invested-input::placeholder { color: var(--ink-soft); opacity: .55; }
 .value-cell { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* 判定バッジ */
@@ -576,3 +574,28 @@ tr:hover .row-del { opacity: 1; }
   font-size: 13px; font-weight: 700; background: var(--card); color: var(--ink); cursor: pointer;
 }
 .preset-add-btn { white-space: nowrap; }
+
+/* 資産クラス設定（2列版） */
+.holdings-table-2col { min-width: 420px; }
+.holdings-table-2col th:nth-child(2), .holdings-table-2col td:nth-child(2) { width: 220px; }
+
+/* ------------------------------------------------ 価格推移タブ */
+.price-chart-card h2, .price-table-card h2 { font-size: 17px; margin: 0 0 6px; }
+#price-chart { width: 100%; min-height: 320px; margin-top: 8px; }
+.price-skipped { margin-top: 10px; padding: 12px 14px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; }
+.price-skipped .hint { margin: 6px 0 4px; }
+.skip-list { margin: 4px 0 8px; padding-left: 20px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.7; }
+.skip-need { color: var(--sell); font-weight: 700; }
+
+.price-table { width: 100%; min-width: 520px; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.price-table thead th {
+  position: sticky; top: 0; background: var(--bg); z-index: 1;
+  text-align: right; font-size: 11.5px; font-weight: 800; color: var(--ink-soft);
+  padding: 8px 12px; border-bottom: 2px solid var(--line); white-space: nowrap;
+}
+.price-table thead th:first-child { text-align: left; }
+.price-table .pt-col { border-top: 3px solid var(--cc, var(--line)); }
+.price-table tbody td { padding: 7px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.price-table tbody td:first-child { font-weight: 700; color: var(--ink-soft); }
+.price-table tbody tr:nth-child(even) { background: var(--bg); }
+.price-table-card .table-scroll { max-height: 460px; overflow: auto; }
