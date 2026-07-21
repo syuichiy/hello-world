@@ -168,6 +168,7 @@ function renderRebalancePlan(plan) {
           <span class="plan-name">${escapeHtml(s.name)}</span>
           <span class="plan-amount">約 ${Number(s.amount).toLocaleString()} 円</span>
           <span class="plan-timing">${escapeHtml(s.timing_label)}</span>
+          ${s.policy === "partial" ? '<span class="plan-tag">一部売却（上限50%）</span>' : ""}
         </div>`).join("") + `</div>`;
   }
 
@@ -180,6 +181,12 @@ function renderRebalancePlan(plan) {
           <span class="plan-amount">約 ${Number(b.amount).toLocaleString()} 円</span>
           <span class="plan-timing">${escapeHtml(b.timing_label)}</span>
         </div>`).join("") + `</div>`;
+  }
+
+  if (plan.excluded && plan.excluded.length) {
+    html += `<div class="plan-section"><div class="plan-head excl-head">売却対象外の銘柄（設定・値上がり予測・損失回避）</div>` +
+      plan.excluded.map((d) => `
+        <div class="plan-defer"><b>${d.icon} ${escapeHtml(d.name)}</b> — ${escapeHtml(d.reason)}</div>`).join("") + `</div>`;
   }
 
   if (plan.deferred && plan.deferred.length) {
@@ -269,6 +276,22 @@ function renderPortfolio(pf) {
   else { note.hidden = true; }
 }
 
+// 売却属性の保存（リバランス計画に反映）
+async function savePolicy(catalogId, policy) {
+  try {
+    const resp = await fetch("/api/watchlist/policy", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalog_id: Number(catalogId), policy }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    toast("✓ 売却属性を保存しました");
+    loadWatchlist();  // リバランス計画を更新
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
+}
+
 // 保有口数の保存
 async function saveUnits(catalogId, units) {
   try {
@@ -315,7 +338,7 @@ function renderWatchTable() {
       return `<tr class="err-row" data-id="${s.catalog_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
           <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
-        <td colspan="6" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
+        <td colspan="7" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
         <td></td>
         <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td></tr>`;
     }
@@ -337,11 +360,21 @@ function renderWatchTable() {
             data-id="${s.catalog_id}" value="${unitsVal}" placeholder="口数"
             title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
       <td class="num value-cell">${value}</td>
+      <td>${policySelect(s)}</td>
       <td class="num">${chg}</td>
       <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
       <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td>
     </tr>`;
   }).join("");
+}
+
+function policySelect(s) {
+  const p = s.sell_policy || "full";
+  const opt = (v, label) => `<option value="${v}"${p === v ? " selected" : ""}>${label}</option>`;
+  return `<select class="policy-select policy-${p}" data-id="${s.catalog_id}"
+      title="リバランスで売却してよいかの設定（計画に反映されます）">
+    ${opt("full", "○ 売却可")}${opt("partial", "△ 一部可")}${opt("locked", "✕ 不可")}
+  </select>`;
 }
 
 function verdictBadge(verdict, label) {
@@ -753,7 +786,7 @@ $("reg-submit").addEventListener("click", registerFund);
 $("watch-body").addEventListener("click", (e) => {
   const del = e.target.closest(".row-del");
   if (del) { e.stopPropagation(); removeFromWatch(del.dataset.id); return; }
-  if (e.target.closest(".units-input")) return;  // 口数入力中は詳細を開かない
+  if (e.target.closest(".units-input") || e.target.closest(".policy-select")) return;  // 入力・設定中は詳細を開かない
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
@@ -761,7 +794,9 @@ $("watch-body").addEventListener("click", (e) => {
 // 保有口数の入力（変更確定で保存）
 $("watch-body").addEventListener("change", (e) => {
   const input = e.target.closest(".units-input");
-  if (input) saveUnits(input.dataset.id, input.value);
+  if (input) { saveUnits(input.dataset.id, input.value); return; }
+  const sel = e.target.closest(".policy-select");
+  if (sel) savePolicy(sel.dataset.id, sel.value);
 });
 $("watch-body").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.closest(".units-input")) e.target.blur();

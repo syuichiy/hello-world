@@ -301,6 +301,7 @@ def api_watchlist_analyze():
         s = _summarize_fund(it, range_key, force)
         units = float(it.get("units") or 0)
         s["units"] = units
+        s["sell_policy"] = it.get("sell_policy") or "full"
         if s.get("ok") and units > 0 and s.get("latest_price"):
             if s.get("kind") == "stock":
                 # 個別株: 評価額 = 株価 × 株数
@@ -380,6 +381,38 @@ def _timing_score(s):
     return s.get("score") or 0
 
 
+def _long_score(s):
+    """長期（1年〜）ホライズンのスコア。＋なら長期上昇トレンド＝値上がり予測。"""
+    for h in (s.get("hz") or []):
+        if h.get("key") == "long" and h.get("ok") and h.get("score") is not None:
+            return h["score"]
+    return None
+
+
+PARTIAL_SELL_RATIO = 0.5  # 「一部売却可能」の売却上限（保有評価額に対する割合）
+
+
+def _sell_eligibility(s):
+    """売却可否の判定。(eligible, cap_ratio, exclude_reason) を返す。
+
+    除外ルール（優先順）:
+      1. 売却不可設定
+      2. 長期上昇トレンド（値上がり予測）→ 無理に売らない
+      3. 短中期が安値圏 → 今売ると損になりやすい
+    """
+    policy = s.get("sell_policy") or "full"
+    if policy == "locked":
+        return False, 0.0, "🔒 売却不可に設定されています"
+    ls = _long_score(s)
+    if ls is not None and ls >= 25:
+        return False, 0.0, ("📈 長期上昇トレンド（値上がりが見込まれる形）のため、"
+                            "無理に売却せず保有継続を推奨")
+    if _timing_score(s) >= 20:
+        return False, 0.0, "🔻 短中期が安値圏のため、今売ると損になりやすく見送り"
+    cap = PARTIAL_SELL_RATIO if policy == "partial" else 1.0
+    return True, cap, None
+
+
 def _sell_timing(ts):
     if ts <= -15:
         return "good", "🟢 売り時（過熱・高値圏）"
@@ -416,36 +449,56 @@ def _build_rebalance_plan(summaries, classes, total, any_units):
 
     ok_items = [s for s in summaries if s.get("ok") and (s.get("value") or 0) > 0]
 
-    sells, deferred = [], []
+    sells, deferred, excluded = [], [], []
     proceeds = 0.0
+    policy_label = {"full": "○売却可", "partial": "△一部売却可（最大50%）", "locked": "✕売却不可"}
     for c in over:
         excess = c["diff"] / 100.0 * total
         funds = [s for s in ok_items
                  if (s.get("asset_class") or "") == c["name"]]
         funds.sort(key=_timing_score)  # 過熱（負のスコア）が先＝売り時から
-        sellable = [f for f in funds if _timing_score(f) < 20]
+        sellable = []
+        for f in funds:
+            eligible, cap, reason = _sell_eligibility(f)
+            if eligible:
+                sellable.append((f, cap))
+            else:
+                excluded.append({"name": f["name"], "cls": c["name"], "icon": c["icon"],
+                                 "reason": reason})
         if not sellable:
             deferred.append({
                 "cls": c["name"], "icon": c["icon"],
                 "reason": (f"{c['name']}は目標より{c['diff']:+.1f}pt多めですが、"
-                           "保有銘柄がいずれも安値圏のため、損失回避の観点から今回は売却を見送ります。"
-                           "（積立の配分変更や、値を戻してからの売却がおすすめです）"),
+                           "売却できる銘柄がありません（売却不可設定・値上がり予測・安値圏のため）。"
+                           "無理に売らず、積立の配分変更や、条件が変わってからの売却がおすすめです。"),
             })
             continue
         remaining = excess
-        for f in sellable:
+        for f, cap in sellable:
             if remaining <= total * 0.01:
                 break
-            amt = min(remaining, f["value"])
+            max_amt = f["value"] * cap
+            amt = min(remaining, max_amt)
             if amt < total * 0.01:
                 continue
             ts = _timing_score(f)
             timing, timing_label = _sell_timing(ts)
+            pol = f.get("sell_policy") or "full"
             sells.append({"name": f["name"], "cls": c["name"], "icon": c["icon"],
                           "amount": round(amt), "timing": timing,
-                          "timing_label": timing_label})
+                          "timing_label": timing_label,
+                          "policy": pol,
+                          "policy_label": policy_label.get(pol, "")})
             proceeds += amt
             remaining -= amt
+        if remaining > total * 0.05:
+            # 売却上限（一部売却など）で過剰分を売り切れない場合の注記
+            deferred.append({
+                "cls": c["name"], "icon": c["icon"],
+                "reason": (f"{c['name']}は売却制限（一部売却可・売却不可・見送り銘柄）のため、"
+                           f"過剰分のうち約 {round(remaining):,} 円は今回調整しきれません。"
+                           "残りは積立配分での調整がおすすめです。"),
+            })
 
     buys = []
     if under and proceeds > 0:
@@ -465,10 +518,11 @@ def _build_rebalance_plan(summaries, classes, total, any_units):
         summary = (f"🔁 以下の売買で目標配分に近づけられます"
                    f"（約 {round(proceeds):,} 円を移動）。")
         if deferred:
-            summary += " 一部のクラスは安値圏のため見送りです。"
+            summary += " 一部は売却制限・損失回避のため見送り/部分調整です。"
     elif deferred:
         status = "defer"
-        summary = ("⏸ 配分の乖離はありますが、売却候補がいずれも安値圏のため、"
+        summary = ("⏸ 配分の乖離はありますが、売却候補が「売却不可設定」「長期上昇トレンド"
+                   "（値上がり予測）」「安値圏」のいずれかに該当するため、"
                    "損失回避の観点から今回のリバランスは見送りを推奨します。"
                    "無理に売らず、今後の積立配分（不足クラスを厚めに買う）での調整がおすすめです。")
         if under and any_units:
@@ -480,9 +534,11 @@ def _build_rebalance_plan(summaries, classes, total, any_units):
 
     return {"status": status, "summary": summary,
             "sells": sells, "buys": buys, "deferred": deferred,
+            "excluded": excluded,
             "note": ("※ 取得単価が未登録のため、実際の損益ではなくテクニカルな高値圏/安値圏で"
-                     "売り時・買い時を判断しています。税金・手数料・分配金は考慮していません。"
-                     "投資助言ではなく機械的な目安です。")}
+                     "売り時・買い時を判断しています。「値上がり予測」は長期トレンドに基づく"
+                     "機械的な判定で、将来を保証するものではありません。"
+                     "税金・手数料・分配金は考慮していません。投資助言ではありません。")}
 
 
 def _buy_candidate_for_class(summaries, cls_name):
@@ -538,6 +594,18 @@ def api_targets():
                         "error": f"合計が100%になるようにしてください（現在 {total:.0f}%）。"}), 400
     db.set_setting("targets", targets)
     return jsonify({"ok": True, "targets": targets})
+
+
+@app.route("/api/watchlist/policy", methods=["POST"])
+def api_watchlist_policy():
+    """売却属性（full=売却可能 / partial=一部売却可能 / locked=売却不可）を設定する。"""
+    data = request.get_json(silent=True) or {}
+    catalog_id = data.get("catalog_id")
+    policy = data.get("policy")
+    if catalog_id is None or policy not in db.SELL_POLICIES:
+        return jsonify({"ok": False, "error": "catalog_id と policy(full/partial/locked) が必要です。"}), 400
+    db.set_sell_policy(int(catalog_id), policy)
+    return jsonify({"ok": True, "policy": policy})
 
 
 @app.route("/api/watchlist/units", methods=["POST"])

@@ -453,3 +453,14 @@ tr:hover .row-del { opacity: 1; }
 @media (prefers-color-scheme: dark) {
   .plan-banner.warn { background: #2e2812; border-color: #4d4014; color: #e0c56a; }
 }
+
+/* 売却属性セレクタ */
+.policy-select {
+  padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 12px; font-weight: 700; background: var(--bg); color: var(--ink);
+  cursor: pointer;
+}
+.policy-select:focus { outline: none; border-color: var(--accent); }
+.policy-select.policy-partial { color: #a16207; border-color: rgba(202,138,4,.45); }
+.policy-select.policy-locked { color: var(--sell); border-color: rgba(225,29,72,.45); }
+.excl-head { background: rgba(111,116,136,.10); color: var(--ink-soft); }

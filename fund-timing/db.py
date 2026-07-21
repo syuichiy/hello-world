@@ -95,6 +95,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         cols = [r["name"] for r in c.execute("PRAGMA table_info(watchlist)")]
         if "units" not in cols:
             c.execute("ALTER TABLE watchlist ADD COLUMN units REAL DEFAULT 0")
+        if "sell_policy" not in cols:
+            # 売却属性: full=売却可能 / partial=一部売却可能 / locked=売却不可
+            c.execute("ALTER TABLE watchlist ADD COLUMN sell_policy TEXT DEFAULT 'full'")
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -242,7 +245,7 @@ def delete_catalog(catalog_id: int, db_path: Optional[str] = None):
 def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
-            "SELECT w.id AS watch_id, w.sort_order, w.units, c.* "
+            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -255,6 +258,19 @@ def set_units(catalog_id: int, units: float, db_path: Optional[str] = None):
     with _conn(db_path) as c:
         c.execute("UPDATE watchlist SET units=? WHERE catalog_id=?", (units, catalog_id))
     return units
+
+
+SELL_POLICIES = ("full", "partial", "locked")
+
+
+def set_sell_policy(catalog_id: int, policy: str, db_path: Optional[str] = None):
+    """売却属性を設定する（full=売却可能 / partial=一部売却可能 / locked=売却不可）。"""
+    if policy not in SELL_POLICIES:
+        raise ValueError("policy は full / partial / locked のいずれかです。")
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET sell_policy=? WHERE catalog_id=?",
+                  (policy, catalog_id))
+    return policy
 
 
 def add_watch(catalog_id: int, db_path: Optional[str] = None):
