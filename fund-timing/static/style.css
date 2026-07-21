@@ -403,6 +403,8 @@ tr:hover .row-del { opacity: 1; }
 /* ------------------------------------------------ 資産配分・リバランス */
 .allocation-card h2 { font-size: 17px; margin: 0 0 8px; }
 .alloc-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.alloc-chart { min-width: 0; }                 /* Plotlyが列幅を押し広げるのを防ぐ */
+.alloc-chart > div { width: 100%; }
 .alloc-chart-title { text-align: center; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); margin: 4px 0 0; }
 .alloc-table { min-width: 640px; margin-top: 6px; }
 .alloc-cls { font-weight: 700; white-space: nowrap; border-left: 3px solid var(--cc, var(--line)); padding-left: 8px; }
@@ -464,3 +466,43 @@ tr:hover .row-del { opacity: 1; }
 .policy-select.policy-partial { color: #a16207; border-color: rgba(202,138,4,.45); }
 .policy-select.policy-locked { color: var(--sell); border-color: rgba(225,29,72,.45); }
 .excl-head { background: rgba(111,116,136,.10); color: var(--ink-soft); }
+
+/* ------------------------------------------------ メニュー（タブ） */
+.main-nav {
+  display: flex; gap: 6px; margin-bottom: 16px;
+  border-bottom: 1.5px solid var(--line);
+}
+.nav-tab {
+  appearance: none; border: none; background: transparent; cursor: pointer;
+  font-size: 14.5px; font-weight: 700; color: var(--ink-soft);
+  padding: 10px 18px; border-radius: 10px 10px 0 0;
+  border-bottom: 2.5px solid transparent; margin-bottom: -1.5px;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.nav-tab:hover { color: var(--ink); background: var(--bg); }
+.nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ------------------------------------------------ 配分プリセット */
+.preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.preset-label { font-size: 12.5px; font-weight: 700; color: var(--ink-soft); }
+.preset-btn {
+  appearance: none; cursor: pointer; font-size: 12.5px; font-weight: 700;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1.5px solid var(--accent); color: var(--accent); background: transparent;
+  transition: background .15s, color .15s;
+}
+.preset-btn:hover { background: var(--accent); color: #fff; }
+.targets-foot { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.preset-note { font-size: 11.5px; color: var(--ink-soft); line-height: 1.7; margin: 12px 0 0; }
+.preset-note em { font-style: normal; font-weight: 700; color: var(--ink); }
+
+/* ------------------------------------------------ 銘柄の資産クラス調整 */
+.class-edit-card h2 { font-size: 17px; margin: 0 0 6px; }
+.class-edit-table { min-width: 420px; margin-top: 10px; }
+.class-edit-table td { vertical-align: middle; }
+.class-select {
+  padding: 7px 10px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 13px; font-weight: 700; background: var(--bg); color: var(--ink);
+  cursor: pointer;
+}
+.class-select:focus { outline: none; border-color: var(--accent); }

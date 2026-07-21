@@ -135,6 +135,14 @@ def seed_catalog(db_path: Optional[str] = None):
                            "WHERE asset_class IS NULL OR asset_class=''").fetchall():
             c.execute("UPDATE catalog SET asset_class=? WHERE id=?",
                       (seed_funds.classify(r["name"], r["category"] or ""), r["id"]))
+        # 分類の見直し（毎月分配型→高配当 等）。一度だけ実行し、以後はユーザーの
+        # 手動変更を尊重する（フラグで一度きりに限定）。
+        done = c.execute("SELECT value FROM settings WHERE key='reclassify_v1'").fetchone()
+        if not done:
+            for assoc, old_cls, new_cls in getattr(seed_funds, "RECLASSIFY", []):
+                c.execute("UPDATE catalog SET asset_class=? WHERE assoc_code=? AND asset_class=?",
+                          (new_cls, assoc, old_cls))
+            c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('reclassify_v1', '1')")
 
 
 def _ensure_seed_stocks_watched(db_path: Optional[str] = None):
@@ -258,6 +266,15 @@ def set_units(catalog_id: int, units: float, db_path: Optional[str] = None):
     with _conn(db_path) as c:
         c.execute("UPDATE watchlist SET units=? WHERE catalog_id=?", (units, catalog_id))
     return units
+
+
+def set_asset_class(catalog_id: int, asset_class: str, db_path: Optional[str] = None):
+    """商品の資産クラス（分類）を手動で変更する。"""
+    if asset_class not in seed_funds.ASSET_CLASS_NAMES:
+        raise ValueError("不正な資産クラスです。")
+    with _conn(db_path) as c:
+        c.execute("UPDATE catalog SET asset_class=? WHERE id=?", (asset_class, catalog_id))
+    return asset_class
 
 
 SELL_POLICIES = ("full", "partial", "locked")

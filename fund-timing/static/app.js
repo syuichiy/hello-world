@@ -10,13 +10,37 @@ let lastSummaries = [];
 let detailCtx = null;       // {catalog_id} or {q, name}
 
 // ============================================================ 表示切替
-function showDashboard() {
+let currentView = "dashboard";   // "dashboard" | "portfolio"
+
+function switchView(view) {
+  currentView = view;
+  $("main-nav").hidden = false;
   $("detail-view").hidden = true;
-  $("dashboard-view").hidden = false;
+  $("dashboard-view").hidden = view !== "dashboard";
+  $("portfolio-view").hidden = view !== "portfolio";
+  document.querySelectorAll(".nav-tab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.view === view));
+  // 非表示中に描画したPlotlyの円グラフはサイズが正しく取れないため、
+  // 表示に切り替えてレイアウトが確定してからリサイズする
+  if (view === "portfolio") {
+    requestAnimationFrame(() => {
+      ["pie-current", "pie-target"].forEach((id) => {
+        const el = $(id);
+        if (el && el.data) Plotly.Plots.resize(el);
+      });
+    });
+  }
+  window.scrollTo(0, 0);
+}
+
+function showDashboard() {   // 詳細ビューの「← 戻る」用：元のタブへ戻る
+  switchView(currentView);
   loadWatchlist();
 }
 function showDetail() {
+  $("main-nav").hidden = true;
   $("dashboard-view").hidden = true;
+  $("portfolio-view").hidden = true;
   $("detail-view").hidden = false;
   window.scrollTo(0, 0);
 }
@@ -72,6 +96,7 @@ async function loadWatchlist(force) {
   renderWatchTable();
   renderPortfolio(data.portfolio);
   renderAllocation(data.allocation);
+  renderClassEditor();
 }
 
 // ============================================================ 資産配分・リバランス
@@ -232,6 +257,62 @@ async function saveTargets() {
   toast("✓ 理想の配分を保存しました");
   $("targets-form").hidden = true;
   loadWatchlist();
+}
+
+// プリセット（シーゲル流／バランス型）を編集フォームに反映
+function applyPreset(name) {
+  const presets = lastAllocation && lastAllocation.presets;
+  const preset = presets && presets[name];
+  if (!preset) { toast("プリセットを読み込めませんでした", "error"); return; }
+  buildTargetInputs(preset);
+  toast(name === "siegel" ? "シーゲル流の配分を入力しました" : "バランス型の配分を入力しました");
+}
+
+// ============================================================ 銘柄の資産クラス調整
+function renderClassEditor() {
+  const card = $("class-edit-card");
+  const body = $("class-edit-body");
+  const empty = $("class-edit-empty");
+  if (!card) return;
+  const funds = lastSummaries.filter((s) => s.catalog_id != null);
+  card.hidden = false;
+  if (!funds.length) {
+    body.innerHTML = ""; empty.hidden = false; return;
+  }
+  empty.hidden = true;
+  body.innerHTML = funds.map((s) => `
+    <tr>
+      <td class="fund-cell">
+        <div class="fund-nm">${escapeHtml(s.name)}</div>
+        <div class="fund-sub">${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(s.category || s.isin || "")}</div>
+      </td>
+      <td>${classSelect(s)}</td>
+    </tr>`).join("");
+}
+
+function classSelect(s) {
+  const cur = s.asset_class || "";
+  const opts = Object.keys(ASSET_CLASS_META).map((name) => {
+    const m = ASSET_CLASS_META[name];
+    return `<option value="${escapeHtml(name)}"${cur === name ? " selected" : ""}>${m.icon} ${escapeHtml(name)}</option>`;
+  }).join("");
+  return `<select class="class-select class-${escapeHtml(cur)}" data-id="${s.catalog_id}"
+      title="この銘柄の資産クラス（配分・リバランス計算に反映されます）">${opts}</select>`;
+}
+
+async function saveAssetClass(catalogId, cls) {
+  try {
+    const resp = await fetch("/api/catalog/class", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalog_id: Number(catalogId), asset_class: cls }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    toast("✓ 資産クラスを変更しました");
+    loadWatchlist();  // 配分・リバランスを再計算
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
 }
 
 // 保有全体（ポートフォリオ）の目安カード
@@ -825,12 +906,28 @@ $("dash-range").addEventListener("click", (e) => {
 });
 $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
 
+// メニュータブ切替
+$("main-nav").addEventListener("click", (e) => {
+  const tab = e.target.closest(".nav-tab");
+  if (tab) switchView(tab.dataset.view);
+});
+
 // 理想配分の編集
 $("edit-targets-btn").addEventListener("click", () => {
   const f = $("targets-form"); f.hidden = !f.hidden;
 });
 $("targets-inputs").addEventListener("input", updateTargetsSum);
 $("targets-save").addEventListener("click", saveTargets);
+$("targets-form").addEventListener("click", (e) => {
+  const b = e.target.closest(".preset-btn");
+  if (b) applyPreset(b.dataset.preset);
+});
+
+// 銘柄の資産クラス変更
+$("class-edit-body").addEventListener("change", (e) => {
+  const sel = e.target.closest(".class-select");
+  if (sel) saveAssetClass(sel.dataset.id, sel.value);
+});
 
 $("ranking-btn").addEventListener("click", loadRanking);
 $("ranking-body").addEventListener("click", (e) => {

@@ -16,6 +16,12 @@
   </header>
 
   <main>
+    <!-- ========================= メニュー ========================= -->
+    <nav class="main-nav" id="main-nav">
+      <button class="nav-tab active" data-view="dashboard">📋 銘柄一覧</button>
+      <button class="nav-tab" data-view="portfolio">🧺 ポートフォリオ</button>
+    </nav>
+
     <!-- ========================= 一覧ビュー ========================= -->
     <section id="dashboard-view">
       <div class="card search-card">
@@ -63,49 +69,6 @@
       </div>
 
       <div id="dash-status" class="status" hidden></div>
-
-      <!-- 保有全体（ポートフォリオ）の目安 -->
-      <div class="card portfolio-card" id="portfolio-card" hidden>
-        <div class="pf-head">
-          <h2>💼 保有全体の目安（ポートフォリオ）</h2>
-          <div class="pf-total" id="pf-total" hidden>
-            <span class="pf-total-key">総評価額</span>
-            <span class="pf-total-val" id="pf-total-val">—</span>
-          </div>
-        </div>
-        <div id="pf-horizons"></div>
-        <p class="pf-note" id="pf-note" hidden></p>
-        <p class="hz-note">⚠️ 過去の値動きに基づくテクニカル指標の機械的な目安です。投資助言ではなく、将来の成果を保証するものではありません。</p>
-      </div>
-
-      <!-- 資産配分（分類×円グラフ×リバランス） -->
-      <div class="card allocation-card" id="allocation-card" hidden>
-        <h2>🧭 資産配分とリバランス</h2>
-        <div class="alloc-charts">
-          <div class="alloc-chart"><p class="alloc-chart-title">現在の配分</p><div id="pie-current"></div></div>
-          <div class="alloc-chart"><p class="alloc-chart-title">理想の配分（目標）</p><div id="pie-target"></div></div>
-        </div>
-        <table class="watch-table alloc-table">
-          <thead>
-            <tr><th>分類</th><th class="num">評価額</th><th class="num">現在</th>
-                <th class="num">目標</th><th class="num">乖離</th><th>リバランス指標</th></tr>
-          </thead>
-          <tbody id="alloc-body"></tbody>
-        </table>
-        <div id="rebalance-plan" class="rebalance-plan"></div>
-
-        <div class="alloc-edit">
-          <button id="edit-targets-btn" type="button" class="linklike">⚙ 理想の配分を編集</button>
-          <div id="targets-form" class="targets-form" hidden>
-            <div id="targets-inputs" class="targets-inputs"></div>
-            <div class="targets-actions">
-              <span id="targets-sum" class="targets-sum">合計 100%</span>
-              <button id="targets-save" type="button" class="si-add">保存</button>
-            </div>
-          </div>
-        </div>
-        <p class="hz-note">⚠️ リバランス指標は現在の配分と目標の機械的な差分です。投資助言ではありません。売買には税金・手数料等の影響があります。</p>
-      </div>
 
       <div class="card table-card">
         <table class="watch-table">
@@ -156,6 +119,90 @@
         </table>
         <p class="ranking-note" id="ranking-note" hidden>
           ⚠️ 順位は過去の値動きに基づくテクニカル指標の目安です。将来の値上がりや利益を保証するものではありません。
+        </p>
+      </div>
+    </section>
+
+    <!-- ========================= ポートフォリオビュー ========================= -->
+    <section id="portfolio-view" hidden>
+      <!-- 保有全体の目安 -->
+      <div class="card portfolio-card" id="portfolio-card" hidden>
+        <div class="pf-head" id="pf-head">
+          <h2>🧺 保有ポートフォリオ全体の目安</h2>
+          <div class="pf-total" id="pf-total" hidden>
+            <span class="pf-total-label">評価額合計</span>
+            <span class="pf-total-val" id="pf-total-val">—</span>
+          </div>
+        </div>
+        <div id="pf-horizons"></div>
+        <p class="pf-note" id="pf-note" hidden></p>
+      </div>
+
+      <!-- 資産クラス別の配分とリバランス -->
+      <div class="card allocation-card" id="allocation-card" hidden>
+        <h2>📊 資産クラス別の配分とリバランス</h2>
+        <div class="alloc-charts">
+          <div class="alloc-chart">
+            <div class="alloc-chart-title">現在の配分</div>
+            <div id="pie-current"></div>
+          </div>
+          <div class="alloc-chart">
+            <div class="alloc-chart-title">理想の配分</div>
+            <div id="pie-target"></div>
+          </div>
+        </div>
+        <table class="alloc-table">
+          <thead>
+            <tr>
+              <th>資産クラス</th>
+              <th class="num">評価額</th>
+              <th class="num">現在</th>
+              <th class="num">理想</th>
+              <th class="num">差</th>
+              <th>リバランス</th>
+            </tr>
+          </thead>
+          <tbody id="alloc-body"></tbody>
+        </table>
+
+        <div id="rebalance-plan" class="rebalance-plan"></div>
+
+        <div class="alloc-edit">
+          <button id="edit-targets-btn" type="button" class="ghost-btn">⚙️ 理想の配分を編集</button>
+          <div id="targets-form" class="targets-form" hidden>
+            <div class="preset-row">
+              <span class="preset-label">プリセット：</span>
+              <button class="preset-btn" type="button" data-preset="siegel">📚 シーゲル流</button>
+              <button class="preset-btn" type="button" data-preset="balanced">⚖️ バランス型</button>
+            </div>
+            <div id="targets-inputs" class="targets-inputs"></div>
+            <div class="targets-foot">
+              <span id="targets-sum" class="targets-sum">合計 100%</span>
+              <button id="targets-save" type="button">保存</button>
+            </div>
+            <p class="preset-note">
+              「シーゲル流」は<em>『株式投資の未来』</em>の考え方をベースに、インデックス50％（米国30＋非米国20）＋
+              補完リターン50％（高配当・グローバル・高リターン・バリューを各12.5％）に配分します。
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 銘柄の資産クラス調整 -->
+      <div class="card class-edit-card" id="class-edit-card" hidden>
+        <h2>🏷 銘柄の資産クラスを調整</h2>
+        <p class="hint">
+          分類が実態と合わない場合はここで変更できます。
+          毎月分配型など分配金重視の投信は「💰 高配当」にすると、シーゲル流の配分に沿います。
+        </p>
+        <table class="class-edit-table">
+          <thead>
+            <tr><th>ファンド名</th><th>資産クラス</th></tr>
+          </thead>
+          <tbody id="class-edit-body"></tbody>
+        </table>
+        <p id="class-edit-empty" class="empty-watch" hidden>
+          一覧に投信を追加すると、ここで資産クラスを調整できます。
         </p>
       </div>
     </section>

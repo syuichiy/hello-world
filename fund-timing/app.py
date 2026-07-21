@@ -369,7 +369,8 @@ def _build_allocation(summaries):
     plan = _build_rebalance_plan(summaries, classes, total, any_units)
     return {"ok": True, "weights_mode": "value" if any_units else "equal",
             "total_value": round(total) if any_units else None,
-            "classes": classes, "targets": targets, "plan": plan}
+            "classes": classes, "targets": targets, "plan": plan,
+            "presets": seed_funds.TARGET_PRESETS}
 
 
 def _timing_score(s):
@@ -576,7 +577,8 @@ def api_targets():
     import seed_funds
     if request.method == "GET":
         t = db.get_setting("targets", None) or dict(seed_funds.DEFAULT_TARGETS)
-        return jsonify({"ok": True, "targets": t})
+        return jsonify({"ok": True, "targets": t,
+                        "presets": seed_funds.TARGET_PRESETS})
     data = request.get_json(silent=True) or {}
     raw = data.get("targets") or {}
     targets = {}
@@ -594,6 +596,21 @@ def api_targets():
                         "error": f"合計が100%になるようにしてください（現在 {total:.0f}%）。"}), 400
     db.set_setting("targets", targets)
     return jsonify({"ok": True, "targets": targets})
+
+
+@app.route("/api/catalog/class", methods=["POST"])
+def api_catalog_class():
+    """商品の資産クラス（分類）を手動で変更する。"""
+    data = request.get_json(silent=True) or {}
+    catalog_id = data.get("catalog_id")
+    asset_class = data.get("asset_class")
+    if catalog_id is None or not asset_class:
+        return jsonify({"ok": False, "error": "catalog_id と asset_class が必要です。"}), 400
+    try:
+        db.set_asset_class(int(catalog_id), asset_class)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "asset_class": asset_class})
 
 
 @app.route("/api/watchlist/policy", methods=["POST"])
