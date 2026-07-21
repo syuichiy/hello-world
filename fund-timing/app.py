@@ -28,6 +28,19 @@ import db
 import seed_funds
 
 app = Flask(__name__)
+# 静的ファイル(app.js/style.css)を毎回検証させ、更新後に古いJS/CSSが使われないようにする
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+
+@app.after_request
+def _no_store_static(resp):
+    """アプリ更新時にブラウザが古い app.js / style.css を使い続けないようにする。"""
+    if request.path.startswith("/static/") or request.path == "/":
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
 
 DEMO_MODE = False
 

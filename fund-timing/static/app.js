@@ -1122,15 +1122,30 @@ $("watch-body").addEventListener("click", (e) => {
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
 
-// 入力中に「そっと保存」（再描画なし）。フォーカスを外さずリロードしても消えないように
+// 入力中の未確定保存を1件だけ保持（離脱時にも確実に流し込む）
+let pendingSave = null;   // { path, watchId, key, value }
 async function persistField(path, watchId, key, value) {
   try {
     await fetch(path, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ watch_id: Number(watchId), [key]: Number(value) || 0 }),
     });
-  } catch (_) { /* 入力途中の保存失敗は無視（確定時に再保存される） */ }
+    pendingSave = null;
+  } catch (_) { /* 入力途中の保存失敗は無視（確定時・離脱時に再保存される） */ }
 }
+// ページを離れる/リロードする瞬間に、未保存の入力を確実に送る（sendBeacon）
+function flushPendingSave() {
+  if (!pendingSave) return;
+  const { path, watchId, key, value } = pendingSave;
+  try {
+    const body = new Blob([JSON.stringify({ watch_id: Number(watchId), [key]: Number(value) || 0 })],
+                          { type: "application/json" });
+    navigator.sendBeacon(path, body);
+  } catch (_) {}
+  pendingSave = null;
+}
+window.addEventListener("beforeunload", flushPendingSave);
+window.addEventListener("pagehide", flushPendingSave);
 
 // 数値入力を3桁カンマで整形しつつ、入力のたびにデバウンスしてDBへ保存
 let fieldSaveTimer = null;
@@ -1139,21 +1154,21 @@ $("watch-body").addEventListener("input", (e) => {
   if (!el) return;
   reformatCommaInput(el);
   const isUnits = el.classList.contains("units-input");
-  const watchId = el.dataset.watch;
-  const value = parseIntComma(el.value);
+  const path = isUnits ? "/api/watchlist/units" : "/api/watchlist/invested";
+  const key = isUnits ? "units" : "invested";
+  pendingSave = { path, watchId: el.dataset.watch, key, value: parseIntComma(el.value) };
   clearTimeout(fieldSaveTimer);
   fieldSaveTimer = setTimeout(() => {
-    persistField(isUnits ? "/api/watchlist/units" : "/api/watchlist/invested",
-                 watchId, isUnits ? "units" : "invested", value);
+    if (pendingSave) persistField(pendingSave.path, pendingSave.watchId, pendingSave.key, pendingSave.value);
   }, 400);
 });
 
 // 口数・投資金額・売却属性・証券会社の確定（フォーカスを外す/Enter）※保有行(watch_id)単位
 $("watch-body").addEventListener("change", (e) => {
   const units = e.target.closest(".units-input");
-  if (units) { clearTimeout(fieldSaveTimer); saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
+  if (units) { clearTimeout(fieldSaveTimer); pendingSave = null; saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
   const inv = e.target.closest(".invested-input");
-  if (inv) { clearTimeout(fieldSaveTimer); saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
+  if (inv) { clearTimeout(fieldSaveTimer); pendingSave = null; saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
   const pol = e.target.closest(".policy-select");
   if (pol) { savePolicy(pol.dataset.watch, pol.value); return; }
   const brk = e.target.closest(".row-broker");
