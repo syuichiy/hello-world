@@ -92,11 +92,13 @@ async function loadWatchlist(force) {
     return;
   }
   setDashStatus("");
+  if (Array.isArray(data.brokers) && data.brokers.length) BROKERS = data.brokers;
   lastSummaries = data.items || [];
   renderWatchTable();
   renderPortfolio(data.portfolio);
   renderAllocation(data.allocation);
   renderClassEditor();
+  loadPresetCatalog();
 }
 
 // ============================================================ 資産配分・リバランス
@@ -112,6 +114,21 @@ function classChip(cls) {
   const m = ASSET_CLASS_META[cls];
   if (!m) return "";
   return `<span class="class-chip" style="--cc:${m.color}">${m.icon} ${escapeHtml(cls)}</span>`;
+}
+
+// 証券会社（プルダウンの選択肢。サーバーから受け取った値で上書きされる）
+let BROKERS = ["SBI証券", "楽天証券", "三菱UFJスマート証券"];
+function brokerChip(broker) {
+  if (!broker) return "";
+  return `<span class="broker-chip">🏦 ${escapeHtml(broker)}</span>`;
+}
+function brokerSelect(catalogId, broker, cls) {
+  const cur = broker || "";
+  const opts = ['<option value="">未設定</option>']
+    .concat(BROKERS.map((b) => `<option value="${escapeHtml(b)}"${cur === b ? " selected" : ""}>${escapeHtml(b)}</option>`))
+    .join("");
+  return `<select class="${cls}" data-id="${catalogId}"
+      title="保有先の証券会社">${opts}</select>`;
 }
 
 let lastAllocation = null;
@@ -268,7 +285,7 @@ function applyPreset(name) {
   toast(name === "siegel" ? "シーゲル流の配分を入力しました" : "バランス型の配分を入力しました");
 }
 
-// ============================================================ 銘柄の資産クラス調整
+// ============================================================ 保有銘柄の設定（証券会社・資産クラス）
 function renderClassEditor() {
   const card = $("class-edit-card");
   const body = $("class-edit-body");
@@ -286,6 +303,7 @@ function renderClassEditor() {
         <div class="fund-nm">${escapeHtml(s.name)}</div>
         <div class="fund-sub">${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(s.category || s.isin || "")}</div>
       </td>
+      <td>${brokerSelect(s.catalog_id, s.broker, "broker-select")}</td>
       <td>${classSelect(s)}</td>
     </tr>`).join("");
 }
@@ -313,6 +331,86 @@ async function saveAssetClass(catalogId, cls) {
   } catch (e) {
     toast("通信エラー: " + e.message, "error");
   }
+}
+
+async function saveBroker(catalogId, broker) {
+  try {
+    const resp = await fetch("/api/watchlist/broker", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalog_id: Number(catalogId), broker }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    toast(broker ? `✓ 証券会社を「${broker}」に設定しました` : "✓ 証券会社を未設定にしました");
+    loadWatchlist();
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
+}
+
+// ============================================================ 内蔵（プリセット）商品を追加
+let presetCatalog = [];
+let presetClassFilter = "";
+async function loadPresetCatalog() {
+  let data;
+  try {
+    data = await (await fetch("/api/catalog/list")).json();
+  } catch (e) { return; }
+  if (!data.ok) return;
+  if (Array.isArray(data.brokers) && data.brokers.length) BROKERS = data.brokers;
+  presetCatalog = data.items || [];
+  // 資産クラスの絞り込みプルダウンを初期化（初回のみ）
+  const filter = $("preset-class-filter");
+  if (filter && filter.options.length <= 1) {
+    Object.keys(ASSET_CLASS_META).forEach((name) => {
+      const m = ASSET_CLASS_META[name];
+      const opt = document.createElement("option");
+      opt.value = name; opt.textContent = `${m.icon} ${name}`;
+      filter.appendChild(opt);
+    });
+  }
+  renderPresetCatalog();
+}
+
+function renderPresetCatalog() {
+  const body = $("preset-add-body");
+  if (!body) return;
+  let rows = presetCatalog.slice();
+  if (presetClassFilter) rows = rows.filter((r) => r.asset_class === presetClassFilter);
+  // 資産クラス→名前で並べる
+  rows.sort((a, b) => {
+    const ca = ASSET_CLASS_NAMES_ORDER[a.asset_class] ?? 99;
+    const cb = ASSET_CLASS_NAMES_ORDER[b.asset_class] ?? 99;
+    if (ca !== cb) return ca - cb;
+    return a.name.localeCompare(b.name, "ja");
+  });
+  body.innerHTML = rows.map((r) => {
+    const add = r.watched
+      ? '<span class="si-added">✓ 追加済</span>'
+      : `<button class="si-add preset-add-btn" data-id="${r.id}">＋ 追加</button>`;
+    const brokerCell = r.watched ? "—"
+      : brokerSelect(r.id, "", "preset-broker-select");
+    return `<tr class="preset-catalog-row" data-id="${r.id}">
+      <td class="fund-cell">
+        <div class="fund-nm">${escapeHtml(r.name)}</div>
+        <div class="fund-sub">${r.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(r.category || "")}</div>
+      </td>
+      <td>${classChip(r.asset_class)}</td>
+      <td>${brokerCell}</td>
+      <td>${add}</td>
+    </tr>`;
+  }).join("");
+}
+const ASSET_CLASS_NAMES_ORDER = Object.fromEntries(
+  Object.keys(ASSET_CLASS_META).map((n, i) => [n, i]));
+
+async function addPreset(catalogId, broker) {
+  await fetch("/api/watchlist", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ catalog_id: Number(catalogId), broker: broker || "" }),
+  });
+  toast("✓ ポートフォリオに追加しました");
+  loadWatchlist();
 }
 
 // 保有全体（ポートフォリオ）の目安カード
@@ -432,7 +530,7 @@ function renderWatchTable() {
     return `<tr class="watch-row" data-id="${s.catalog_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
-        <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
+        <div class="fund-sub">${classChip(s.asset_class)}${brokerChip(s.broker)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
@@ -568,7 +666,7 @@ async function doSearch() {
   box.innerHTML = results.map((r) => `
     <div class="search-item">
       <div class="si-text"><div class="si-name">${escapeHtml(r.name)}</div>
-        <div class="si-sub">${escapeHtml(r.category || "")} ${escapeHtml(r.isin)}</div></div>
+        <div class="si-sub">${classChip(r.asset_class)}${escapeHtml(r.category || "")} ${escapeHtml(r.isin)}</div></div>
       ${r.watched
         ? '<span class="si-added">✓ 追加済</span>'
         : `<button class="si-add" data-id="${r.id}">＋ 一覧に追加</button>`}
@@ -923,10 +1021,25 @@ $("targets-form").addEventListener("click", (e) => {
   if (b) applyPreset(b.dataset.preset);
 });
 
-// 銘柄の資産クラス変更
+// 保有銘柄の設定（証券会社・資産クラス）の変更
 $("class-edit-body").addEventListener("change", (e) => {
-  const sel = e.target.closest(".class-select");
-  if (sel) saveAssetClass(sel.dataset.id, sel.value);
+  const cls = e.target.closest(".class-select");
+  if (cls) { saveAssetClass(cls.dataset.id, cls.value); return; }
+  const brk = e.target.closest(".broker-select");
+  if (brk) saveBroker(brk.dataset.id, brk.value);
+});
+
+// 内蔵商品の追加（証券会社を選んで＋追加）
+$("preset-add-body").addEventListener("click", (e) => {
+  const btn = e.target.closest(".preset-add-btn");
+  if (!btn) return;
+  const row = btn.closest("tr[data-id]");
+  const sel = row ? row.querySelector(".preset-broker-select") : null;
+  addPreset(btn.dataset.id, sel ? sel.value : "");
+});
+$("preset-class-filter").addEventListener("change", (e) => {
+  presetClassFilter = e.target.value;
+  renderPresetCatalog();
 });
 
 $("ranking-btn").addEventListener("click", loadRanking);

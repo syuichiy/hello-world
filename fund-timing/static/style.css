@@ -496,13 +496,58 @@ tr:hover .row-del { opacity: 1; }
 .preset-note { font-size: 11.5px; color: var(--ink-soft); line-height: 1.7; margin: 12px 0 0; }
 .preset-note em { font-style: normal; font-weight: 700; color: var(--ink); }
 
-/* ------------------------------------------------ 銘柄の資産クラス調整 */
-.class-edit-card h2 { font-size: 17px; margin: 0 0 6px; }
-.class-edit-table { min-width: 420px; margin-top: 10px; }
-.class-edit-table td { vertical-align: middle; }
-.class-select {
-  padding: 7px 10px; border: 1.5px solid var(--line); border-radius: 9px;
-  font-size: 13px; font-weight: 700; background: var(--bg); color: var(--ink);
-  cursor: pointer;
+/* ------------------------------------------------ 保有銘柄の設定・内蔵商品の追加 */
+.holdings-card h2, .preset-add-card h2 { font-size: 17px; margin: 0 0 6px; }
+.table-scroll { overflow-x: auto; margin-top: 10px; }
+
+/* 綺麗な表（縞・区切り線・ヘッダ） */
+.holdings-table, .preset-table {
+  width: 100%; min-width: 560px; border-collapse: separate; border-spacing: 0;
+  font-size: 13.5px; table-layout: fixed;
 }
-.class-select:focus { outline: none; border-color: var(--accent); }
+/* 列幅を固定して、証券会社・資産クラス・追加ボタンをきれいに揃える */
+.holdings-table th:nth-child(2), .holdings-table td:nth-child(2),
+.holdings-table th:nth-child(3), .holdings-table td:nth-child(3) { width: 210px; }
+.preset-table th:nth-child(2), .preset-table td:nth-child(2) { width: 116px; }
+.preset-table th:nth-child(3), .preset-table td:nth-child(3) { width: 178px; }
+.preset-table th:nth-child(4), .preset-table td:nth-child(4) { width: 96px; }
+.holdings-table .fund-nm, .preset-table .fund-nm { white-space: normal; word-break: break-word; }
+.holdings-table thead th, .preset-table thead th {
+  text-align: left; font-size: 12px; font-weight: 800; color: var(--ink-soft);
+  padding: 8px 12px; border-bottom: 2px solid var(--line); white-space: nowrap;
+  background: var(--bg);
+}
+.holdings-table tbody td, .preset-table tbody td {
+  padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle;
+}
+.holdings-table tbody tr:nth-child(even), .preset-table tbody tr:nth-child(even) { background: var(--bg); }
+.holdings-table tbody tr:hover, .preset-table tbody tr:hover { background: rgba(91,91,214,.05); }
+.holdings-table thead th:first-child, .preset-table thead th:first-child { border-radius: 8px 0 0 0; }
+.holdings-table thead th:last-child, .preset-table thead th:last-child { border-radius: 0 8px 0 0; }
+
+.class-select, .broker-select, .preset-broker-select {
+  padding: 7px 10px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 13px; font-weight: 700; background: var(--card); color: var(--ink);
+  cursor: pointer; width: 100%; max-width: 190px;
+}
+.class-select:focus, .broker-select:focus, .preset-broker-select:focus {
+  outline: none; border-color: var(--accent);
+}
+
+/* 証券会社チップ（一覧に表示） */
+.broker-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  background: rgba(91,91,214,.10); color: var(--accent);
+  border: 1px solid rgba(91,91,214,.30);
+  border-radius: 999px; padding: 0 7px; margin-right: 4px; white-space: nowrap;
+}
+
+/* 内蔵商品の追加：ヘッダと絞り込み */
+.preset-add-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.preset-filter { flex: 0 0 auto; }
+.preset-filter .field-label { display: block; margin-bottom: 4px; }
+.preset-filter select {
+  padding: 7px 10px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 13px; font-weight: 700; background: var(--card); color: var(--ink); cursor: pointer;
+}
+.preset-add-btn { white-space: nowrap; }

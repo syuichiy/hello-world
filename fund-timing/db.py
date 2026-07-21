@@ -98,6 +98,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         if "sell_policy" not in cols:
             # 売却属性: full=売却可能 / partial=一部売却可能 / locked=売却不可
             c.execute("ALTER TABLE watchlist ADD COLUMN sell_policy TEXT DEFAULT 'full'")
+        if "broker" not in cols:
+            # 保有先の証券会社（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）
+            c.execute("ALTER TABLE watchlist ADD COLUMN broker TEXT DEFAULT ''")
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -253,10 +256,17 @@ def delete_catalog(catalog_id: int, db_path: Optional[str] = None):
 def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
-            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, c.* "
+            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_catalog(db_path: Optional[str] = None):
+    """カタログ（内蔵＋登録済み）の全商品を返す。プリセット商品の追加UI用。"""
+    with _conn(db_path) as c:
+        rows = c.execute("SELECT * FROM catalog ORDER BY kind, name").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -277,6 +287,16 @@ def set_asset_class(catalog_id: int, asset_class: str, db_path: Optional[str] = 
     return asset_class
 
 
+def set_broker(catalog_id: int, broker: str, db_path: Optional[str] = None):
+    """保有先の証券会社を設定する（空文字で未設定）。"""
+    broker = (broker or "").strip()
+    if broker and broker not in seed_funds.BROKERS:
+        raise ValueError("不正な証券会社です。")
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET broker=? WHERE catalog_id=?", (broker, catalog_id))
+    return broker
+
+
 SELL_POLICIES = ("full", "partial", "locked")
 
 
@@ -290,15 +310,21 @@ def set_sell_policy(catalog_id: int, policy: str, db_path: Optional[str] = None)
     return policy
 
 
-def add_watch(catalog_id: int, db_path: Optional[str] = None):
+def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
+    broker = (broker or "").strip()
+    if broker and broker not in seed_funds.BROKERS:
+        broker = ""
     with _conn(db_path) as c:
         exists = c.execute("SELECT id FROM watchlist WHERE catalog_id=?", (catalog_id,)).fetchone()
         if exists:
+            # 既存でも証券会社の指定があれば更新する
+            if broker:
+                c.execute("UPDATE watchlist SET broker=? WHERE catalog_id=?", (broker, catalog_id))
             return False
         mx = c.execute("SELECT COALESCE(MAX(sort_order), -1) FROM watchlist").fetchone()[0]
         c.execute(
-            "INSERT INTO watchlist(catalog_id, sort_order, added_at) VALUES (?,?,?)",
-            (catalog_id, mx + 1, dt.datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO watchlist(catalog_id, sort_order, added_at, broker) VALUES (?,?,?,?)",
+            (catalog_id, mx + 1, dt.datetime.now().isoformat(timespec="seconds"), broker),
         )
         return True
 

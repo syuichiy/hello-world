@@ -188,22 +188,60 @@
         </div>
       </div>
 
-      <!-- 銘柄の資産クラス調整 -->
-      <div class="card class-edit-card" id="class-edit-card" hidden>
-        <h2>🏷 銘柄の資産クラスを調整</h2>
+      <!-- 保有銘柄の設定（証券会社・資産クラス） -->
+      <div class="card holdings-card" id="class-edit-card" hidden>
+        <h2>🗂 保有銘柄の設定</h2>
         <p class="hint">
-          分類が実態と合わない場合はここで変更できます。
-          毎月分配型など分配金重視の投信は「💰 高配当」にすると、シーゲル流の配分に沿います。
+          各銘柄の<strong>証券会社</strong>と<strong>資産クラス</strong>を設定できます。
+          分類が実態と合わない場合はここで変更してください（毎月分配型など分配金重視の投信は「💰 高配当」にするとシーゲル流の配分に沿います）。
         </p>
-        <table class="class-edit-table">
-          <thead>
-            <tr><th>ファンド名</th><th>資産クラス</th></tr>
-          </thead>
-          <tbody id="class-edit-body"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="holdings-table">
+            <thead>
+              <tr>
+                <th>ファンド名</th>
+                <th>証券会社</th>
+                <th>資産クラス</th>
+              </tr>
+            </thead>
+            <tbody id="class-edit-body"></tbody>
+          </table>
+        </div>
         <p id="class-edit-empty" class="empty-watch" hidden>
-          一覧に投信を追加すると、ここで資産クラスを調整できます。
+          一覧に投信を追加すると、ここで証券会社・資産クラスを調整できます。
         </p>
+      </div>
+
+      <!-- プリセット（内蔵）商品を追加 -->
+      <div class="card preset-add-card" id="preset-add-card">
+        <div class="preset-add-head">
+          <div>
+            <h2>➕ 内蔵の商品を追加</h2>
+            <p class="hint">
+              内蔵の人気商品を資産クラスごとに一覧しています。証券会社を選んで「追加」を押すと、
+              保有ポートフォリオに組み込まれます。
+            </p>
+          </div>
+          <div class="preset-filter" id="preset-filter">
+            <label class="field-label" for="preset-class-filter">資産クラスで絞り込み</label>
+            <select id="preset-class-filter">
+              <option value="">すべて</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="preset-table">
+            <thead>
+              <tr>
+                <th>ファンド名</th>
+                <th>資産クラス</th>
+                <th>証券会社</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="preset-add-body"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 

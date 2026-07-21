@@ -25,6 +25,7 @@ from flask import Flask, jsonify, render_template, request, Response
 import fund_data
 import signals as signal_mod
 import db
+import seed_funds
 
 app = Flask(__name__)
 
@@ -215,7 +216,7 @@ def api_catalog_add():
         return jsonify({"ok": False, "error": str(e)}), 400
     # 追加と同時にウォッチリストへ入れる
     if data.get("watch", True):
-        db.add_watch(row["id"])
+        db.add_watch(row["id"], broker=(data.get("broker") or ""))
     return jsonify({"ok": True, "fund": row})
 
 
@@ -233,7 +234,7 @@ def api_watchlist_add():
         return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
     if not db.get_catalog(int(catalog_id)):
         return jsonify({"ok": False, "error": "指定の投信が見つかりません。"}), 404
-    db.add_watch(int(catalog_id))
+    db.add_watch(int(catalog_id), broker=(data.get("broker") or ""))
     return jsonify({"ok": True})
 
 
@@ -302,6 +303,7 @@ def api_watchlist_analyze():
         units = float(it.get("units") or 0)
         s["units"] = units
         s["sell_policy"] = it.get("sell_policy") or "full"
+        s["broker"] = it.get("broker") or ""
         if s.get("ok") and units > 0 and s.get("latest_price"):
             if s.get("kind") == "stock":
                 # 個別株: 評価額 = 株価 × 株数
@@ -317,7 +319,8 @@ def api_watchlist_analyze():
         s.pop("_w", None)  # portfolio_adviceが付ける内部ウェイトは返さない
     allocation = _build_allocation(summaries)
     return jsonify({"ok": True, "range": range_key, "items": summaries,
-                    "portfolio": portfolio, "allocation": allocation})
+                    "portfolio": portfolio, "allocation": allocation,
+                    "brokers": seed_funds.BROKERS})
 
 
 def _build_allocation(summaries):
@@ -611,6 +614,37 @@ def api_catalog_class():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     return jsonify({"ok": True, "asset_class": asset_class})
+
+
+@app.route("/api/watchlist/broker", methods=["POST"])
+def api_watchlist_broker():
+    """保有先の証券会社を設定する（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）。"""
+    data = request.get_json(silent=True) or {}
+    catalog_id = data.get("catalog_id")
+    if catalog_id is None:
+        return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
+    try:
+        broker = db.set_broker(int(catalog_id), data.get("broker") or "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "broker": broker})
+
+
+@app.route("/api/catalog/list")
+def api_catalog_list():
+    """内蔵＋登録済みの全商品を、資産クラス付き・追加済みフラグ付きで返す。
+    ポートフォリオ画面の「プリセット商品を追加」一覧で使う。"""
+    watched = {w["id"] for w in db.list_watchlist()}
+    items = []
+    for r in db.list_catalog():
+        items.append({
+            "id": r["id"], "name": r["name"], "isin": r["isin"],
+            "category": r.get("category", ""),
+            "asset_class": r.get("asset_class", "") or "",
+            "kind": r.get("kind", "fund") or "fund",
+            "watched": r["id"] in watched,
+        })
+    return jsonify({"ok": True, "items": items, "brokers": seed_funds.BROKERS})
 
 
 @app.route("/api/watchlist/policy", methods=["POST"])
