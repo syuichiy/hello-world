@@ -428,3 +428,28 @@ tr:hover .row-del { opacity: 1; }
   border-radius: 5px; padding: 0 5px; margin-right: 4px;
 }
 @media (max-width: 680px) { .alloc-charts { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------ リバランスのアドバイス */
+.rebalance-plan { margin-top: 14px; }
+.plan-title { font-size: 15.5px; margin: 4px 0 10px; }
+.plan-banner { padding: 12px 15px; border-radius: 12px; font-size: 13.5px; font-weight: 600; line-height: 1.7; }
+.plan-banner.good { background: rgba(22,163,74,.10); color: var(--buy); border: 1px solid rgba(22,163,74,.25); }
+.plan-banner.info { background: rgba(91,91,214,.08); color: var(--accent); border: 1px solid rgba(91,91,214,.25); }
+.plan-banner.warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+.plan-banner.neutral { background: var(--bg); color: var(--ink-soft); border: 1px dashed var(--line); }
+.plan-section { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.plan-head { font-size: 12px; font-weight: 800; padding: 8px 14px; letter-spacing: .04em; }
+.sell-head { background: rgba(225,29,72,.08); color: var(--sell); }
+.buy-head { background: rgba(22,163,74,.08); color: var(--buy); }
+.defer-head { background: rgba(202,138,4,.10); color: #a16207; }
+.plan-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.plan-cls { flex: 0 0 auto; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.plan-name { flex: 1 1 200px; font-size: 13.5px; font-weight: 600; }
+.plan-amount { flex: 0 0 auto; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-timing { flex: 0 0 auto; font-size: 12px; white-space: nowrap; }
+.plan-tag { display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; }
+.plan-defer { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.7; }
+.plan-note { font-size: 11.5px; color: var(--ink-soft); margin: 10px 0 0; }
+@media (prefers-color-scheme: dark) {
+  .plan-banner.warn { background: #2e2812; border-color: #4d4014; color: #e0c56a; }
+}

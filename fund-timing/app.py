@@ -365,9 +365,153 @@ def _build_allocation(summaries):
                             "share": round(share, 1), "target": 0,
                             "diff": round(share, 1), "action": "reduce",
                             "action_label": "⬇️ 減らす", "amount": None})
+    plan = _build_rebalance_plan(summaries, classes, total, any_units)
     return {"ok": True, "weights_mode": "value" if any_units else "equal",
             "total_value": round(total) if any_units else None,
-            "classes": classes, "targets": targets}
+            "classes": classes, "targets": targets, "plan": plan}
+
+
+def _timing_score(s):
+    """銘柄の現在のタイミングスコア（+=押し目/買い時, −=過熱/売り時）。"""
+    scores = [h["score"] for h in (s.get("hz") or [])
+              if h.get("ok") and h.get("key") in ("short", "mid") and h.get("score") is not None]
+    if scores:
+        return sum(scores) / len(scores)
+    return s.get("score") or 0
+
+
+def _sell_timing(ts):
+    if ts <= -15:
+        return "good", "🟢 売り時（過熱・高値圏）"
+    if ts >= 20:
+        return "bad", "🔴 安値圏（今売ると損になりやすい）"
+    return "neutral", "🟡 中立（売却可）"
+
+
+def _buy_timing(ts):
+    if ts >= 20:
+        return "good", "🟢 買い時（押し目）"
+    if ts <= -15:
+        return "caution", "🟠 過熱圏（積立での購入向き）"
+    return "neutral", "🟡 中立"
+
+
+def _build_rebalance_plan(summaries, classes, total, any_units):
+    """具体的な売買アドバイス：どれを売り、その資金でどれを買うか。
+
+    売りはテクニカルで高値圏の銘柄を優先し、安値圏の銘柄は損失回避のため除外。
+    売却候補が全て安値圏のクラスは「見送り」にする（無理にリバランスしない）。
+    """
+    import seed_funds
+    if not any_units:
+        return {"status": "no_units",
+                "summary": "保有口数を入力すると、具体的な売買アドバイスを表示します。"}
+
+    icon_of = {name: icon for name, icon, _ in seed_funds.ASSET_CLASSES}
+    over = [c for c in classes if c["diff"] > 5]
+    under = [c for c in classes if c["diff"] < -5]
+    if not over and not under:
+        return {"status": "none",
+                "summary": "✅ リバランスの必要はありません。全クラスが目標との乖離±5pt以内です。"}
+
+    ok_items = [s for s in summaries if s.get("ok") and (s.get("value") or 0) > 0]
+
+    sells, deferred = [], []
+    proceeds = 0.0
+    for c in over:
+        excess = c["diff"] / 100.0 * total
+        funds = [s for s in ok_items
+                 if (s.get("asset_class") or "") == c["name"]]
+        funds.sort(key=_timing_score)  # 過熱（負のスコア）が先＝売り時から
+        sellable = [f for f in funds if _timing_score(f) < 20]
+        if not sellable:
+            deferred.append({
+                "cls": c["name"], "icon": c["icon"],
+                "reason": (f"{c['name']}は目標より{c['diff']:+.1f}pt多めですが、"
+                           "保有銘柄がいずれも安値圏のため、損失回避の観点から今回は売却を見送ります。"
+                           "（積立の配分変更や、値を戻してからの売却がおすすめです）"),
+            })
+            continue
+        remaining = excess
+        for f in sellable:
+            if remaining <= total * 0.01:
+                break
+            amt = min(remaining, f["value"])
+            if amt < total * 0.01:
+                continue
+            ts = _timing_score(f)
+            timing, timing_label = _sell_timing(ts)
+            sells.append({"name": f["name"], "cls": c["name"], "icon": c["icon"],
+                          "amount": round(amt), "timing": timing,
+                          "timing_label": timing_label})
+            proceeds += amt
+            remaining -= amt
+
+    buys = []
+    if under and proceeds > 0:
+        shortfall_total = sum(-c["diff"] for c in under)
+        for c in under:
+            budget = proceeds * (-c["diff"]) / shortfall_total if shortfall_total else 0
+            if budget < total * 0.01:
+                continue
+            cand = _buy_candidate_for_class(summaries, c["name"])
+            buys.append({"name": cand["name"], "cls": c["name"], "icon": c["icon"],
+                         "amount": round(budget),
+                         "timing": cand["timing"], "timing_label": cand["timing_label"],
+                         "in_watchlist": cand["in_watchlist"]})
+
+    if sells:
+        status = "partial" if deferred else "ok"
+        summary = (f"🔁 以下の売買で目標配分に近づけられます"
+                   f"（約 {round(proceeds):,} 円を移動）。")
+        if deferred:
+            summary += " 一部のクラスは安値圏のため見送りです。"
+    elif deferred:
+        status = "defer"
+        summary = ("⏸ 配分の乖離はありますが、売却候補がいずれも安値圏のため、"
+                   "損失回避の観点から今回のリバランスは見送りを推奨します。"
+                   "無理に売らず、今後の積立配分（不足クラスを厚めに買う）での調整がおすすめです。")
+        if under and any_units:
+            add_names = "、".join(f"{icon_of.get(c['name'],'')}{c['name']}" for c in under)
+            summary += f"（買い足すなら {add_names} が不足しています）"
+    else:
+        status = "none"
+        summary = "✅ 大きな乖離はありません。リバランスの必要はありません。"
+
+    return {"status": status, "summary": summary,
+            "sells": sells, "buys": buys, "deferred": deferred,
+            "note": ("※ 取得単価が未登録のため、実際の損益ではなくテクニカルな高値圏/安値圏で"
+                     "売り時・買い時を判断しています。税金・手数料・分配金は考慮していません。"
+                     "投資助言ではなく機械的な目安です。")}
+
+
+def _buy_candidate_for_class(summaries, cls_name):
+    """不足クラスの購入候補：ウォッチリスト内 → 内蔵カタログの順で探す。"""
+    in_watch = [s for s in summaries if s.get("ok")
+                and (s.get("asset_class") or "") == cls_name]
+    if in_watch:
+        best = max(in_watch, key=_timing_score)
+        timing, label = _buy_timing(_timing_score(best))
+        return {"name": best["name"], "timing": timing, "timing_label": label,
+                "in_watchlist": True}
+    # ウォッチリストに無ければ内蔵カタログから提案（価格キャッシュがあれば買い時判定）
+    rows = [r for r in db.search_catalog("", limit=500)
+            if (r.get("asset_class") or "") == cls_name]
+    for r in rows:
+        cached = db.get_cached_series(r["isin"], r["assoc_code"], max_age_hours=24 * 7)
+        if cached and len(cached.get("nav", [])) >= 90:
+            hz = signal_mod.analyze_horizons(cached["dates"], cached["nav"])
+            scores = [h["score"] for h in hz if h.get("ok") and h["key"] in ("short", "mid")]
+            ts = sum(scores) / len(scores) if scores else 0
+            timing, label = _buy_timing(ts)
+            return {"name": r["name"], "timing": timing, "timing_label": label,
+                    "in_watchlist": False}
+    if rows:
+        return {"name": rows[0]["name"], "timing": "unknown",
+                "timing_label": "（一覧に追加すると買い時判定が出ます）",
+                "in_watchlist": False}
+    return {"name": f"{cls_name}クラスの投信（内蔵リストにありません）",
+            "timing": "unknown", "timing_label": "", "in_watchlist": False}
 
 
 @app.route("/api/targets", methods=["GET", "POST"])

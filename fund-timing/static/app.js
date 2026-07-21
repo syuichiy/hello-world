@@ -141,6 +141,55 @@ function renderAllocation(alloc) {
   }).join("");
 
   buildTargetInputs(alloc.targets || {});
+  renderRebalancePlan(alloc.plan);
+}
+
+function renderRebalancePlan(plan) {
+  const el = $("rebalance-plan");
+  if (!plan) { el.innerHTML = ""; return; }
+
+  if (plan.status === "no_units") {
+    el.innerHTML = `<div class="plan-banner neutral">💡 ${escapeHtml(plan.summary)}</div>`;
+    return;
+  }
+  if (plan.status === "none") {
+    el.innerHTML = `<div class="plan-banner good">${escapeHtml(plan.summary)}</div>`;
+    return;
+  }
+
+  let html = `<h3 class="plan-title">🔁 リバランスのアドバイス</h3>`;
+  html += `<div class="plan-banner ${plan.status === "defer" ? "warn" : "info"}">${escapeHtml(plan.summary)}</div>`;
+
+  if (plan.sells && plan.sells.length) {
+    html += `<div class="plan-section"><div class="plan-head sell-head">売却する商品</div>` +
+      plan.sells.map((s) => `
+        <div class="plan-row">
+          <span class="plan-cls">${s.icon} ${escapeHtml(s.cls)}</span>
+          <span class="plan-name">${escapeHtml(s.name)}</span>
+          <span class="plan-amount">約 ${Number(s.amount).toLocaleString()} 円</span>
+          <span class="plan-timing">${escapeHtml(s.timing_label)}</span>
+        </div>`).join("") + `</div>`;
+  }
+
+  if (plan.buys && plan.buys.length) {
+    html += `<div class="plan-section"><div class="plan-head buy-head">売却資金で購入する商品</div>` +
+      plan.buys.map((b) => `
+        <div class="plan-row">
+          <span class="plan-cls">${b.icon} ${escapeHtml(b.cls)}</span>
+          <span class="plan-name">${escapeHtml(b.name)}${b.in_watchlist ? "" : '<span class="plan-tag">内蔵リストより</span>'}</span>
+          <span class="plan-amount">約 ${Number(b.amount).toLocaleString()} 円</span>
+          <span class="plan-timing">${escapeHtml(b.timing_label)}</span>
+        </div>`).join("") + `</div>`;
+  }
+
+  if (plan.deferred && plan.deferred.length) {
+    html += `<div class="plan-section"><div class="plan-head defer-head">今回は見送り（損失回避）</div>` +
+      plan.deferred.map((d) => `
+        <div class="plan-defer">${d.icon} ${escapeHtml(d.reason)}</div>`).join("") + `</div>`;
+  }
+
+  if (plan.note) html += `<p class="plan-note">${escapeHtml(plan.note)}</p>`;
+  el.innerHTML = html;
 }
 
 function buildTargetInputs(targets) {
