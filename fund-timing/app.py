@@ -234,17 +234,17 @@ def api_watchlist_add():
         return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
     if not db.get_catalog(int(catalog_id)):
         return jsonify({"ok": False, "error": "指定の投信が見つかりません。"}), 404
-    db.add_watch(int(catalog_id), broker=(data.get("broker") or ""))
-    return jsonify({"ok": True})
+    added = db.add_watch(int(catalog_id), broker=(data.get("broker") or ""))
+    return jsonify({"ok": True, "added": added})
 
 
 @app.route("/api/watchlist", methods=["DELETE"])
 def api_watchlist_remove():
     data = request.get_json(silent=True) or {}
-    catalog_id = data.get("catalog_id")
-    if catalog_id is None:
-        return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
-    db.remove_watch(int(catalog_id))
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    db.remove_watch(int(watch_id))
     return jsonify({"ok": True})
 
 
@@ -300,6 +300,7 @@ def api_watchlist_analyze():
     summaries = []
     for it in db.list_watchlist():
         s = _summarize_fund(it, range_key, force)
+        s["watch_id"] = it["watch_id"]
         units = float(it.get("units") or 0)
         s["units"] = units
         s["sell_policy"] = it.get("sell_policy") or "full"
@@ -618,13 +619,14 @@ def api_catalog_class():
 
 @app.route("/api/watchlist/broker", methods=["POST"])
 def api_watchlist_broker():
-    """保有先の証券会社を設定する（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）。"""
+    """保有先の証券会社を設定する（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）。
+    watch_id は保有行（watchlist.id）。"""
     data = request.get_json(silent=True) or {}
-    catalog_id = data.get("catalog_id")
-    if catalog_id is None:
-        return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
     try:
-        broker = db.set_broker(int(catalog_id), data.get("broker") or "")
+        broker = db.set_broker(int(watch_id), data.get("broker") or "")
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     return jsonify({"ok": True, "broker": broker})
@@ -651,11 +653,11 @@ def api_catalog_list():
 def api_watchlist_policy():
     """売却属性（full=売却可能 / partial=一部売却可能 / locked=売却不可）を設定する。"""
     data = request.get_json(silent=True) or {}
-    catalog_id = data.get("catalog_id")
+    watch_id = data.get("watch_id")
     policy = data.get("policy")
-    if catalog_id is None or policy not in db.SELL_POLICIES:
-        return jsonify({"ok": False, "error": "catalog_id と policy(full/partial/locked) が必要です。"}), 400
-    db.set_sell_policy(int(catalog_id), policy)
+    if watch_id is None or policy not in db.SELL_POLICIES:
+        return jsonify({"ok": False, "error": "watch_id と policy(full/partial/locked) が必要です。"}), 400
+    db.set_sell_policy(int(watch_id), policy)
     return jsonify({"ok": True, "policy": policy})
 
 
@@ -663,16 +665,16 @@ def api_watchlist_policy():
 def api_watchlist_units():
     """保有口数を登録する。"""
     data = request.get_json(silent=True) or {}
-    catalog_id = data.get("catalog_id")
-    if catalog_id is None:
-        return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
     try:
         units = float(data.get("units") or 0)
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "口数は数値で入力してください。"}), 400
     if units < 0:
         return jsonify({"ok": False, "error": "口数は0以上で入力してください。"}), 400
-    saved = db.set_units(int(catalog_id), units)
+    saved = db.set_units(int(watch_id), units)
     return jsonify({"ok": True, "units": saved})
 
 

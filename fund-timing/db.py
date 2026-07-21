@@ -75,7 +75,7 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
             );
             CREATE TABLE IF NOT EXISTS watchlist (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                catalog_id INTEGER NOT NULL UNIQUE,
+                catalog_id INTEGER NOT NULL,
                 sort_order INTEGER DEFAULT 0,
                 added_at   TEXT,
                 FOREIGN KEY(catalog_id) REFERENCES catalog(id) ON DELETE CASCADE
@@ -101,6 +101,30 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         if "broker" not in cols:
             # 保有先の証券会社（SBI証券 / 楽天証券 / 三菱UFJスマート証券 / 空=未設定）
             c.execute("ALTER TABLE watchlist ADD COLUMN broker TEXT DEFAULT ''")
+        # マイグレーション: 同一商品を複数の証券会社で保有できるよう、
+        # 旧スキーマの UNIQUE(catalog_id) 制約を外す（テーブル再構築）。
+        idxs = c.execute("PRAGMA index_list(watchlist)").fetchall()
+        if any((r["origin"] == "u") for r in idxs):
+            c.executescript(
+                """
+                CREATE TABLE watchlist_new (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    catalog_id INTEGER NOT NULL,
+                    sort_order INTEGER DEFAULT 0,
+                    added_at   TEXT,
+                    units      REAL DEFAULT 0,
+                    sell_policy TEXT DEFAULT 'full',
+                    broker     TEXT DEFAULT '',
+                    FOREIGN KEY(catalog_id) REFERENCES catalog(id) ON DELETE CASCADE
+                );
+                INSERT INTO watchlist_new(id, catalog_id, sort_order, added_at, units, sell_policy, broker)
+                    SELECT id, catalog_id, sort_order, added_at,
+                           COALESCE(units, 0), COALESCE(sell_policy, 'full'), COALESCE(broker, '')
+                    FROM watchlist;
+                DROP TABLE watchlist;
+                ALTER TABLE watchlist_new RENAME TO watchlist;
+                """
+            )
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -156,10 +180,15 @@ def _ensure_seed_stocks_watched(db_path: Optional[str] = None):
         for s in seed_funds.SEED_STOCKS:
             row = c.execute("SELECT id FROM catalog WHERE isin=? AND assoc_code=?",
                             (s["isin"], s["assoc_code"])).fetchone()
-            if row:
-                c.execute("INSERT OR IGNORE INTO watchlist(catalog_id, sort_order, added_at) "
-                          "VALUES (?, (SELECT COALESCE(MAX(sort_order),-1)+1 FROM watchlist), ?)",
-                          (row["id"], dt.datetime.now().isoformat(timespec="seconds")))
+            if not row:
+                continue
+            # UNIQUE制約を外したので、既に保有していないか明示的に確認して重複を防ぐ
+            already = c.execute("SELECT 1 FROM watchlist WHERE catalog_id=?", (row["id"],)).fetchone()
+            if already:
+                continue
+            c.execute("INSERT INTO watchlist(catalog_id, sort_order, added_at) "
+                      "VALUES (?, (SELECT COALESCE(MAX(sort_order),-1)+1 FROM watchlist), ?)",
+                      (row["id"], dt.datetime.now().isoformat(timespec="seconds")))
 
 
 # ------------------------------------------------------------------ settings
@@ -270,11 +299,11 @@ def list_catalog(db_path: Optional[str] = None):
         return [dict(r) for r in rows]
 
 
-def set_units(catalog_id: int, units: float, db_path: Optional[str] = None):
-    """保有口数を設定する（0で未保有扱い）。"""
+def set_units(watch_id: int, units: float, db_path: Optional[str] = None):
+    """保有口数を設定する（0で未保有扱い）。watch_id は保有行（watchlist.id）。"""
     units = max(0.0, float(units or 0))
     with _conn(db_path) as c:
-        c.execute("UPDATE watchlist SET units=? WHERE catalog_id=?", (units, catalog_id))
+        c.execute("UPDATE watchlist SET units=? WHERE id=?", (units, watch_id))
     return units
 
 
@@ -287,40 +316,41 @@ def set_asset_class(catalog_id: int, asset_class: str, db_path: Optional[str] = 
     return asset_class
 
 
-def set_broker(catalog_id: int, broker: str, db_path: Optional[str] = None):
-    """保有先の証券会社を設定する（空文字で未設定）。"""
+def set_broker(watch_id: int, broker: str, db_path: Optional[str] = None):
+    """保有先の証券会社を設定する（空文字で未設定）。watch_id は保有行（watchlist.id）。"""
     broker = (broker or "").strip()
     if broker and broker not in seed_funds.BROKERS:
         raise ValueError("不正な証券会社です。")
     with _conn(db_path) as c:
-        c.execute("UPDATE watchlist SET broker=? WHERE catalog_id=?", (broker, catalog_id))
+        c.execute("UPDATE watchlist SET broker=? WHERE id=?", (broker, watch_id))
     return broker
 
 
 SELL_POLICIES = ("full", "partial", "locked")
 
 
-def set_sell_policy(catalog_id: int, policy: str, db_path: Optional[str] = None):
-    """売却属性を設定する（full=売却可能 / partial=一部売却可能 / locked=売却不可）。"""
+def set_sell_policy(watch_id: int, policy: str, db_path: Optional[str] = None):
+    """売却属性を設定する（full=売却可能 / partial=一部売却可能 / locked=売却不可）。
+    watch_id は保有行（watchlist.id）。"""
     if policy not in SELL_POLICIES:
         raise ValueError("policy は full / partial / locked のいずれかです。")
     with _conn(db_path) as c:
-        c.execute("UPDATE watchlist SET sell_policy=? WHERE catalog_id=?",
-                  (policy, catalog_id))
+        c.execute("UPDATE watchlist SET sell_policy=? WHERE id=?", (policy, watch_id))
     return policy
 
 
 def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
+    """保有を1件追加する。同じ商品でも証券会社が違えば別の保有として追加できる。
+    同一商品×同一証券会社の重複だけは追加しない。"""
     broker = (broker or "").strip()
     if broker and broker not in seed_funds.BROKERS:
         broker = ""
     with _conn(db_path) as c:
-        exists = c.execute("SELECT id FROM watchlist WHERE catalog_id=?", (catalog_id,)).fetchone()
+        exists = c.execute(
+            "SELECT id FROM watchlist WHERE catalog_id=? AND broker=?", (catalog_id, broker)
+        ).fetchone()
         if exists:
-            # 既存でも証券会社の指定があれば更新する
-            if broker:
-                c.execute("UPDATE watchlist SET broker=? WHERE catalog_id=?", (broker, catalog_id))
-            return False
+            return False   # 同じ商品・同じ証券会社は重複追加しない
         mx = c.execute("SELECT COALESCE(MAX(sort_order), -1) FROM watchlist").fetchone()[0]
         c.execute(
             "INSERT INTO watchlist(catalog_id, sort_order, added_at, broker) VALUES (?,?,?,?)",
@@ -329,9 +359,10 @@ def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
         return True
 
 
-def remove_watch(catalog_id: int, db_path: Optional[str] = None):
+def remove_watch(watch_id: int, db_path: Optional[str] = None):
+    """保有を1件削除する（watch_id は watchlist.id）。"""
     with _conn(db_path) as c:
-        c.execute("DELETE FROM watchlist WHERE catalog_id=?", (catalog_id,))
+        c.execute("DELETE FROM watchlist WHERE id=?", (watch_id,))
 
 
 # ------------------------------------------------------------------ cache

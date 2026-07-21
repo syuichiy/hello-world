@@ -67,7 +67,7 @@ function showSkeleton() {
   if (!body.children.length) {
     const cell = (w) => `<td><span class="skel" style="width:${w}px"></span></td>`;
     body.innerHTML = Array.from({ length: 4 }, () =>
-      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
+      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(100)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
     ).join("");
   }
 }
@@ -122,12 +122,12 @@ function brokerChip(broker) {
   if (!broker) return "";
   return `<span class="broker-chip">🏦 ${escapeHtml(broker)}</span>`;
 }
-function brokerSelect(catalogId, broker, cls) {
+function brokerSelect(watchId, broker, cls) {
   const cur = broker || "";
   const opts = ['<option value="">未設定</option>']
     .concat(BROKERS.map((b) => `<option value="${escapeHtml(b)}"${cur === b ? " selected" : ""}>${escapeHtml(b)}</option>`))
     .join("");
-  return `<select class="${cls}" data-id="${catalogId}"
+  return `<select class="${cls}" data-watch="${watchId}"
       title="保有先の証券会社">${opts}</select>`;
 }
 
@@ -303,7 +303,7 @@ function renderClassEditor() {
         <div class="fund-nm">${escapeHtml(s.name)}</div>
         <div class="fund-sub">${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(s.category || s.isin || "")}</div>
       </td>
-      <td>${brokerSelect(s.catalog_id, s.broker, "broker-select")}</td>
+      <td>${brokerSelect(s.watch_id, s.broker, "broker-select")}</td>
       <td>${classSelect(s)}</td>
     </tr>`).join("");
 }
@@ -333,11 +333,11 @@ async function saveAssetClass(catalogId, cls) {
   }
 }
 
-async function saveBroker(catalogId, broker) {
+async function saveBroker(watchId, broker) {
   try {
     const resp = await fetch("/api/watchlist/broker", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ catalog_id: Number(catalogId), broker }),
+      body: JSON.stringify({ watch_id: Number(watchId), broker }),
     });
     const data = await resp.json();
     if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
@@ -375,6 +375,13 @@ async function loadPresetCatalog() {
 function renderPresetCatalog() {
   const body = $("preset-add-body");
   if (!body) return;
+  // どの商品を、どの証券会社で保有しているか（同一商品を複数証券会社で持てる）
+  const heldByCatalog = {};
+  lastSummaries.forEach((s) => {
+    if (s.catalog_id != null) {
+      (heldByCatalog[s.catalog_id] = heldByCatalog[s.catalog_id] || []).push(s.broker || "未設定");
+    }
+  });
   let rows = presetCatalog.slice();
   if (presetClassFilter) rows = rows.filter((r) => r.asset_class === presetClassFilter);
   // 資産クラス→名前で並べる
@@ -385,19 +392,18 @@ function renderPresetCatalog() {
     return a.name.localeCompare(b.name, "ja");
   });
   body.innerHTML = rows.map((r) => {
-    const add = r.watched
-      ? '<span class="si-added">✓ 追加済</span>'
-      : `<button class="si-add preset-add-btn" data-id="${r.id}">＋ 追加</button>`;
-    const brokerCell = r.watched ? "—"
-      : brokerSelect(r.id, "", "preset-broker-select");
+    const held = heldByCatalog[r.id];
+    const heldHint = held && held.length
+      ? `<div class="held-hint">🏦 保有中：${escapeHtml(held.join("、"))}</div>` : "";
     return `<tr class="preset-catalog-row" data-id="${r.id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(r.name)}</div>
         <div class="fund-sub">${r.kind === "stock" ? '<span class="kind-chip">株</span>' : ""}${escapeHtml(r.category || "")}</div>
+        ${heldHint}
       </td>
       <td>${classChip(r.asset_class)}</td>
-      <td>${brokerCell}</td>
-      <td>${add}</td>
+      <td>${brokerSelect(r.id, "", "preset-broker-select")}</td>
+      <td><button class="si-add preset-add-btn" data-id="${r.id}">＋ 追加</button></td>
     </tr>`;
   }).join("");
 }
@@ -405,11 +411,16 @@ const ASSET_CLASS_NAMES_ORDER = Object.fromEntries(
   Object.keys(ASSET_CLASS_META).map((n, i) => [n, i]));
 
 async function addPreset(catalogId, broker) {
-  await fetch("/api/watchlist", {
+  const resp = await fetch("/api/watchlist", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ catalog_id: Number(catalogId), broker: broker || "" }),
   });
-  toast("✓ ポートフォリオに追加しました");
+  const data = await resp.json().catch(() => ({}));
+  if (data && data.added === false) {
+    toast(broker ? `既に「${broker}」で保有しています` : "既に保有しています（証券会社を選ぶと別口座で追加できます）");
+    return;
+  }
+  toast(broker ? `✓ ${broker}の口座に追加しました` : "✓ ポートフォリオに追加しました");
   loadWatchlist();
 }
 
@@ -455,12 +466,12 @@ function renderPortfolio(pf) {
   else { note.hidden = true; }
 }
 
-// 売却属性の保存（リバランス計画に反映）
-async function savePolicy(catalogId, policy) {
+// 売却属性の保存（リバランス計画に反映）※保有行(watch_id)単位
+async function savePolicy(watchId, policy) {
   try {
     const resp = await fetch("/api/watchlist/policy", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ catalog_id: Number(catalogId), policy }),
+      body: JSON.stringify({ watch_id: Number(watchId), policy }),
     });
     const data = await resp.json();
     if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
@@ -471,12 +482,12 @@ async function savePolicy(catalogId, policy) {
   }
 }
 
-// 保有口数の保存
-async function saveUnits(catalogId, units) {
+// 保有口数の保存 ※保有行(watch_id)単位
+async function saveUnits(watchId, units) {
   try {
     const resp = await fetch("/api/watchlist/units", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ catalog_id: Number(catalogId), units: Number(units) || 0 }),
+      body: JSON.stringify({ watch_id: Number(watchId), units: Number(units) || 0 }),
     });
     const data = await resp.json();
     if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
@@ -514,12 +525,11 @@ function renderWatchTable() {
 
   body.innerHTML = rows.map((s) => {
     if (!s.ok) {
-      return `<tr class="err-row" data-id="${s.catalog_id}">
+      return `<tr class="err-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
-          <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
-        <td colspan="7" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
-        <td></td>
-        <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td></tr>`;
+          <div class="fund-sub">${classChip(s.asset_class)}${brokerChip(s.broker)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
+        <td colspan="9" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
+        <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td></tr>`;
     }
     const badge = verdictBadge(s.verdict, s.verdict_label);
     const chg = s.change_pct == null ? "—"
@@ -527,22 +537,23 @@ function renderWatchTable() {
     const price = s.latest_price == null ? "—" : Number(s.latest_price).toLocaleString() + " 円";
     const unitsVal = s.units > 0 ? s.units : "";
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
-    return `<tr class="watch-row" data-id="${s.catalog_id}">
+    return `<tr class="watch-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
-        <div class="fund-sub">${classChip(s.asset_class)}${brokerChip(s.broker)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
+        <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
       <td class="num">${price}</td>
       <td class="num"><input class="units-input" type="number" min="0" step="1"
-            data-id="${s.catalog_id}" value="${unitsVal}" placeholder="口数"
+            data-watch="${s.watch_id}" value="${unitsVal}" placeholder="口数"
             title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
       <td class="num value-cell">${value}</td>
+      <td>${brokerSelect(s.watch_id, s.broker, "broker-select row-broker")}</td>
       <td>${policySelect(s)}</td>
       <td class="num">${chg}</td>
       <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
-      <td><button class="row-del" data-id="${s.catalog_id}" title="削除">✕</button></td>
+      <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td>
     </tr>`;
   }).join("");
 }
@@ -550,7 +561,7 @@ function renderWatchTable() {
 function policySelect(s) {
   const p = s.sell_policy || "full";
   const opt = (v, label) => `<option value="${v}"${p === v ? " selected" : ""}>${label}</option>`;
-  return `<select class="policy-select policy-${p}" data-id="${s.catalog_id}"
+  return `<select class="policy-select policy-${p}" data-watch="${s.watch_id}"
       title="リバランスで売却してよいかの設定（計画に反映されます）">
     ${opt("full", "○ 売却可")}${opt("partial", "△ 一部可")}${opt("locked", "✕ 不可")}
   </select>`;
@@ -667,29 +678,33 @@ async function doSearch() {
     <div class="search-item">
       <div class="si-text"><div class="si-name">${escapeHtml(r.name)}</div>
         <div class="si-sub">${classChip(r.asset_class)}${escapeHtml(r.category || "")} ${escapeHtml(r.isin)}</div></div>
-      ${r.watched
-        ? '<span class="si-added">✓ 追加済</span>'
-        : `<button class="si-add" data-id="${r.id}">＋ 一覧に追加</button>`}
+      ${r.watched ? '<span class="si-added">保有中</span>' : ''}
+      <button class="si-add" data-id="${r.id}">＋ ${r.watched ? "追加" : "一覧に追加"}</button>
     </div>`).join("");
   box.hidden = false;
   searchSel = -1;
 }
 
 async function addToWatch(catalogId) {
-  await fetch("/api/watchlist", {
+  const resp = await fetch("/api/watchlist", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ catalog_id: Number(catalogId) }),
   });
+  const data = await resp.json().catch(() => ({}));
   $("search-results").hidden = true;
   $("search-input").value = "";
+  if (data && data.added === false) {
+    toast("既に保有しています（証券会社は一覧で設定できます）");
+    return;
+  }
   toast("✓ ウォッチリストに追加しました");
   loadWatchlist();
 }
 
-async function removeFromWatch(catalogId) {
+async function removeFromWatch(watchId) {
   await fetch("/api/watchlist", {
     method: "DELETE", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ catalog_id: Number(catalogId) }),
+    body: JSON.stringify({ watch_id: Number(watchId) }),
   });
   loadWatchlist();
 }
@@ -964,18 +979,22 @@ $("reg-submit").addEventListener("click", registerFund);
 
 $("watch-body").addEventListener("click", (e) => {
   const del = e.target.closest(".row-del");
-  if (del) { e.stopPropagation(); removeFromWatch(del.dataset.id); return; }
-  if (e.target.closest(".units-input") || e.target.closest(".policy-select")) return;  // 入力・設定中は詳細を開かない
+  if (del) { e.stopPropagation(); removeFromWatch(del.dataset.watch); return; }
+  // 入力・設定中は詳細を開かない
+  if (e.target.closest(".units-input") || e.target.closest(".policy-select")
+      || e.target.closest(".row-broker")) return;
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
 
-// 保有口数の入力（変更確定で保存）
+// 保有口数・売却属性・証券会社の変更（確定で保存）※すべて保有行(watch_id)単位
 $("watch-body").addEventListener("change", (e) => {
   const input = e.target.closest(".units-input");
-  if (input) { saveUnits(input.dataset.id, input.value); return; }
-  const sel = e.target.closest(".policy-select");
-  if (sel) savePolicy(sel.dataset.id, sel.value);
+  if (input) { saveUnits(input.dataset.watch, input.value); return; }
+  const pol = e.target.closest(".policy-select");
+  if (pol) { savePolicy(pol.dataset.watch, pol.value); return; }
+  const brk = e.target.closest(".row-broker");
+  if (brk) saveBroker(brk.dataset.watch, brk.value);
 });
 $("watch-body").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.closest(".units-input")) e.target.blur();
@@ -1024,9 +1043,9 @@ $("targets-form").addEventListener("click", (e) => {
 // 保有銘柄の設定（証券会社・資産クラス）の変更
 $("class-edit-body").addEventListener("change", (e) => {
   const cls = e.target.closest(".class-select");
-  if (cls) { saveAssetClass(cls.dataset.id, cls.value); return; }
+  if (cls) { saveAssetClass(cls.dataset.id, cls.value); return; }  // 資産クラスは商品(catalog)単位
   const brk = e.target.closest(".broker-select");
-  if (brk) saveBroker(brk.dataset.id, brk.value);
+  if (brk) saveBroker(brk.dataset.watch, brk.value);              // 証券会社は保有行(watch_id)単位
 });
 
 // 内蔵商品の追加（証券会社を選んで＋追加）

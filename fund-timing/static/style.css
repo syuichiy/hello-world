@@ -226,6 +226,31 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 .table-card, .ranking-card { padding: 8px 8px 12px; overflow-x: auto; }
 .ranking-card { padding: 22px; }
 .watch-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 860px; }
+
+/* 銘柄一覧テーブル：列幅を固定してレイアウト崩れ（列の潰れ・折返し）を防ぐ。
+   ランキング表(.ranking-card内)は列構成が違うため対象外。 */
+.table-card .watch-table { table-layout: fixed; min-width: 1130px; }
+.table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 212px; }
+.table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 118px; }
+.table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 138px; }
+.table-card .watch-table th:nth-child(4),  .table-card .watch-table td:nth-child(4)  { width: 92px; }
+.table-card .watch-table th:nth-child(5),  .table-card .watch-table td:nth-child(5)  { width: 94px; }
+.table-card .watch-table th:nth-child(6),  .table-card .watch-table td:nth-child(6)  { width: 104px; }
+.table-card .watch-table th:nth-child(7),  .table-card .watch-table td:nth-child(7)  { width: 132px; }
+.table-card .watch-table th:nth-child(8),  .table-card .watch-table td:nth-child(8)  { width: 104px; }
+.table-card .watch-table th:nth-child(9),  .table-card .watch-table td:nth-child(9)  { width: 72px; }
+.table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 112px; }
+.table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 44px; }
+.table-card .watch-table .fund-nm { white-space: normal; word-break: break-word; line-height: 1.35; }
+.table-card .watch-table .units-input,
+.table-card .watch-table .policy-select,
+.table-card .watch-table .row-broker { width: 100%; max-width: 100%; box-sizing: border-box; }
+/* 数値入力のスピナーを消して桁を見やすく（口数が6桁でも切れない） */
+.units-input { -moz-appearance: textfield; appearance: textfield; }
+.units-input::-webkit-outer-spin-button,
+.units-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.table-card .watch-table .units-input { text-align: right; }
+.held-hint { font-size: 11px; color: var(--accent); font-weight: 700; margin-top: 4px; }
 .watch-table thead th {
   position: sticky; top: 0; z-index: 5;
   background: var(--card);
