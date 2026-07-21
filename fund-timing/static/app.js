@@ -1122,18 +1122,38 @@ $("watch-body").addEventListener("click", (e) => {
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
 
-// 数値入力を3桁カンマで整形（口数・投資金額）
+// 入力中に「そっと保存」（再描画なし）。フォーカスを外さずリロードしても消えないように
+async function persistField(path, watchId, key, value) {
+  try {
+    await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: Number(watchId), [key]: Number(value) || 0 }),
+    });
+  } catch (_) { /* 入力途中の保存失敗は無視（確定時に再保存される） */ }
+}
+
+// 数値入力を3桁カンマで整形しつつ、入力のたびにデバウンスしてDBへ保存
+let fieldSaveTimer = null;
 $("watch-body").addEventListener("input", (e) => {
   const el = e.target.closest(".num-comma");
-  if (el) reformatCommaInput(el);
+  if (!el) return;
+  reformatCommaInput(el);
+  const isUnits = el.classList.contains("units-input");
+  const watchId = el.dataset.watch;
+  const value = parseIntComma(el.value);
+  clearTimeout(fieldSaveTimer);
+  fieldSaveTimer = setTimeout(() => {
+    persistField(isUnits ? "/api/watchlist/units" : "/api/watchlist/invested",
+                 watchId, isUnits ? "units" : "invested", value);
+  }, 400);
 });
 
-// 口数・投資金額・売却属性・証券会社の変更（確定で保存）※すべて保有行(watch_id)単位
+// 口数・投資金額・売却属性・証券会社の確定（フォーカスを外す/Enter）※保有行(watch_id)単位
 $("watch-body").addEventListener("change", (e) => {
   const units = e.target.closest(".units-input");
-  if (units) { saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
+  if (units) { clearTimeout(fieldSaveTimer); saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
   const inv = e.target.closest(".invested-input");
-  if (inv) { saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
+  if (inv) { clearTimeout(fieldSaveTimer); saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
   const pol = e.target.closest(".policy-select");
   if (pol) { savePolicy(pol.dataset.watch, pol.value); return; }
   const brk = e.target.closest(".row-broker");
