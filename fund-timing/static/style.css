@@ -471,6 +471,13 @@ tr:hover .row-del { opacity: 1; }
   background: var(--ink); color: var(--card);
   border-radius: 5px; padding: 0 5px; margin-right: 4px;
 }
+.acct-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  background: rgba(202,138,4,.12); color: #a16207;
+  border: 1px solid rgba(202,138,4,.3);
+  border-radius: 999px; padding: 0 7px; margin-right: 4px; white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) { .acct-chip { color: #e0c56a; } }
 @media (max-width: 680px) { .alloc-charts { grid-template-columns: 1fr; } }
 
 /* ------------------------------------------------ リバランスのアドバイス */
@@ -513,11 +520,13 @@ tr:hover .row-del { opacity: 1; }
 .main-nav {
   display: flex; gap: 6px; margin-bottom: 16px;
   border-bottom: 1.5px solid var(--line);
+  position: sticky; top: 0; z-index: 30;
+  background: var(--bg); padding-top: 8px;
 }
 .nav-tab {
   appearance: none; border: none; background: transparent; cursor: pointer;
   font-size: 14.5px; font-weight: 700; color: var(--ink-soft);
-  padding: 10px 18px; border-radius: 10px 10px 0 0;
+  padding: 12px 20px; border-radius: 10px 10px 0 0;
   border-bottom: 2.5px solid transparent; margin-bottom: -1.5px;
   transition: color .15s, background .15s, border-color .15s;
 }
@@ -629,6 +638,17 @@ tr:hover .row-del { opacity: 1; }
 .price-table thead th.pt-namecol { z-index: 3; background: var(--bg); }
 .price-table tbody tr:nth-child(even) .pt-namecol { background: var(--bg); }
 .price-table td.pt-col { border-left: 4px solid var(--cc, var(--line)); }
+.price-table .pt-acct { font-size: 10.5px; font-weight: 600; color: var(--ink-soft); margin-top: 2px; }
+/* 損益率の列も固定（商品名の右隣） */
+.price-table .pt-plcol {
+  position: sticky; left: 220px; z-index: 2; background: var(--card);
+  min-width: 76px; max-width: 76px; text-align: right; font-weight: 800;
+  box-shadow: 1px 0 0 var(--line);
+}
+.price-table thead th.pt-plcol { z-index: 3; background: var(--bg); }
+.price-table tbody tr:nth-child(even) .pt-plcol { background: var(--bg); }
+.price-table .pt-broker-row .pt-plcol { background: rgba(91,91,214,.12); }
+.price-table .pt-total-row .pt-plcol { background: var(--bg); }
 .price-table .pt-total-row td { font-weight: 800; border-top: 2px solid var(--line); background: var(--bg); }
 .price-table .pt-total-row .pt-namecol { color: var(--ink); }
 .price-table .pt-broker-row td { background: rgba(91,91,214,.08); font-weight: 800; font-size: 12px; color: var(--accent); padding: 6px 10px; }
@@ -642,3 +662,22 @@ tr:hover .row-del { opacity: 1; }
 .pf-sum-val.up { color: var(--buy); }
 .pf-sum-val.down { color: var(--sell); }
 @media (max-width: 680px) { .pf-sum-grid { grid-template-columns: 1fr 1fr; } }
+
+/* ------------------------------------------------ タブレット・タッチ操作向け */
+@media (pointer: coarse) {
+  .nav-tab { padding: 14px 22px; font-size: 15.5px; }
+  .range-btn, .pm-btn { min-height: 44px; padding-left: 16px; padding-right: 16px; }
+  .broker-select, .class-select, .policy-select, .preset-broker-select,
+  #preset-class-filter, .preset-filter select,
+  .units-input, .invested-input, #search-input, #reg-name, #reg-code {
+    min-height: 44px; font-size: 15px;
+  }
+  .ghost-btn, .si-add, .preset-add-btn, #reg-submit, .preset-btn, #targets-save { min-height: 44px; }
+  .row-del { width: 40px; height: 40px; font-size: 15px; }
+  .search-item { padding: 14px 15px; }
+}
+/* 構造を見やすく：カード間の余白・見出しの明確化 */
+main > section { display: block; }
+.card { margin-bottom: 18px; }
+.card h2 { letter-spacing: .01em; }
+.dashboard-toolbar, .price-toggles { align-items: center; }

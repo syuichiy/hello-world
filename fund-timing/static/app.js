@@ -489,20 +489,25 @@ function renderPriceChart(holdings, totals) {
     });
   }
   if (!totalOnly) {   // 商品別モード：各商品の線のみ（合計・個別株は出さない）
+    // 同じ正式名が複数あるとき（例：S&P500の成長/積立/旧NISA）は口座名を添えて区別
+    const nameCount = {};
+    holdings.forEach((h) => { nameCount[h.name] = (nameCount[h.name] || 0) + 1; });
     holdings.forEach((h, i) => {
       if (h.kind === "stock") return;   // 日立などの個別株は商品別グラフから除外
       const y = amountMode ? h.amount : h.ratio;
       if (!y || !y.length) return;   // データが無いものだけ除外
+      const nm = (nameCount[h.name] > 1 && h.account) ? `${h.name}（${h.account}）` : h.name;
       traces.push({
-        x: h.dates, y: y, name: h.name, mode: "lines",
+        x: h.dates, y: y, name: nm, mode: "lines",
         line: { width: 1.6, color: PRICE_COLORS[i % PRICE_COLORS.length] },
-        hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(h.name) + " %{y:,.0f} 円<extra></extra>"
-                                  : "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
+        hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(nm) + " %{y:,.0f} 円<extra></extra>"
+                                  : "%{x}<br>" + escapeHtml(nm) + " %{y:.1f}%<extra></extra>",
       });
     });
   }
   const layout = baseLayout();
   layout.height = 460;
+  layout.hovermode = "closest";   // 触れた1本だけを表示（吹き出しを見やすく）
   layout.margin = { l: amountMode ? 78 : 64, r: 20, t: 12, b: 40 };
   layout.legend = { orientation: "h", y: -0.18, font: { size: 10.5 } };
   if (amountMode) {
@@ -523,8 +528,14 @@ function renderPriceTable(holdings, dates, totals) {
   card.hidden = false;
   const cols = dates.slice().reverse();   // 新しい日付が左
   const ndates = cols.length;
-  // ヘッダ：商品名（固定列）＋ 各日付
-  $("price-table-head").innerHTML = `<th class="pt-namecol">商品名</th>` +
+  const plCell = (r) => {   // 損益率セル（r=比率%）。マイナスは赤字
+    if (r == null) return `<td class="num pt-plcol">—</td>`;
+    const pl = Math.round((r - 100) * 10) / 10;
+    return `<td class="num pt-plcol ${pl >= 0 ? "up" : "down"}">${pl >= 0 ? "+" : ""}${pl}%</td>`;
+  };
+  // ヘッダ：商品名（固定）＋ 損益率（固定）＋ 各日付
+  $("price-table-head").innerHTML =
+    `<th class="pt-namecol">商品名</th><th class="num pt-plcol">損益率</th>` +
     cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
   // 証券会社順（SBI→三菱UFJ→楽天→その他）に並べ替え。色はグラフと合わせて元の並び順で固定
   const withColor = holdings.map((h, i) => ({ h, color: PRICE_COLORS[i % PRICE_COLORS.length] }));
@@ -539,20 +550,23 @@ function renderPriceTable(holdings, dates, totals) {
     if (bk !== curBroker) {   // 証券会社の区切り見出し行
       curBroker = bk;
       html += `<tr class="pt-broker-row"><td class="pt-namecol">🏦 ${escapeHtml(bk)}</td>` +
-        `<td class="num" colspan="${ndates}"></td></tr>`;
+        `<td class="pt-plcol"></td><td class="num" colspan="${ndates}"></td></tr>`;
     }
     const m = {}; h.dates.forEach((d, k) => { m[d] = h.amount[k]; });
     const cells = cols.map((d) => {
       const v = m[d];
       return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
     }).join("");
-    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}</td>${cells}</tr>`;
+    const acct = (h.account && h.account !== h.name)
+      ? `<div class="pt-acct">${escapeHtml(h.account)}</div>` : "";
+    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio)}${cells}</tr>`;
   });
+  const totRatio = totals.length ? totals[totals.length - 1].ratio : null;
   const totalCells = cols.map((d) => {
     const v = totalMap[d];
     return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
   }).join("");
-  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${totalCells}</tr>`;
+  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio)}${totalCells}</tr>`;
   $("price-table-body").innerHTML = html;
 }
 
@@ -689,7 +703,7 @@ function renderWatchTable() {
     return `<tr class="watch-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
-        <div class="fund-sub">${classChip(s.asset_class)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
+        <div class="fund-sub">${classChip(s.asset_class)}${s.account && s.account !== s.name ? `<span class="acct-chip">${escapeHtml(s.account)}</span>` : ""}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
@@ -960,6 +974,9 @@ function baseLayout() {
     xaxis: { gridcolor: dark ? "#333" : "#eee", type: "date" },
     yaxis: { gridcolor: dark ? "#333" : "#eee" },
     legend: { orientation: "h", y: 1.12 }, hovermode: "x unified",
+    // ホバー時の吹き出しを、白地に白文字にならないよう濃色背景＋白文字で固定
+    hoverlabel: { bgcolor: "#1e2130", bordercolor: "#1e2130",
+                  font: { color: "#ffffff", size: 12.5, family: "Hiragino Sans, sans-serif" } },
   };
 }
 function drawPriceChart(data) {

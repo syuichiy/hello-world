@@ -316,9 +316,8 @@ def api_watchlist_analyze():
         s = _summarize_fund(it, range_key, force)
         s["watch_id"] = it["watch_id"]
         wid = it["watch_id"]
-        # 表示名は保有ラベル（口座名など）があれば優先
-        if it.get("label"):
-            s["name"] = it["label"]
+        # 正式なファンド名（catalog名）を表示。口座ニックネームは account に添える
+        s["account"] = it.get("label") or ""
         units = float(it.get("units") or 0)
         s["invested"] = float(it.get("invested") or 0)
         s["sell_policy"] = it.get("sell_policy") or "full"
@@ -822,10 +821,11 @@ def api_actual_history():
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
         ratio = [round(a / inv * 100, 2) for a in amounts] if inv > 0 else None
-        name = it.get("label") or it.get("name") or ""
+        official = it.get("name") or it.get("label") or ""   # catalog（正式なファンド名）
         result.append({
-            "id": it["watch_id"], "name": name,
-            "fund_name": it.get("name", "") or "",
+            "id": it["watch_id"], "name": official,
+            "account": it.get("label") or "",                # 口座ニックネーム（成長/積立/旧NISA 等）
+            "fund_name": official,
             "broker": it.get("broker", "") or "",
             "asset_class": it.get("asset_class", "") or "",
             "kind": it.get("kind", "fund") or "fund",
