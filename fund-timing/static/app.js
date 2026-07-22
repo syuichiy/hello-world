@@ -451,6 +451,7 @@ async function loadPriceHistory() {
 
 let lastActualData = null;
 let priceMode = "ratio";   // "ratio"（比率%）| "amount"（実額円）
+let lineMode = "products";  // "products"（商品別）| "total"（合計のみ）
 
 function renderPriceSummary(data) {
   const card = $("price-summary-card");
@@ -475,25 +476,28 @@ function renderPriceChart(holdings, totals) {
   if (!holdings.length) { empty.hidden = false; Plotly.purge("price-chart"); return; }
   empty.hidden = true;
   const amountMode = priceMode === "amount";
+  const totalOnly = lineMode === "total";
   const traces = [];
-  if (totals.length) {
+  if (totals.length) {   // 合計線は両モードで表示
     traces.push({
       x: totals.map((t) => t.date), y: totals.map((t) => amountMode ? t.amount : t.ratio),
       name: "合計（全体）", mode: "lines",
-      line: { width: 3.5, color: isDark() ? "#e7e8ef" : "#1e2130" },
+      line: { width: totalOnly ? 3 : 3.5, color: isDark() ? "#e7e8ef" : "#1e2130" },
       hovertemplate: amountMode ? "%{x}<br>全体 %{y:,.0f} 円<extra></extra>"
                                 : "%{x}<br>全体 %{y:.1f}%<extra></extra>",
     });
   }
-  holdings.forEach((h, i) => {
-    if (!amountMode && !h.ratio) return;   // 比率モードで投資金額0の商品は線を描かない
-    traces.push({
-      x: h.dates, y: amountMode ? h.amount : h.ratio, name: h.name, mode: "lines",
-      line: { width: 1.5, color: PRICE_COLORS[i % PRICE_COLORS.length] },
-      hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(h.name) + " %{y:,.0f} 円<extra></extra>"
-                                : "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
+  if (!totalOnly) {
+    holdings.forEach((h, i) => {
+      if (!amountMode && !h.ratio) return;   // 比率モードで投資金額0の商品は線を描かない
+      traces.push({
+        x: h.dates, y: amountMode ? h.amount : h.ratio, name: h.name, mode: "lines",
+        line: { width: 1.5, color: PRICE_COLORS[i % PRICE_COLORS.length] },
+        hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(h.name) + " %{y:,.0f} 円<extra></extra>"
+                                  : "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
+      });
     });
-  });
+  }
   const layout = baseLayout();
   layout.height = 460;
   layout.margin = { l: amountMode ? 78 : 64, r: 20, t: 12, b: 40 };
@@ -513,20 +517,27 @@ function renderPriceTable(holdings, dates, totals) {
   const card = $("price-table-card");
   if (!holdings.length || !dates.length) { card.hidden = true; return; }
   card.hidden = false;
-  $("price-table-head").innerHTML = `<th>日付</th>` +
-    holdings.map((h, i) => `<th class="num pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.name)}</th>`).join("") +
-    `<th class="num pt-total-col">合計</th>`;
-  const maps = holdings.map((h) => { const m = {}; h.dates.forEach((d, i) => { m[d] = h.amount[i]; }); return m; });
+  const cols = dates.slice().reverse();   // 新しい日付が左
+  // ヘッダ：商品名（固定列）＋ 各日付
+  $("price-table-head").innerHTML = `<th class="pt-namecol">商品名</th>` +
+    cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
+  // 各商品を1行に（縦軸＝商品、横軸＝日付）
   const totalMap = {}; totals.forEach((t) => { totalMap[t.date] = t.amount; });
-  const rows = dates.slice().reverse();   // 新しい日付が上
-  $("price-table-body").innerHTML = rows.map((d) => {
-    const cells = maps.map((m) => {
+  const body = holdings.map((h, i) => {
+    const m = {}; h.dates.forEach((d, k) => { m[d] = h.amount[k]; });
+    const cells = cols.map((d) => {
       const v = m[d];
       return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
     }).join("");
-    const tot = totalMap[d];
-    return `<tr><td>${d}</td>${cells}<td class="num pt-total-col">${tot == null ? "—" : Number(tot).toLocaleString()}</td></tr>`;
+    return `<tr><td class="pt-namecol pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.name)}</td>${cells}</tr>`;
   }).join("");
+  // 合計行
+  const totalCells = cols.map((d) => {
+    const v = totalMap[d];
+    return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
+  }).join("");
+  $("price-table-body").innerHTML = body +
+    `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${totalCells}</tr>`;
 }
 
 // 保有全体（ポートフォリオ）の目安カード
@@ -826,11 +837,14 @@ async function addToWatch(catalogId) {
   loadWatchlist();
 }
 
-async function removeFromWatch(watchId) {
+async function removeFromWatch(watchId, name) {
+  const label = name ? `「${name}」` : "この銘柄";
+  if (!confirm(`${label}を一覧から削除します。よろしいですか？\n（評価額の履歴も削除されます）`)) return;
   await fetch("/api/watchlist", {
     method: "DELETE", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ watch_id: Number(watchId) }),
   });
+  toast("✓ 削除しました");
   loadWatchlist();
 }
 
@@ -1130,7 +1144,13 @@ $("reg-submit").addEventListener("click", registerFund);
 
 $("watch-body").addEventListener("click", (e) => {
   const del = e.target.closest(".row-del");
-  if (del) { e.stopPropagation(); removeFromWatch(del.dataset.watch); return; }
+  if (del) {
+    e.stopPropagation();
+    const row = del.closest("tr");
+    const nm = row && row.querySelector(".fund-nm") ? row.querySelector(".fund-nm").textContent.trim() : "";
+    removeFromWatch(del.dataset.watch, nm);
+    return;
+  }
   // 入力・設定中は詳細を開かない
   if (e.target.closest(".units-input") || e.target.closest(".invested-input")
       || e.target.closest(".policy-select") || e.target.closest(".row-broker")) return;
@@ -1230,6 +1250,16 @@ $("price-mode-toggle").addEventListener("click", (e) => {
   priceMode = b.dataset.mode;
   document.querySelectorAll("#price-mode-toggle .pm-btn").forEach((x) =>
     x.classList.toggle("active", x.dataset.mode === priceMode));
+  if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
+});
+
+// 価格推移グラフの表示切替（商品別 / 合計のみ）
+$("price-line-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest(".pm-btn");
+  if (!b || b.dataset.line === lineMode) return;
+  lineMode = b.dataset.line;
+  document.querySelectorAll("#price-line-toggle .pm-btn").forEach((x) =>
+    x.classList.toggle("active", x.dataset.line === lineMode));
   if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
 });
 

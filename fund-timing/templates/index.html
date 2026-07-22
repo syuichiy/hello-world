@@ -269,9 +269,15 @@
           正規化して比較します（縦軸＝評価額 ÷ 投資金額 %、横軸＝日付、100%＝元本の基準線）。
           太線は<strong>ポートフォリオ全体</strong>の比率です。凡例をクリックすると個別に表示/非表示できます。
         </p>
-        <div class="price-mode-toggle" id="price-mode-toggle">
-          <button class="pm-btn active" data-mode="ratio">比率（%）</button>
-          <button class="pm-btn" data-mode="amount">実額（円）</button>
+        <div class="price-toggles">
+          <div class="price-mode-toggle" id="price-mode-toggle">
+            <button class="pm-btn active" data-mode="ratio">比率（%）</button>
+            <button class="pm-btn" data-mode="amount">実額（円）</button>
+          </div>
+          <div class="price-mode-toggle" id="price-line-toggle">
+            <button class="pm-btn active" data-line="products">商品別</button>
+            <button class="pm-btn" data-line="total">合計のみ</button>
+          </div>
         </div>
         <div id="price-chart"></div>
         <p id="price-empty" class="empty-watch" hidden>
