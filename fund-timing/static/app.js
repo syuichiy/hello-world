@@ -470,6 +470,19 @@ function renderPriceSummary(data) {
   $("sum-pl").className = "pf-sum-val " + (pl >= 0 ? "up" : "down");
   $("sum-plr").textContent = (plr >= 0 ? "+" : "") + plr.toFixed(1) + "%";
   $("sum-plr").className = "pf-sum-val " + (plr >= 0 ? "up" : "down");
+
+  // 前日比（合計評価額の直近2日の差）
+  const dod = $("sum-dod");
+  if (totals.length >= 2) {
+    const prev = totals[totals.length - 2].amount;
+    const diff = cur - prev;
+    const dpct = prev > 0 ? (diff / prev * 100) : 0;
+    dod.textContent = `${diff >= 0 ? "+" : ""}${Number(diff).toLocaleString()} 円`
+      + `（${dpct >= 0 ? "+" : ""}${dpct.toFixed(2)}%）`;
+    dod.className = "pf-sum-val pf-sum-dod " + (diff >= 0 ? "up" : "down");
+  } else {
+    dod.textContent = "—"; dod.className = "pf-sum-val pf-sum-dod";
+  }
 }
 
 function renderPriceChart(holdings, totals) {

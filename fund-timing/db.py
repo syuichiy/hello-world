@@ -197,6 +197,15 @@ def _load_portfolio_seed():
         return []
 
 
+def recorded_max_date():
+    """取引履歴（Excel実額）の最終日付を返す。これより後の日付だけを当日更新で追記する
+    （記録済みの実額を上書きしないためのガード）。"""
+    dates = []
+    for p in _load_portfolio_seed():
+        dates.extend((p.get("history") or {}).keys())
+    return max(dates) if dates else None
+
+
 def _clean_history(hist):
     """明らかな外れ値（桁落ち等）を欠測扱いにする。中央値の0.25〜4倍の範囲外を除外。"""
     pairs = []

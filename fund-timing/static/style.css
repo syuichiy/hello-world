@@ -655,7 +655,8 @@ tr:hover .row-del { opacity: 1; }
 .price-table .pt-broker-row .pt-namecol { background: rgba(91,91,214,.12); box-shadow: 1px 0 0 var(--line); }
 
 /* 合計サマリ */
-.pf-sum-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.pf-sum-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.pf-sum-val.pf-sum-dod { font-size: 15px; }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }

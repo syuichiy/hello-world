@@ -329,11 +329,12 @@ def api_watchlist_analyze():
         # 口数は画面で入力された値をそのまま使う（自動推定はしない）
         s["units"] = units
 
-        # 評価額 = 現在価格 × 画面入力の口数（＝現在の評価額・表示のみ）。
-        # ※取引履歴（実額）の amount_history は書き換えない（過去の実額を壊さないため）。
+        # 評価額 = 現在価格 × 画面入力の口数（＝現在の評価額）。
         last_hist_date = max(hist.keys()) if hist else None
         if s.get("ok") and units > 0 and s.get("latest_price"):
             s["value"] = round(s["latest_price"] * units / divisor)
+            # 当日の評価額をDBへ反映（記録期間より後の日付だけ追記＝過去の実額は壊さない）
+            _persist_today_value(wid, s.get("latest_date"), s["value"])
         elif hist:
             s["value"] = round(hist[last_hist_date])     # 口数未入力/価格未取得なら履歴の最新で表示
         else:
@@ -727,6 +728,23 @@ def api_watchlist_invested():
     return jsonify({"ok": True, "invested": saved})
 
 
+# 取引履歴（Excel実額）の最終日。これより後の日付だけ当日更新で追記する
+_RECORDED_MAX_DATE = db.recorded_max_date()
+
+
+def _persist_today_value(watch_id, date, value):
+    """当日（記録期間より後）の評価額を amount_history に追記/更新する。
+    記録済みの実額（〜7/22）は書き換えない。"""
+    if not date or value is None:
+        return
+    if _RECORDED_MAX_DATE and date <= _RECORDED_MAX_DATE:
+        return
+    try:
+        db.upsert_amount(int(watch_id), date, float(value))
+    except Exception:
+        pass
+
+
 # 起動時の価格スナップショット（このセッション中は固定）。(isin, assoc) -> series dict
 _price_snapshot: dict = {}
 
@@ -816,6 +834,12 @@ def api_actual_history():
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:
                         merged[d] = round(p * factor)
+                # 当日（記録期間より後）の評価額をDBへ反映
+                if dts and prs and prs[-1] is not None:
+                    today_val = round(prs[-1] * factor)
+                    _persist_today_value(it["watch_id"], dts[-1], today_val)
+                    merged[dts[-1]] = today_val
+                    excel_dates.add(dts[-1])
             except Exception:
                 pass
         dates = sorted(merged.keys())
@@ -840,10 +864,24 @@ def api_actual_history():
     excel_dates = sorted(excel_dates)
 
     total_inv = sum(float(it.get("invested") or 0) for it in holdings)
-    # 合計線は、全保有の値がそろう「実額の記録がある日付」で算出（過不足のない合計）
+    # 合計は各保有の「その日以前の最新値」を積み上げる（当日更新で一部だけ更新されても
+    # 合計が欠けないようにする＝キャリーフォワード）
+    hmaps = []
+    for h in result:
+        hmaps.append(sorted((d, a) for d, a in zip(h["dates"], h["amount"])))
+
+    def _carry(series, d):
+        v = 0
+        for dd, aa in series:
+            if dd <= d:
+                v = aa
+            else:
+                break
+        return v
+
     totals = []
     for d in excel_dates:
-        ssum = round(sum((histories[it["watch_id"]].get(d, 0) or 0) for it in holdings))
+        ssum = round(sum(_carry(s, d) for s in hmaps))
         totals.append({"date": d, "amount": ssum,
                        "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
