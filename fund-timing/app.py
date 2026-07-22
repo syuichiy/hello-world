@@ -327,30 +327,20 @@ def api_watchlist_analyze():
 
         stock = s.get("kind") == "stock"
         divisor = 1.0 if stock else 10000.0
-        # 口数が未設定なら、評価額履歴の最新値と最新価格から推定する（初回）
-        if units <= 0 and hist and s.get("ok") and s.get("latest_price"):
-            last_amt = hist[max(hist.keys())]
-            try:
-                units = round(float(last_amt) * divisor / float(s["latest_price"]), 4)
-            except (TypeError, ValueError, ZeroDivisionError):
-                units = 0
-            if units > 0:
-                db.set_units(wid, units)
+        # 口数は画面で入力された値をそのまま使う（自動推定はしない）
         s["units"] = units
 
-        # ページロード時：現在価格×口数で当日の評価額を再計算し、履歴を更新する。
-        # 過去の実額を壊さないよう、価格の日付が履歴の最新日以降のときだけ追記/更新する。
+        # 評価額 = 現在価格 × 画面入力の口数（＝現在の評価額）。口数未入力なら履歴の最新値で表示。
         last_hist_date = max(hist.keys()) if hist else None
-        if (s.get("ok") and units > 0 and s.get("latest_price") and s.get("latest_date")
-                and (last_hist_date is None or s["latest_date"] >= last_hist_date)):
+        if s.get("ok") and units > 0 and s.get("latest_price"):
             val = round(s["latest_price"] * units / divisor)
             s["value"] = val
-            db.upsert_amount(wid, s["latest_date"], val)
-            hist[s["latest_date"]] = val
+            # 履歴（実額）は、価格の日付が履歴の最新日以降のときだけ追記/更新（過去は壊さない）
+            if s.get("latest_date") and (last_hist_date is None or s["latest_date"] >= last_hist_date):
+                db.upsert_amount(wid, s["latest_date"], val)
+                hist[s["latest_date"]] = val
         elif hist:
-            s["value"] = round(hist[max(hist.keys())])   # 価格が古い/未取得なら履歴の最新で表示
-        elif s.get("ok") and units > 0 and s.get("latest_price"):
-            s["value"] = round(s["latest_price"] * units / divisor)
+            s["value"] = round(hist[last_hist_date])     # 口数未入力/価格未取得なら履歴の最新で表示
         else:
             s["value"] = None
 

@@ -169,6 +169,13 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
             c.execute("ALTER TABLE catalog ADD COLUMN kind TEXT DEFAULT 'fund'")
         # 設定（理想ポートフォリオ等）
         c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        # 一度だけ: 旧版が自動推定で入れた「端数付きの口数」をクリアし、画面入力に委ねる。
+        # ユーザーが入力した整数の口数はそのまま残す。
+        done = c.execute("SELECT value FROM settings WHERE key='clear_derived_units_v1'").fetchone()
+        if not done:
+            c.execute("UPDATE watchlist SET units=0 "
+                      "WHERE units IS NOT NULL AND units <> CAST(units AS INTEGER)")
+            c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('clear_derived_units_v1', '1')")
     if seed:
         seed_catalog(db_path)
         _seed_default_watchlist(db_path)
