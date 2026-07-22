@@ -167,7 +167,7 @@ def _apply_range(series: dict, range_key: str):
     n = len(dates)
     if range_key == "all" or n == 0:
         return dates, nav, assets
-    days = {"6m": 182, "1y": 365, "3y": 365 * 3, "5y": 365 * 5}.get(range_key, 365 * 3)
+    days = {"3m": 91, "6m": 182, "1y": 365, "3y": 365 * 3, "5y": 365 * 5}.get(range_key, 365 * 3)
     last = dt.date.fromisoformat(dates[-1])
     cutoff = last - dt.timedelta(days=days)
     start = 0
@@ -796,21 +796,35 @@ def api_actual_history():
     - dates: 全保有の日付の和集合（古い順）
     - totals: 日付ごとの合計評価額と、合計に対する比率
     """
+    range_key = request.args.get("range", "1y")
     watch = db.list_watchlist()
     histories = db.get_all_amount_histories()
+    # 取引履歴（実額）がある保有を対象にする
     holdings = [it for it in watch if histories.get(it["watch_id"])]
 
-    all_dates = set()
-    for it in holdings:
-        all_dates.update(histories[it["watch_id"]].keys())
-    all_dates = sorted(all_dates)
-
+    excel_dates = set()          # 実額の記録がある日付（表・合計に使う）
     result = []
     for it in holdings:
-        hist = histories[it["watch_id"]]
-        dates = sorted(hist.keys())
-        amounts = [round(hist[d]) for d in dates]
+        excel = histories[it["watch_id"]]
+        excel_dates.update(excel.keys())
         inv = float(it.get("invested") or 0)
+        units = float(it.get("units") or 0)
+        merged = {d: round(a) for d, a in excel.items()}   # 実額を優先
+        # 口数が入っていれば、実際の基準価額×口数で「過去の価格データ」を反映（実額の無い日を補完）
+        if units > 0 and (it.get("isin") or it.get("assoc_code")):
+            try:
+                kind = it.get("kind", "fund") or "fund"
+                series = _snapshot_series(it["isin"], it["assoc_code"], it["name"], kind)
+                dts, prs, _ = _apply_range(series, range_key)
+                div = 1.0 if kind != "stock" else 10000.0  # 投信:price×units/10000, 株:price×units
+                factor = units / (10000.0 if kind != "stock" else 1.0)
+                for d, p in zip(dts, prs):
+                    if p is not None and d not in merged:
+                        merged[d] = round(p * factor)
+            except Exception:
+                pass
+        dates = sorted(merged.keys())
+        amounts = [merged[d] for d in dates]
         ratio = [round(a / inv * 100, 2) for a in amounts] if inv > 0 else None
         name = it.get("label") or it.get("name") or ""
         result.append({
@@ -824,13 +838,19 @@ def api_actual_history():
             "latest_ratio": ratio[-1] if ratio else None,
         })
 
+    # グラフのX軸（全保有の日付の和集合）
+    graph_dates = sorted(set().union(*[set(h["dates"]) for h in result])) if result else []
+    excel_dates = sorted(excel_dates)
+
     total_inv = sum(float(it.get("invested") or 0) for it in holdings)
+    # 合計線は、全保有の値がそろう「実額の記録がある日付」で算出（過不足のない合計）
     totals = []
-    for d in all_dates:
+    for d in excel_dates:
         ssum = round(sum((histories[it["watch_id"]].get(d, 0) or 0) for it in holdings))
         totals.append({"date": d, "amount": ssum,
                        "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
-    return jsonify({"ok": True, "holdings": result, "dates": all_dates,
+    return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
+                    "excel_dates": excel_dates, "range": range_key,
                     "total_invested": round(total_inv), "totals": totals})
 
 

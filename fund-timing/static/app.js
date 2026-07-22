@@ -437,7 +437,7 @@ async function loadPriceHistory() {
   st.hidden = false; st.className = "status loading"; st.textContent = "集計中… ⏳";
   let data;
   try {
-    data = await (await fetch("/api/actual-history")).json();
+    data = await (await fetch(`/api/actual-history?range=${encodeURIComponent(priceRange)}`)).json();
   } catch (e) {
     st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
   }
@@ -446,12 +446,13 @@ async function loadPriceHistory() {
   lastActualData = data;
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
-  renderPriceTable(data.holdings || [], data.dates || [], data.totals || []);
+  renderPriceTable(data.holdings || [], data.excel_dates || data.dates || [], data.totals || []);
 }
 
 let lastActualData = null;
 let priceMode = "ratio";   // "ratio"（比率%）| "amount"（実額円）
 let lineMode = "products";  // "products"（商品別）| "total"（合計のみ）
+let priceRange = "6m";      // 価格推移グラフの期間
 
 function renderPriceSummary(data) {
   const card = $("price-summary-card");
@@ -1251,6 +1252,13 @@ $("price-mode-toggle").addEventListener("click", (e) => {
   document.querySelectorAll("#price-mode-toggle .pm-btn").forEach((x) =>
     x.classList.toggle("active", x.dataset.mode === priceMode));
   if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
+});
+
+// 価格推移グラフの期間切替
+$("price-range").addEventListener("click", (e) => {
+  const b = e.target.closest(".range-btn"); if (!b) return;
+  document.querySelectorAll("#price-range .range-btn").forEach((x) => x.classList.remove("active"));
+  b.classList.add("active"); priceRange = b.dataset.range; loadPriceHistory();
 });
 
 // 価格推移グラフの表示切替（商品別 / 合計のみ）
