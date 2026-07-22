@@ -479,21 +479,23 @@ function renderPriceChart(holdings, totals) {
   const amountMode = priceMode === "amount";
   const totalOnly = lineMode === "total";
   const traces = [];
-  if (totals.length) {   // 合計線は両モードで表示
+  if (totalOnly && totals.length) {   // 合計線は「合計のみ」モードでのみ表示
     traces.push({
       x: totals.map((t) => t.date), y: totals.map((t) => amountMode ? t.amount : t.ratio),
       name: "合計（全体）", mode: "lines",
-      line: { width: totalOnly ? 3 : 3.5, color: isDark() ? "#e7e8ef" : "#1e2130" },
+      line: { width: 3, color: isDark() ? "#e7e8ef" : "#1e2130" },
       hovertemplate: amountMode ? "%{x}<br>全体 %{y:,.0f} 円<extra></extra>"
                                 : "%{x}<br>全体 %{y:.1f}%<extra></extra>",
     });
   }
-  if (!totalOnly) {
+  if (!totalOnly) {   // 商品別モード：各商品の線のみ（合計・個別株は出さない）
     holdings.forEach((h, i) => {
-      if (!amountMode && !h.ratio) return;   // 比率モードで投資金額0の商品は線を描かない
+      if (h.kind === "stock") return;   // 日立などの個別株は商品別グラフから除外
+      const y = amountMode ? h.amount : h.ratio;
+      if (!y || !y.length) return;   // データが無いものだけ除外
       traces.push({
-        x: h.dates, y: amountMode ? h.amount : h.ratio, name: h.name, mode: "lines",
-        line: { width: 1.5, color: PRICE_COLORS[i % PRICE_COLORS.length] },
+        x: h.dates, y: y, name: h.name, mode: "lines",
+        line: { width: 1.6, color: PRICE_COLORS[i % PRICE_COLORS.length] },
         hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(h.name) + " %{y:,.0f} 円<extra></extra>"
                                   : "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
       });
@@ -514,31 +516,44 @@ function renderPriceChart(holdings, totals) {
   Plotly.newPlot("price-chart", traces, layout, { responsive: true, displayModeBar: false });
 }
 
+const BROKER_ORDER = { "SBI証券": 0, "三菱UFJスマート証券": 1, "楽天証券": 2 };
 function renderPriceTable(holdings, dates, totals) {
   const card = $("price-table-card");
   if (!holdings.length || !dates.length) { card.hidden = true; return; }
   card.hidden = false;
   const cols = dates.slice().reverse();   // 新しい日付が左
+  const ndates = cols.length;
   // ヘッダ：商品名（固定列）＋ 各日付
   $("price-table-head").innerHTML = `<th class="pt-namecol">商品名</th>` +
     cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
-  // 各商品を1行に（縦軸＝商品、横軸＝日付）
+  // 証券会社順（SBI→三菱UFJ→楽天→その他）に並べ替え。色はグラフと合わせて元の並び順で固定
+  const withColor = holdings.map((h, i) => ({ h, color: PRICE_COLORS[i % PRICE_COLORS.length] }));
+  withColor.sort((a, b) =>
+    (BROKER_ORDER[a.h.broker] ?? 9) - (BROKER_ORDER[b.h.broker] ?? 9));
   const totalMap = {}; totals.forEach((t) => { totalMap[t.date] = t.amount; });
-  const body = holdings.map((h, i) => {
+
+  let html = "";
+  let curBroker = null;
+  withColor.forEach(({ h, color }) => {
+    const bk = h.broker || "未設定";
+    if (bk !== curBroker) {   // 証券会社の区切り見出し行
+      curBroker = bk;
+      html += `<tr class="pt-broker-row"><td class="pt-namecol">🏦 ${escapeHtml(bk)}</td>` +
+        `<td class="num" colspan="${ndates}"></td></tr>`;
+    }
     const m = {}; h.dates.forEach((d, k) => { m[d] = h.amount[k]; });
     const cells = cols.map((d) => {
       const v = m[d];
       return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
     }).join("");
-    return `<tr><td class="pt-namecol pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.name)}</td>${cells}</tr>`;
-  }).join("");
-  // 合計行
+    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}</td>${cells}</tr>`;
+  });
   const totalCells = cols.map((d) => {
     const v = totalMap[d];
     return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
   }).join("");
-  $("price-table-body").innerHTML = body +
-    `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${totalCells}</tr>`;
+  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${totalCells}</tr>`;
+  $("price-table-body").innerHTML = html;
 }
 
 // 保有全体（ポートフォリオ）の目安カード

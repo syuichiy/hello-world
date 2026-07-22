@@ -181,39 +181,45 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         _seed_default_watchlist(db_path)
         _ensure_seed_stocks_watched(db_path)
         import_actual_portfolio(db_path)
+        restore_amount_history(db_path)   # 壊れた実額履歴の修復（一度だけ）
 
 
 # 取引履歴（実額）ポートフォリオの取り込み元（アプリに同梱）
 _PORTFOLIO_SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio_seed.json")
 
 
+def _load_portfolio_seed():
+    if not os.path.exists(_PORTFOLIO_SEED):
+        return []
+    try:
+        return json.load(open(_PORTFOLIO_SEED, encoding="utf-8")).get("products", [])
+    except Exception:
+        return []
+
+
+def _clean_history(hist):
+    """明らかな外れ値（桁落ち等）を欠測扱いにする。中央値の0.25〜4倍の範囲外を除外。"""
+    pairs = []
+    for d, a in (hist or {}).items():
+        try:
+            a = float(a)
+        except (TypeError, ValueError):
+            continue
+        if a > 0:
+            pairs.append((d, a))
+    if len(pairs) < 3:
+        return pairs
+    vals = sorted(a for _, a in pairs)
+    med = vals[len(vals) // 2]
+    lo, hi = med * 0.25, med * 4
+    return [(d, a) for d, a in pairs if lo <= a <= hi]
+
+
 def import_actual_portfolio(db_path: Optional[str] = None):
     """同梱の portfolio_seed.json（ユーザー提供の取引履歴・実額）を一度だけ取り込む。"""
-    if not os.path.exists(_PORTFOLIO_SEED):
+    products = _load_portfolio_seed()
+    if not products:
         return False
-    try:
-        data = json.load(open(_PORTFOLIO_SEED, encoding="utf-8"))
-    except Exception:
-        return False
-    products = data.get("products", [])
-
-    def _clean_history(hist):
-        """明らかな外れ値（桁落ち等）を欠測扱いにする。中央値の0.25〜4倍の範囲外を除外。"""
-        pairs = []
-        for d, a in (hist or {}).items():
-            try:
-                a = float(a)
-            except (TypeError, ValueError):
-                continue
-            if a > 0:
-                pairs.append((d, a))
-        if len(pairs) < 3:
-            return pairs
-        vals = sorted(a for _, a in pairs)
-        med = vals[len(vals) // 2]
-        lo, hi = med * 0.25, med * 4
-        return [(d, a) for d, a in pairs if lo <= a <= hi]
-
     with _conn(db_path) as c:
         done = c.execute("SELECT value FROM settings WHERE key='portfolio_import_v2'").fetchone()
         if done:
@@ -247,6 +253,35 @@ def import_actual_portfolio(db_path: Optional[str] = None):
                 c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) VALUES (?,?,?)",
                           (wid, d, a))
         c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('portfolio_import_v2', '1')")
+    return True
+
+
+def restore_amount_history(db_path: Optional[str] = None):
+    """評価額履歴（実額）をseedから復元する（一度だけ）。
+    旧版の当日自動更新が口数×現在価格でExcel実額を上書きし、合計・損益が壊れた不具合の修復。
+    履歴を全消去し、seedの実額のみを (label, isin, broker) で対応する保有へ入れ直す。
+    → 個別株(日立)などseedに無い保有の履歴は消え、価格推移から除外される。"""
+    products = _load_portfolio_seed()
+    if not products:
+        return False
+    with _conn(db_path) as c:
+        done = c.execute("SELECT value FROM settings WHERE key='restore_history_v3'").fetchone()
+        if done:
+            return False
+        c.execute("DELETE FROM amount_history")   # 破損した履歴を一旦すべて消す
+        for p in products:
+            row = c.execute(
+                "SELECT w.id FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
+                "WHERE w.label=? AND c.isin=? AND w.broker=?",
+                (p.get("name", ""), (p.get("isin") or "").strip().upper(), p.get("broker", ""))
+            ).fetchone()
+            if not row:
+                continue
+            wid = row["id"]
+            for d, a in _clean_history(p.get("history")):
+                c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) VALUES (?,?,?)",
+                          (wid, d, a))
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('restore_history_v3', '1')")
     return True
 
 
@@ -313,8 +348,12 @@ def seed_catalog(db_path: Optional[str] = None):
 def _ensure_seed_stocks_watched(db_path: Optional[str] = None):
     """日立製作所などの内蔵個別株をポートフォリオ（ウォッチリスト）へ自動で組み込む。
 
-    ※ 既定ウォッチリストの投入後に呼ぶこと（先に呼ぶと初期リストがこれだけになる）。"""
+    ※ 既定ウォッチリストの投入後に呼ぶこと（先に呼ぶと初期リストがこれだけになる）。
+    ※ 取引履歴ポートフォリオの取り込み後は、日立を毎回再追加しない（削除しても戻らない）。"""
     with _conn(db_path) as c:
+        imported = c.execute("SELECT value FROM settings WHERE key='portfolio_import_v2'").fetchone()
+        if imported:
+            return
         for s in seed_funds.SEED_STOCKS:
             row = c.execute("SELECT id FROM catalog WHERE isin=? AND assoc_code=?",
                             (s["isin"], s["assoc_code"])).fetchone()

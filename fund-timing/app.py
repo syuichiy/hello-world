@@ -330,15 +330,11 @@ def api_watchlist_analyze():
         # 口数は画面で入力された値をそのまま使う（自動推定はしない）
         s["units"] = units
 
-        # 評価額 = 現在価格 × 画面入力の口数（＝現在の評価額）。口数未入力なら履歴の最新値で表示。
+        # 評価額 = 現在価格 × 画面入力の口数（＝現在の評価額・表示のみ）。
+        # ※取引履歴（実額）の amount_history は書き換えない（過去の実額を壊さないため）。
         last_hist_date = max(hist.keys()) if hist else None
         if s.get("ok") and units > 0 and s.get("latest_price"):
-            val = round(s["latest_price"] * units / divisor)
-            s["value"] = val
-            # 履歴（実額）は、価格の日付が履歴の最新日以降のときだけ追記/更新（過去は壊さない）
-            if s.get("latest_date") and (last_hist_date is None or s["latest_date"] >= last_hist_date):
-                db.upsert_amount(wid, s["latest_date"], val)
-                hist[s["latest_date"]] = val
+            s["value"] = round(s["latest_price"] * units / divisor)
         elif hist:
             s["value"] = round(hist[last_hist_date])     # 口数未入力/価格未取得なら履歴の最新で表示
         else:
@@ -832,6 +828,7 @@ def api_actual_history():
             "fund_name": it.get("name", "") or "",
             "broker": it.get("broker", "") or "",
             "asset_class": it.get("asset_class", "") or "",
+            "kind": it.get("kind", "fund") or "fund",
             "sell_policy": it.get("sell_policy", "full"),
             "invested": round(inv), "dates": dates, "amount": amounts, "ratio": ratio,
             "latest": amounts[-1] if amounts else None,
