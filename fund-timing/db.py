@@ -257,31 +257,49 @@ def import_actual_portfolio(db_path: Optional[str] = None):
 
 
 def restore_amount_history(db_path: Optional[str] = None):
-    """評価額履歴（実額）をseedから復元する（一度だけ）。
+    """評価額履歴（実額）をseedから復元・再同期する（一度だけ）。
     旧版の当日自動更新が口数×現在価格でExcel実額を上書きし、合計・損益が壊れた不具合の修復。
-    履歴を全消去し、seedの実額のみを (label, isin, broker) で対応する保有へ入れ直す。
-    → 個別株(日立)などseedに無い保有の履歴は消え、価格推移から除外される。"""
+    ラベルや証券会社が変わっていても復元できるよう、(label+isin+broker) → (label+isin)
+    → (isin+broker) の順にフォールバックして保有を特定し、seedの実額・投資金額・ラベルを
+    入れ直す。seedに無い保有（日立など）の履歴は消え、価格推移から除外される。"""
     products = _load_portfolio_seed()
     if not products:
         return False
     with _conn(db_path) as c:
-        done = c.execute("SELECT value FROM settings WHERE key='restore_history_v3'").fetchone()
+        done = c.execute("SELECT value FROM settings WHERE key='restore_history_v4'").fetchone()
         if done:
             return False
+        holds = [dict(r) for r in c.execute(
+            "SELECT w.id, w.label, w.broker, c.isin FROM watchlist w JOIN catalog c ON c.id = w.catalog_id")]
+        used = set()
+
+        def _find(label, isin, broker):
+            isin = (isin or "").strip().upper()
+            for keyfn in (
+                lambda h: h["label"] == label and (h["isin"] or "").upper() == isin and h["broker"] == broker,
+                lambda h: h["label"] == label and (h["isin"] or "").upper() == isin,
+                lambda h: (h["isin"] or "").upper() == isin and h["broker"] == broker,
+                lambda h: (h["isin"] or "").upper() == isin,
+            ):
+                for h in holds:
+                    if h["id"] not in used and keyfn(h):
+                        return h
+            return None
+
         c.execute("DELETE FROM amount_history")   # 破損した履歴を一旦すべて消す
         for p in products:
-            row = c.execute(
-                "SELECT w.id FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
-                "WHERE w.label=? AND c.isin=? AND w.broker=?",
-                (p.get("name", ""), (p.get("isin") or "").strip().upper(), p.get("broker", ""))
-            ).fetchone()
-            if not row:
+            h = _find(p.get("name", ""), p.get("isin", ""), p.get("broker", ""))
+            if not h:
                 continue
-            wid = row["id"]
+            used.add(h["id"])
+            wid = h["id"]
+            # 表示名・投資金額もseedへ再同期（破損・欠落の保険）
+            c.execute("UPDATE watchlist SET label=?, invested=? WHERE id=?",
+                      (p.get("name", ""), float(p.get("invested") or 0), wid))
             for d, a in _clean_history(p.get("history")):
                 c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) VALUES (?,?,?)",
                           (wid, d, a))
-        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('restore_history_v3', '1')")
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('restore_history_v4', '1')")
     return True
 
 
