@@ -443,10 +443,14 @@ async function loadPriceHistory() {
   }
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
   st.hidden = true;
+  lastActualData = data;
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
   renderPriceTable(data.holdings || [], data.dates || [], data.totals || []);
 }
+
+let lastActualData = null;
+let priceMode = "ratio";   // "ratio"（比率%）| "amount"（実額円）
 
 function renderPriceSummary(data) {
   const card = $("price-summary-card");
@@ -470,30 +474,38 @@ function renderPriceChart(holdings, totals) {
   const empty = $("price-empty");
   if (!holdings.length) { empty.hidden = false; Plotly.purge("price-chart"); return; }
   empty.hidden = true;
+  const amountMode = priceMode === "amount";
   const traces = [];
   if (totals.length) {
     traces.push({
-      x: totals.map((t) => t.date), y: totals.map((t) => t.ratio), name: "合計（全体）", mode: "lines",
+      x: totals.map((t) => t.date), y: totals.map((t) => amountMode ? t.amount : t.ratio),
+      name: "合計（全体）", mode: "lines",
       line: { width: 3.5, color: isDark() ? "#e7e8ef" : "#1e2130" },
-      hovertemplate: "%{x}<br>全体 %{y:.1f}%<extra></extra>",
+      hovertemplate: amountMode ? "%{x}<br>全体 %{y:,.0f} 円<extra></extra>"
+                                : "%{x}<br>全体 %{y:.1f}%<extra></extra>",
     });
   }
   holdings.forEach((h, i) => {
-    if (!h.ratio) return;   // 投資金額0（例：新規）→ 比率は出せないので線は描かない
+    if (!amountMode && !h.ratio) return;   // 比率モードで投資金額0の商品は線を描かない
     traces.push({
-      x: h.dates, y: h.ratio, name: h.name, mode: "lines",
+      x: h.dates, y: amountMode ? h.amount : h.ratio, name: h.name, mode: "lines",
       line: { width: 1.5, color: PRICE_COLORS[i % PRICE_COLORS.length] },
-      hovertemplate: "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
+      hovertemplate: amountMode ? "%{x}<br>" + escapeHtml(h.name) + " %{y:,.0f} 円<extra></extra>"
+                                : "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
     });
   });
   const layout = baseLayout();
   layout.height = 460;
-  layout.yaxis.title = "評価額 ÷ 投資金額 (%)";
-  layout.yaxis.ticksuffix = "%";
-  layout.margin = { l: 64, r: 20, t: 12, b: 40 };
+  layout.margin = { l: amountMode ? 78 : 64, r: 20, t: 12, b: 40 };
   layout.legend = { orientation: "h", y: -0.18, font: { size: 10.5 } };
-  layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
-    line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
+  if (amountMode) {
+    layout.yaxis.title = "評価額（円）";
+  } else {
+    layout.yaxis.title = "評価額 ÷ 投資金額 (%)";
+    layout.yaxis.ticksuffix = "%";
+    layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
+      line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
+  }
   Plotly.newPlot("price-chart", traces, layout, { responsive: true, displayModeBar: false });
 }
 
@@ -645,6 +657,8 @@ function renderWatchTable() {
       : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
     const price = s.latest_price == null ? "—" : Number(s.latest_price).toLocaleString() + " 円";
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
+    const plSub = (s.pl_pct == null) ? ""
+      : `<div class="pl-sub ${s.pl_pct >= 0 ? "up" : "down"}">損益 ${s.pl_pct >= 0 ? "+" : ""}${s.pl_pct}%</div>`;
     return `<tr class="watch-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}</div>
@@ -656,7 +670,7 @@ function renderWatchTable() {
       <td class="num"><input class="units-input num-comma" type="text" inputmode="numeric"
             data-watch="${s.watch_id}" value="${fmtInt(s.units)}" placeholder="口数"
             title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
-      <td class="num value-cell">${value}</td>
+      <td class="num value-cell">${value}${plSub}</td>
       <td class="num"><input class="invested-input num-comma" type="text" inputmode="numeric"
             data-watch="${s.watch_id}" value="${fmtInt(s.invested)}" placeholder="投資金額"
             title="投資金額（元本）。価格推移タブの比率計算に使います"></td>
@@ -1207,6 +1221,16 @@ $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
 $("main-nav").addEventListener("click", (e) => {
   const tab = e.target.closest(".nav-tab");
   if (tab) switchView(tab.dataset.view);
+});
+
+// 価格推移グラフの表示切替（比率% / 実額円）
+$("price-mode-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest(".pm-btn");
+  if (!b || b.dataset.mode === priceMode) return;
+  priceMode = b.dataset.mode;
+  document.querySelectorAll("#price-mode-toggle .pm-btn").forEach((x) =>
+    x.classList.toggle("active", x.dataset.mode === priceMode));
+  if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
 });
 
 // 理想配分の編集

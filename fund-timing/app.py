@@ -310,24 +310,57 @@ def api_watchlist_analyze():
     """ウォッチリスト各投信の判定サマリ＋保有全体（ポートフォリオ）の目安を返す。"""
     range_key = request.args.get("range", "1y")
     force = request.args.get("force") in ("1", "true", "yes")
+    histories = db.get_all_amount_histories()
     summaries = []
     for it in db.list_watchlist():
         s = _summarize_fund(it, range_key, force)
         s["watch_id"] = it["watch_id"]
+        wid = it["watch_id"]
+        # 表示名は保有ラベル（口座名など）があれば優先
+        if it.get("label"):
+            s["name"] = it["label"]
         units = float(it.get("units") or 0)
-        s["units"] = units
         s["invested"] = float(it.get("invested") or 0)
         s["sell_policy"] = it.get("sell_policy") or "full"
         s["broker"] = it.get("broker") or ""
-        if s.get("ok") and units > 0 and s.get("latest_price"):
-            if s.get("kind") == "stock":
-                # 個別株: 評価額 = 株価 × 株数
-                s["value"] = round(s["latest_price"] * units)
-            else:
-                # 投信の慣例: 評価額 = 基準価額 × 口数 ÷ 10,000
-                s["value"] = round(s["latest_price"] * units / 10000)
+        hist = histories.get(wid, {})
+
+        stock = s.get("kind") == "stock"
+        divisor = 1.0 if stock else 10000.0
+        # 口数が未設定なら、評価額履歴の最新値と最新価格から推定する（初回）
+        if units <= 0 and hist and s.get("ok") and s.get("latest_price"):
+            last_amt = hist[max(hist.keys())]
+            try:
+                units = round(float(last_amt) * divisor / float(s["latest_price"]), 4)
+            except (TypeError, ValueError, ZeroDivisionError):
+                units = 0
+            if units > 0:
+                db.set_units(wid, units)
+        s["units"] = units
+
+        # ページロード時：現在価格×口数で当日の評価額を再計算し、履歴を更新する。
+        # 過去の実額を壊さないよう、価格の日付が履歴の最新日以降のときだけ追記/更新する。
+        last_hist_date = max(hist.keys()) if hist else None
+        if (s.get("ok") and units > 0 and s.get("latest_price") and s.get("latest_date")
+                and (last_hist_date is None or s["latest_date"] >= last_hist_date)):
+            val = round(s["latest_price"] * units / divisor)
+            s["value"] = val
+            db.upsert_amount(wid, s["latest_date"], val)
+            hist[s["latest_date"]] = val
+        elif hist:
+            s["value"] = round(hist[max(hist.keys())])   # 価格が古い/未取得なら履歴の最新で表示
+        elif s.get("ok") and units > 0 and s.get("latest_price"):
+            s["value"] = round(s["latest_price"] * units / divisor)
         else:
             s["value"] = None
+
+        inv = s["invested"]
+        if s.get("value") is not None and inv > 0:
+            s["pl"] = round(s["value"] - inv)
+            s["pl_pct"] = round((s["value"] - inv) / inv * 100, 1)
+        else:
+            s["pl"] = None
+            s["pl_pct"] = None
         summaries.append(s)
     portfolio = signal_mod.portfolio_advice(summaries)
     for s in summaries:
@@ -773,33 +806,40 @@ def api_actual_history():
     - dates: 全保有の日付の和集合（古い順）
     - totals: 日付ごとの合計評価額と、合計に対する比率
     """
-    holdings = db.get_actual_holdings()
+    watch = db.list_watchlist()
+    histories = db.get_all_amount_histories()
+    holdings = [it for it in watch if histories.get(it["watch_id"])]
+
     all_dates = set()
-    for h in holdings:
-        all_dates.update(h["history"].keys())
+    for it in holdings:
+        all_dates.update(histories[it["watch_id"]].keys())
     all_dates = sorted(all_dates)
 
     result = []
-    for h in holdings:
-        dates = sorted(h["history"].keys())
-        amounts = [round(h["history"][d]) for d in dates]
-        inv = float(h["invested"] or 0)
+    for it in holdings:
+        hist = histories[it["watch_id"]]
+        dates = sorted(hist.keys())
+        amounts = [round(hist[d]) for d in dates]
+        inv = float(it.get("invested") or 0)
         ratio = [round(a / inv * 100, 2) for a in amounts] if inv > 0 else None
+        name = it.get("label") or it.get("name") or ""
         result.append({
-            "id": h["id"], "name": h["name"], "fund_name": h.get("fund_name", "") or "",
-            "broker": h.get("broker", "") or "",
-            "asset_class": h.get("asset_class", "") or "", "sell_policy": h.get("sell_policy", "full"),
+            "id": it["watch_id"], "name": name,
+            "fund_name": it.get("name", "") or "",
+            "broker": it.get("broker", "") or "",
+            "asset_class": it.get("asset_class", "") or "",
+            "sell_policy": it.get("sell_policy", "full"),
             "invested": round(inv), "dates": dates, "amount": amounts, "ratio": ratio,
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })
 
-    total_inv = sum(float(h["invested"] or 0) for h in holdings)
+    total_inv = sum(float(it.get("invested") or 0) for it in holdings)
     totals = []
     for d in all_dates:
-        s = round(sum(h["history"].get(d, 0) or 0 for h in holdings))
-        totals.append({"date": d, "amount": s,
-                       "ratio": round(s / total_inv * 100, 2) if total_inv > 0 else None})
+        ssum = round(sum((histories[it["watch_id"]].get(d, 0) or 0) for it in holdings))
+        totals.append({"date": d, "amount": ssum,
+                       "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
     return jsonify({"ok": True, "holdings": result, "dates": all_dates,
                     "total_invested": round(total_inv), "totals": totals})
 

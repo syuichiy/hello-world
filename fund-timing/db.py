@@ -109,6 +109,13 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                 amount     REAL,
                 PRIMARY KEY(holding_id, date)
             );
+            -- 保有(watchlist)ごとの日次評価額（実額）の履歴。価格推移タブに使う。
+            CREATE TABLE IF NOT EXISTS amount_history (
+                watch_id INTEGER NOT NULL,
+                date     TEXT NOT NULL,
+                amount   REAL,
+                PRIMARY KEY(watch_id, date)
+            );
             """
         )
         # マイグレーション: 保有口数カラム（旧バージョンのDBに追加）
@@ -124,6 +131,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         if "invested" not in cols:
             # 投資金額（元本）。価格推移グラフの「評価額÷投資金額」比率に使う
             c.execute("ALTER TABLE watchlist ADD COLUMN invested REAL DEFAULT 0")
+        if "label" not in cols:
+            # 保有ごとの表示名（口座名など）。同一ファンドを別口座で持つ時の区別用。空=カタログ名
+            c.execute("ALTER TABLE watchlist ADD COLUMN label TEXT DEFAULT ''")
         # マイグレーション: 同一商品を複数の証券会社で保有できるよう、
         # 旧スキーマの UNIQUE(catalog_id) 制約を外す（テーブル再構築）。
         idxs = c.execute("PRAGMA index_list(watchlist)").fetchall()
@@ -139,12 +149,13 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                     sell_policy TEXT DEFAULT 'full',
                     broker     TEXT DEFAULT '',
                     invested   REAL DEFAULT 0,
+                    label      TEXT DEFAULT '',
                     FOREIGN KEY(catalog_id) REFERENCES catalog(id) ON DELETE CASCADE
                 );
-                INSERT INTO watchlist_new(id, catalog_id, sort_order, added_at, units, sell_policy, broker, invested)
+                INSERT INTO watchlist_new(id, catalog_id, sort_order, added_at, units, sell_policy, broker, invested, label)
                     SELECT id, catalog_id, sort_order, added_at,
                            COALESCE(units, 0), COALESCE(sell_policy, 'full'),
-                           COALESCE(broker, ''), COALESCE(invested, 0)
+                           COALESCE(broker, ''), COALESCE(invested, 0), COALESCE(label, '')
                     FROM watchlist;
                 DROP TABLE watchlist;
                 ALTER TABLE watchlist_new RENAME TO watchlist;
@@ -178,55 +189,85 @@ def import_actual_portfolio(db_path: Optional[str] = None):
     except Exception:
         return False
     products = data.get("products", [])
+
+    def _clean_history(hist):
+        """明らかな外れ値（桁落ち等）を欠測扱いにする。中央値の0.25〜4倍の範囲外を除外。"""
+        pairs = []
+        for d, a in (hist or {}).items():
+            try:
+                a = float(a)
+            except (TypeError, ValueError):
+                continue
+            if a > 0:
+                pairs.append((d, a))
+        if len(pairs) < 3:
+            return pairs
+        vals = sorted(a for _, a in pairs)
+        med = vals[len(vals) // 2]
+        lo, hi = med * 0.25, med * 4
+        return [(d, a) for d, a in pairs if lo <= a <= hi]
+
     with _conn(db_path) as c:
-        done = c.execute("SELECT value FROM settings WHERE key='portfolio_import_v1'").fetchone()
+        done = c.execute("SELECT value FROM settings WHERE key='portfolio_import_v2'").fetchone()
         if done:
             return False
+        # 未使用の既定シード保有（口数・投資金額とも未設定）を片付けてから、実ポートフォリオを投入
+        c.execute("DELETE FROM watchlist WHERE COALESCE(units,0)=0 AND COALESCE(invested,0)=0 "
+                  "AND id NOT IN (SELECT DISTINCT watch_id FROM amount_history)")
+        base = c.execute("SELECT COALESCE(MAX(sort_order), -1) FROM watchlist").fetchone()[0]
         for i, p in enumerate(products):
+            isin = (p.get("isin") or "").strip().upper()
+            assoc = (p.get("assoc_code") or "").strip()
+            fund_name = p.get("fund_name") or p.get("name") or ""
+            # カタログに紐付け（既存の内蔵ファンドがあれば再利用、無ければ作成）
+            row = c.execute("SELECT id FROM catalog WHERE isin=? AND assoc_code=?", (isin, assoc)).fetchone()
+            if row:
+                cat_id = row["id"]
+            else:
+                cur = c.execute(
+                    "INSERT INTO catalog(name, isin, assoc_code, category, asset_class, kind) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (fund_name, isin, assoc, "", p.get("asset_class", ""), "fund"))
+                cat_id = cur.lastrowid
             cur = c.execute(
-                "INSERT INTO actual_holding(name, fund_name, isin, assoc_code, asset_class, "
-                "broker, sell_policy, invested, sort_order) VALUES (?,?,?,?,?,?,?,?,?)",
-                (p.get("name", ""), p.get("fund_name", ""), p.get("isin", ""), p.get("assoc_code", ""),
-                 p.get("asset_class", ""), p.get("broker", ""),
-                 p.get("sell_policy", "full"), float(p.get("invested") or 0), i),
-            )
-            hid = cur.lastrowid
-            for d, a in (p.get("history") or {}).items():
-                try:
-                    c.execute("INSERT OR REPLACE INTO actual_amount(holding_id, date, amount) VALUES (?,?,?)",
-                              (hid, d, float(a)))
-                except (TypeError, ValueError):
-                    continue
-        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('portfolio_import_v1', '1')")
+                "INSERT INTO watchlist(catalog_id, sort_order, added_at, broker, sell_policy, invested, label) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (cat_id, base + 1 + i, dt.datetime.now().isoformat(timespec="seconds"),
+                 p.get("broker", ""), p.get("sell_policy", "full"), float(p.get("invested") or 0),
+                 p.get("name", "")))
+            wid = cur.lastrowid
+            for d, a in _clean_history(p.get("history")):
+                c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) VALUES (?,?,?)",
+                          (wid, d, a))
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('portfolio_import_v2', '1')")
     return True
 
 
-def get_actual_holdings(db_path: Optional[str] = None):
-    """実額ポートフォリオの全保有（各保有の日次金額 history 付き）を返す。"""
+# ------------------------------------------------------------ 評価額の履歴（実額）
+def get_amount_history(watch_id: int, db_path: Optional[str] = None):
     with _conn(db_path) as c:
-        holdings = [dict(r) for r in c.execute(
-            "SELECT * FROM actual_holding ORDER BY sort_order, id")]
-        for h in holdings:
-            rows = c.execute("SELECT date, amount FROM actual_amount WHERE holding_id=? ORDER BY date",
-                             (h["id"],)).fetchall()
-            h["history"] = {r["date"]: r["amount"] for r in rows}
-        return holdings
+        rows = c.execute("SELECT date, amount FROM amount_history WHERE watch_id=? ORDER BY date",
+                         (watch_id,)).fetchall()
+        return {r["date"]: r["amount"] for r in rows}
 
 
-def set_actual_invested(holding_id: int, invested: float, db_path: Optional[str] = None):
-    invested = max(0.0, float(invested or 0))
+def get_all_amount_histories(db_path: Optional[str] = None):
+    """{watch_id: {date: amount}} を返す。"""
     with _conn(db_path) as c:
-        c.execute("UPDATE actual_holding SET invested=? WHERE id=?", (invested, holding_id))
-    return invested
+        out: dict = {}
+        for r in c.execute("SELECT watch_id, date, amount FROM amount_history ORDER BY watch_id, date"):
+            out.setdefault(r["watch_id"], {})[r["date"]] = r["amount"]
+        return out
 
 
-def set_actual_amount(holding_id: int, date: str, amount: float, db_path: Optional[str] = None):
+def upsert_amount(watch_id: int, date: str, amount: float, db_path: Optional[str] = None):
+    """ある日付の評価額を登録/更新（0以下や空で削除）。ページロード時の当日更新に使う。"""
     with _conn(db_path) as c:
         if amount is None or float(amount) <= 0:
-            c.execute("DELETE FROM actual_amount WHERE holding_id=? AND date=?", (holding_id, date))
+            c.execute("DELETE FROM amount_history WHERE watch_id=? AND date=?", (watch_id, date))
         else:
-            c.execute("INSERT OR REPLACE INTO actual_amount(holding_id, date, amount) VALUES (?,?,?)",
-                      (holding_id, date, float(amount)))
+            c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) VALUES (?,?,?)",
+                      (watch_id, date, float(amount)))
 
 
 def seed_catalog(db_path: Optional[str] = None):
@@ -375,7 +416,8 @@ def delete_catalog(catalog_id: int, db_path: Optional[str] = None):
 def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
-            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, w.invested, c.* "
+            "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, "
+            "w.invested, w.label, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -458,9 +500,10 @@ def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
 
 
 def remove_watch(watch_id: int, db_path: Optional[str] = None):
-    """保有を1件削除する（watch_id は watchlist.id）。"""
+    """保有を1件削除する（watch_id は watchlist.id）。評価額履歴も一緒に削除。"""
     with _conn(db_path) as c:
         c.execute("DELETE FROM watchlist WHERE id=?", (watch_id,))
+        c.execute("DELETE FROM amount_history WHERE watch_id=?", (watch_id,))
 
 
 # ------------------------------------------------------------------ cache

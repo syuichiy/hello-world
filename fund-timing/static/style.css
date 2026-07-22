@@ -287,6 +287,9 @@ tr:hover .row-del { opacity: 1; }
 .units-input:focus, .invested-input:focus { outline: none; border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 3px rgba(91,91,214,.12); }
 .units-input::placeholder, .invested-input::placeholder { color: var(--ink-soft); opacity: .55; }
 .value-cell { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pl-sub { font-size: 10.5px; font-weight: 700; margin-top: 2px; }
+.pl-sub.up { color: var(--buy); }
+.pl-sub.down { color: var(--sell); }
 
 /* 判定バッジ */
 .vbadge {
@@ -582,6 +585,10 @@ tr:hover .row-del { opacity: 1; }
 /* ------------------------------------------------ 価格推移タブ */
 .price-chart-card h2, .price-table-card h2 { font-size: 17px; margin: 0 0 6px; }
 #price-chart { width: 100%; min-height: 320px; margin-top: 8px; }
+.price-mode-toggle { display: inline-flex; gap: 0; margin: 4px 0 0; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; }
+.pm-btn { appearance: none; border: none; background: var(--card); color: var(--ink-soft); cursor: pointer; font-size: 12.5px; font-weight: 700; padding: 7px 16px; }
+.pm-btn:hover { background: var(--bg); }
+.pm-btn.active { background: var(--accent); color: #fff; }
 .price-skipped { margin-top: 10px; padding: 12px 14px; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; }
 .price-skipped .hint { margin: 6px 0 4px; }
 .skip-list { margin: 4px 0 8px; padding-left: 20px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.7; }
