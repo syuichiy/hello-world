@@ -765,6 +765,45 @@ def api_price_history():
                     "holdings": holdings, "skipped": skipped})
 
 
+@app.route("/api/actual-history")
+def api_actual_history():
+    """取引履歴（実額）ポートフォリオの日次推移を返す。
+    - holdings: 各保有の {name, broker, asset_class, invested, dates[], amount[], ratio[]}
+      ratio = 評価額 ÷ 投資金額 ×100（投資金額0の保有は ratio=null）
+    - dates: 全保有の日付の和集合（古い順）
+    - totals: 日付ごとの合計評価額と、合計に対する比率
+    """
+    holdings = db.get_actual_holdings()
+    all_dates = set()
+    for h in holdings:
+        all_dates.update(h["history"].keys())
+    all_dates = sorted(all_dates)
+
+    result = []
+    for h in holdings:
+        dates = sorted(h["history"].keys())
+        amounts = [round(h["history"][d]) for d in dates]
+        inv = float(h["invested"] or 0)
+        ratio = [round(a / inv * 100, 2) for a in amounts] if inv > 0 else None
+        result.append({
+            "id": h["id"], "name": h["name"], "fund_name": h.get("fund_name", "") or "",
+            "broker": h.get("broker", "") or "",
+            "asset_class": h.get("asset_class", "") or "", "sell_policy": h.get("sell_policy", "full"),
+            "invested": round(inv), "dates": dates, "amount": amounts, "ratio": ratio,
+            "latest": amounts[-1] if amounts else None,
+            "latest_ratio": ratio[-1] if ratio else None,
+        })
+
+    total_inv = sum(float(h["invested"] or 0) for h in holdings)
+    totals = []
+    for d in all_dates:
+        s = round(sum(h["history"].get(d, 0) or 0 for h in holdings))
+        totals.append({"date": d, "amount": s,
+                       "ratio": round(s / total_inv * 100, 2) if total_inv > 0 else None})
+    return jsonify({"ok": True, "holdings": result, "dates": all_dates,
+                    "total_invested": round(total_inv), "totals": totals})
+
+
 @app.route("/api/ranking")
 def api_ranking():
     """内蔵カタログ全体をテクニカル勢い（スコア）で順位付けして返す。

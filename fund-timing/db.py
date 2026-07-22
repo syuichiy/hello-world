@@ -89,6 +89,26 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                 PRIMARY KEY(isin, assoc_code)
             );
             CREATE INDEX IF NOT EXISTS idx_catalog_name ON catalog(name);
+
+            -- 取引履歴（実額）ポートフォリオ。価格推移タブの正確な推移に使う。
+            CREATE TABLE IF NOT EXISTS actual_holding (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                fund_name   TEXT DEFAULT '',
+                isin        TEXT DEFAULT '',
+                assoc_code  TEXT DEFAULT '',
+                asset_class TEXT DEFAULT '',
+                broker      TEXT DEFAULT '',
+                sell_policy TEXT DEFAULT 'full',
+                invested    REAL DEFAULT 0,
+                sort_order  INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS actual_amount (
+                holding_id INTEGER NOT NULL,
+                date       TEXT NOT NULL,
+                amount     REAL,
+                PRIMARY KEY(holding_id, date)
+            );
             """
         )
         # マイグレーション: 保有口数カラム（旧バージョンのDBに追加）
@@ -142,6 +162,71 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         seed_catalog(db_path)
         _seed_default_watchlist(db_path)
         _ensure_seed_stocks_watched(db_path)
+        import_actual_portfolio(db_path)
+
+
+# 取引履歴（実額）ポートフォリオの取り込み元（アプリに同梱）
+_PORTFOLIO_SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio_seed.json")
+
+
+def import_actual_portfolio(db_path: Optional[str] = None):
+    """同梱の portfolio_seed.json（ユーザー提供の取引履歴・実額）を一度だけ取り込む。"""
+    if not os.path.exists(_PORTFOLIO_SEED):
+        return False
+    try:
+        data = json.load(open(_PORTFOLIO_SEED, encoding="utf-8"))
+    except Exception:
+        return False
+    products = data.get("products", [])
+    with _conn(db_path) as c:
+        done = c.execute("SELECT value FROM settings WHERE key='portfolio_import_v1'").fetchone()
+        if done:
+            return False
+        for i, p in enumerate(products):
+            cur = c.execute(
+                "INSERT INTO actual_holding(name, fund_name, isin, assoc_code, asset_class, "
+                "broker, sell_policy, invested, sort_order) VALUES (?,?,?,?,?,?,?,?,?)",
+                (p.get("name", ""), p.get("fund_name", ""), p.get("isin", ""), p.get("assoc_code", ""),
+                 p.get("asset_class", ""), p.get("broker", ""),
+                 p.get("sell_policy", "full"), float(p.get("invested") or 0), i),
+            )
+            hid = cur.lastrowid
+            for d, a in (p.get("history") or {}).items():
+                try:
+                    c.execute("INSERT OR REPLACE INTO actual_amount(holding_id, date, amount) VALUES (?,?,?)",
+                              (hid, d, float(a)))
+                except (TypeError, ValueError):
+                    continue
+        c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('portfolio_import_v1', '1')")
+    return True
+
+
+def get_actual_holdings(db_path: Optional[str] = None):
+    """実額ポートフォリオの全保有（各保有の日次金額 history 付き）を返す。"""
+    with _conn(db_path) as c:
+        holdings = [dict(r) for r in c.execute(
+            "SELECT * FROM actual_holding ORDER BY sort_order, id")]
+        for h in holdings:
+            rows = c.execute("SELECT date, amount FROM actual_amount WHERE holding_id=? ORDER BY date",
+                             (h["id"],)).fetchall()
+            h["history"] = {r["date"]: r["amount"] for r in rows}
+        return holdings
+
+
+def set_actual_invested(holding_id: int, invested: float, db_path: Optional[str] = None):
+    invested = max(0.0, float(invested or 0))
+    with _conn(db_path) as c:
+        c.execute("UPDATE actual_holding SET invested=? WHERE id=?", (invested, holding_id))
+    return invested
+
+
+def set_actual_amount(holding_id: int, date: str, amount: float, db_path: Optional[str] = None):
+    with _conn(db_path) as c:
+        if amount is None or float(amount) <= 0:
+            c.execute("DELETE FROM actual_amount WHERE holding_id=? AND date=?", (holding_id, date))
+        else:
+            c.execute("INSERT OR REPLACE INTO actual_amount(holding_id, date, amount) VALUES (?,?,?)",
+                      (holding_id, date, float(amount)))
 
 
 def seed_catalog(db_path: Optional[str] = None):

@@ -248,39 +248,36 @@
       </div>
     </section>
 
-    <!-- ========================= 価格推移ビュー ========================= -->
+    <!-- ========================= 価格推移ビュー（取引履歴・実額ベース） ========================= -->
     <section id="price-view" hidden>
-      <div class="dashboard-toolbar">
-        <div class="range-group" id="price-range">
-          <button class="range-btn" data-range="6m">6ヶ月</button>
-          <button class="range-btn active" data-range="1y">1年</button>
-          <button class="range-btn" data-range="3y">3年</button>
-          <button class="range-btn" data-range="5y">5年</button>
-          <button class="range-btn" data-range="all">全期間</button>
-        </div>
-        <div class="toolbar-right">
-          <span class="sort-hint">縦軸＝評価額 ÷ 投資金額（%）／横軸＝日付</span>
+      <div id="price-status" class="status" hidden></div>
+
+      <!-- 合計サマリ -->
+      <div class="card price-summary-card" id="price-summary-card" hidden>
+        <div class="pf-sum-grid">
+          <div class="pf-sum"><span class="pf-sum-key">投資金額 合計</span><span class="pf-sum-val" id="sum-invested">—</span></div>
+          <div class="pf-sum"><span class="pf-sum-key">現在評価額 合計</span><span class="pf-sum-val" id="sum-current">—</span></div>
+          <div class="pf-sum"><span class="pf-sum-key">損益</span><span class="pf-sum-val" id="sum-pl">—</span></div>
+          <div class="pf-sum"><span class="pf-sum-key">損益率</span><span class="pf-sum-val" id="sum-plr">—</span></div>
         </div>
       </div>
-
-      <div id="price-status" class="status" hidden></div>
 
       <div class="card price-chart-card">
         <h2>📈 投資金額に対する評価額の推移（比率）</h2>
         <p class="hint">
-          各商品を「投資金額＝100%」に正規化して比較します。100%より上なら含み益、下なら含み損の目安です。
-          価格の水準差があっても比べやすいよう、比率（%）で表示しています。
-          <br>※価格はアプリ起動時（初回取得時）のスナップショットを表示しています。
+          取引履歴の<strong>実額（評価額）</strong>を元にした正確な推移です。各商品を「投資金額＝100%」に
+          正規化して比較します（縦軸＝評価額 ÷ 投資金額 %、横軸＝日付、100%＝元本の基準線）。
+          太線は<strong>ポートフォリオ全体</strong>の比率です。凡例をクリックすると個別に表示/非表示できます。
         </p>
         <div id="price-chart"></div>
         <p id="price-empty" class="empty-watch" hidden>
-          比率を表示するには、「銘柄一覧」で各商品の<strong>口数</strong>と<strong>投資金額</strong>を入力してください。
+          取引履歴データがありません。
         </p>
-        <div id="price-skipped" class="price-skipped" hidden></div>
       </div>
 
       <div class="card price-table-card" id="price-table-card" hidden>
-        <h2>📋 比率の推移（月末・%）</h2>
+        <h2>📋 金額の推移（評価額・円）</h2>
+        <p class="hint">日付ごとの各商品の評価額（円）です。最終行が合計評価額です。</p>
         <div class="table-scroll">
           <table class="price-table" id="price-table">
             <thead><tr id="price-table-head"></tr></thead>

@@ -427,92 +427,94 @@ async function addPreset(catalogId, broker) {
   loadWatchlist();
 }
 
-// ============================================================ 価格推移（評価額 ÷ 投資金額）
-let priceRange = "1y";
+// ============================================================ 価格推移（取引履歴・実額ベース）
 const PRICE_COLORS = ["#5b5bd6", "#e11d48", "#16a34a", "#f59e0b", "#0ea5e9",
-  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b"];
+  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b", "#a855f7", "#0891b2",
+  "#dc2626", "#65a30d", "#d97706", "#4f46e5", "#db2777", "#059669"];
 
 async function loadPriceHistory() {
   const st = $("price-status");
-  st.hidden = false; st.className = "status loading"; st.textContent = "価格を集計中… ⏳";
+  st.hidden = false; st.className = "status loading"; st.textContent = "集計中… ⏳";
   let data;
   try {
-    data = await (await fetch(`/api/price-history?range=${encodeURIComponent(priceRange)}`)).json();
+    data = await (await fetch("/api/actual-history")).json();
   } catch (e) {
     st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
   }
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
   st.hidden = true;
-  const holdings = data.holdings || [];
-  renderPriceChart(holdings);
-  renderPriceTable(holdings);
-  renderPriceSkipped(data.skipped || []);
+  renderPriceSummary(data);
+  renderPriceChart(data.holdings || [], data.totals || []);
+  renderPriceTable(data.holdings || [], data.dates || [], data.totals || []);
 }
 
-function renderPriceChart(holdings) {
+function renderPriceSummary(data) {
+  const card = $("price-summary-card");
+  const holds = data.holdings || [];
+  if (!holds.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const inv = data.total_invested || 0;
+  const totals = data.totals || [];
+  const cur = totals.length ? totals[totals.length - 1].amount : 0;
+  const pl = cur - inv;
+  const plr = inv > 0 ? (pl / inv * 100) : 0;
+  $("sum-invested").textContent = Number(inv).toLocaleString() + " 円";
+  $("sum-current").textContent = Number(cur).toLocaleString() + " 円";
+  $("sum-pl").textContent = (pl >= 0 ? "+" : "") + Number(pl).toLocaleString() + " 円";
+  $("sum-pl").className = "pf-sum-val " + (pl >= 0 ? "up" : "down");
+  $("sum-plr").textContent = (plr >= 0 ? "+" : "") + plr.toFixed(1) + "%";
+  $("sum-plr").className = "pf-sum-val " + (plr >= 0 ? "up" : "down");
+}
+
+function renderPriceChart(holdings, totals) {
   const empty = $("price-empty");
   if (!holdings.length) { empty.hidden = false; Plotly.purge("price-chart"); return; }
   empty.hidden = true;
-  const traces = holdings.map((h, i) => ({
-    x: h.dates, y: h.ratio, name: h.label, mode: "lines",
-    line: { width: 2, color: PRICE_COLORS[i % PRICE_COLORS.length] },
-    hovertemplate: "%{x}<br>%{y:.1f}%<extra>" + escapeHtml(h.label) + "</extra>",
-  }));
+  const traces = [];
+  if (totals.length) {
+    traces.push({
+      x: totals.map((t) => t.date), y: totals.map((t) => t.ratio), name: "合計（全体）", mode: "lines",
+      line: { width: 3.5, color: isDark() ? "#e7e8ef" : "#1e2130" },
+      hovertemplate: "%{x}<br>全体 %{y:.1f}%<extra></extra>",
+    });
+  }
+  holdings.forEach((h, i) => {
+    if (!h.ratio) return;   // 投資金額0（例：新規）→ 比率は出せないので線は描かない
+    traces.push({
+      x: h.dates, y: h.ratio, name: h.name, mode: "lines",
+      line: { width: 1.5, color: PRICE_COLORS[i % PRICE_COLORS.length] },
+      hovertemplate: "%{x}<br>" + escapeHtml(h.name) + " %{y:.1f}%<extra></extra>",
+    });
+  });
   const layout = baseLayout();
-  layout.height = 440;
+  layout.height = 460;
   layout.yaxis.title = "評価額 ÷ 投資金額 (%)";
   layout.yaxis.ticksuffix = "%";
   layout.margin = { l: 64, r: 20, t: 12, b: 40 };
+  layout.legend = { orientation: "h", y: -0.18, font: { size: 10.5 } };
   layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
     line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
-  layout.annotations = [{ xref: "paper", x: 0, y: 100, xanchor: "left", yanchor: "bottom",
-    text: "投資金額 (100%)", showarrow: false,
-    font: { size: 11, color: isDark() ? "#a8adbd" : "#64748b" } }];
   Plotly.newPlot("price-chart", traces, layout, { responsive: true, displayModeBar: false });
 }
 
-function renderPriceTable(holdings) {
+function renderPriceTable(holdings, dates, totals) {
   const card = $("price-table-card");
-  if (!holdings.length) { card.hidden = true; return; }
+  if (!holdings.length || !dates.length) { card.hidden = true; return; }
   card.hidden = false;
-  // 各月末（その月の最後の値）に集約
-  const monthsSet = new Set();
-  const perHolding = holdings.map((h) => {
-    const m = {};
-    h.dates.forEach((d, i) => { const mm = d.slice(0, 7); m[mm] = h.ratio[i]; monthsSet.add(mm); });
-    return m;
-  });
-  const months = [...monthsSet].sort().reverse();   // 新しい月が上
-  $("price-table-head").innerHTML = `<th>月末</th>` +
-    holdings.map((h, i) => `<th class="num pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.label)}</th>`).join("");
-  $("price-table-body").innerHTML = months.map((mm) => {
-    const cells = perHolding.map((m) => {
-      const v = m[mm];
-      if (v == null) return `<td class="num">—</td>`;
-      const cls = v > 100 ? "up" : v < 100 ? "down" : "";
-      return `<td class="num ${cls}">${v.toFixed(1)}%</td>`;
+  $("price-table-head").innerHTML = `<th>日付</th>` +
+    holdings.map((h, i) => `<th class="num pt-col" style="--cc:${PRICE_COLORS[i % PRICE_COLORS.length]}">${escapeHtml(h.name)}</th>`).join("") +
+    `<th class="num pt-total-col">合計</th>`;
+  const maps = holdings.map((h) => { const m = {}; h.dates.forEach((d, i) => { m[d] = h.amount[i]; }); return m; });
+  const totalMap = {}; totals.forEach((t) => { totalMap[t.date] = t.amount; });
+  const rows = dates.slice().reverse();   // 新しい日付が上
+  $("price-table-body").innerHTML = rows.map((d) => {
+    const cells = maps.map((m) => {
+      const v = m[d];
+      return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
     }).join("");
-    return `<tr><td>${mm}</td>${cells}</tr>`;
+    const tot = totalMap[d];
+    return `<tr><td>${d}</td>${cells}<td class="num pt-total-col">${tot == null ? "—" : Number(tot).toLocaleString()}</td></tr>`;
   }).join("");
-}
-
-function renderPriceSkipped(skipped) {
-  const el = $("price-skipped");
-  const need = skipped.filter((s) => s.need_units || s.need_invested);
-  const errs = skipped.filter((s) => s.error);
-  if (!need.length && !errs.length) { el.hidden = true; el.innerHTML = ""; return; }
-  el.hidden = false;
-  let html = "";
-  if (need.length) {
-    html += `<p class="hint">▼ 口数・投資金額が未入力のため比率を表示できない商品（「銘柄一覧」で入力してください）：</p><ul class="skip-list">` +
-      need.map((s) => `<li>${escapeHtml(s.name)}${s.broker ? "（" + escapeHtml(s.broker) + "）" : ""}
-        <span class="skip-need">${[s.need_units ? "口数" : "", s.need_invested ? "投資金額" : ""].filter(Boolean).join("・")} が未入力</span></li>`).join("") + `</ul>`;
-  }
-  if (errs.length) {
-    html += `<p class="hint">▼ 価格を取得できなかった商品：</p><ul class="skip-list">` +
-      errs.map((s) => `<li>${escapeHtml(s.name)} — ${escapeHtml(s.error)}</li>`).join("") + `</ul>`;
-  }
-  el.innerHTML = html;
 }
 
 // 保有全体（ポートフォリオ）の目安カード
@@ -1200,13 +1202,6 @@ $("dash-range").addEventListener("click", (e) => {
   b.classList.add("active"); dashRange = b.dataset.range; loadWatchlist();
 });
 $("refresh-btn").addEventListener("click", () => loadWatchlist(true));
-
-// 価格推移タブの期間切替
-$("price-range").addEventListener("click", (e) => {
-  const b = e.target.closest(".range-btn"); if (!b) return;
-  document.querySelectorAll("#price-range .range-btn").forEach((x) => x.classList.remove("active"));
-  b.classList.add("active"); priceRange = b.dataset.range; loadPriceHistory();
-});
 
 // メニュータブ切替
 $("main-nav").addEventListener("click", (e) => {
