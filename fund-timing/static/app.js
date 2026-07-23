@@ -456,16 +456,22 @@ let lineMode = "products";  // "products"（商品別）| "total"（合計のみ
 let priceRange = "6m";      // 価格推移グラフの期間
 let trendFilter = "all";    // "all" | "up"（上昇）| "flat"（横ばい）| "down"（下降）
 
-// 商品の評価額推移から上昇/横ばい/下降トレンドを判定（表示期間の始点→終点の変化率）
+// 商品の評価額推移から上昇/横ばい/下降トレンドを判定する。
+// 「直近加重ブレンド」：全期間の変化率を土台に、直近1/4期間の変化率を加味して
+// 直近の失速・反発も少し織り込む（重み 全体0.6／直近0.4）。
 function holdingTrend(h) {
   const src = (h.ratio && h.ratio.length) ? h.ratio : (h.amount || []);
   const vals = src.filter((v) => v != null);
   if (vals.length < 2) return "flat";
   const first = vals[0], last = vals[vals.length - 1];
   if (!first) return "flat";
-  const chg = (last - first) / Math.abs(first) * 100;  // 変化率(%)
-  if (chg >= 3) return "up";
-  if (chg <= -3) return "down";
+  const fullChg = (last - first) / Math.abs(first) * 100;                 // 全期間の変化率(%)
+  const rIdx = Math.min(Math.floor(vals.length * 0.75), vals.length - 2); // 直近1/4の起点
+  const rBase = vals[rIdx];
+  const recentChg = rBase ? (last - rBase) / Math.abs(rBase) * 100 : 0;   // 直近1/4の変化率(%)
+  const score = 0.6 * fullChg + 0.4 * recentChg;                          // 直近を少し織り込む
+  if (score >= 3) return "up";
+  if (score <= -3) return "down";
   return "flat";
 }
 
