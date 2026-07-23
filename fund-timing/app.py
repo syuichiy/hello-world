@@ -734,15 +734,16 @@ _RECORDED_MAX_DATE = db.recorded_max_date()
 
 def _persist_today_value(watch_id, date, value):
     """当日（記録期間より後）の評価額を amount_history に追記/更新する。
-    記録済みの実額（〜7/22）は書き換えない。"""
+    記録済みの実額（〜7/22）は書き換えない。書き込んだら True を返す。"""
     if not date or value is None:
-        return
+        return False
     if _RECORDED_MAX_DATE and date <= _RECORDED_MAX_DATE:
-        return
+        return False
     try:
         db.upsert_amount(int(watch_id), date, float(value))
+        return True
     except Exception:
-        pass
+        return False
 
 
 # 起動時の価格スナップショット（このセッション中は固定）。(isin, assoc) -> series dict
@@ -757,6 +758,47 @@ def _snapshot_series(isin, assoc, name, kind):
     series = load_series(isin, assoc, name, kind=kind)   # DBキャッシュ経由
     _price_snapshot[key] = series
     return series
+
+
+def _latest_valid(dates, values):
+    """末尾から見て最初の (日付, 値)（値がNoneでないもの）を返す。無ければ (None, None)。"""
+    for d, v in zip(reversed(dates or []), reversed(values or [])):
+        if v is not None:
+            return d, v
+    return None, None
+
+
+def _startup_price_refresh():
+    """起動時に保有投信・株の最新価格を一度だけ「強制取得」して内部DBのキャッシュを更新し、
+    当日分（記録期間より後の最新基準価額×口数）を amount_history へ反映する。
+
+    通常アクセスは12時間キャッシュを使うため、当日新しく公開された基準価額が
+    取り込まれないことがある。起動時に force 取得することで、表・グラフ・評価額を
+    最新の公開データに更新する。ネットワーク取得はバックグラウンドで行い、サーバ起動を
+    ブロックしない（失敗しても既存キャッシュで動作を続ける）。"""
+    updated = 0
+    for it in db.list_watchlist():
+        isin = (it.get("isin") or "").strip()
+        assoc = (it.get("assoc_code") or "").strip()
+        if not isin and not assoc:
+            continue
+        kind = it.get("kind", "fund") or "fund"
+        try:
+            series = load_series(isin, assoc, it.get("name", ""), force=True, kind=kind)
+        except Exception:
+            continue   # 取得失敗は既存キャッシュのまま
+        _price_snapshot[(isin, assoc)] = series   # セッション固定値も最新に
+        units = float(it.get("units") or 0)
+        if units <= 0:
+            continue
+        d, p = _latest_valid(series.get("dates"), series.get("nav"))
+        if d is None:
+            continue
+        factor = units / (10000.0 if kind != "stock" else 1.0)
+        if _persist_today_value(it["watch_id"], d, round(p * factor)):
+            updated += 1
+    if updated:
+        print(f"起動時の価格更新: {updated} 件の当日評価額を反映しました。")
 
 
 @app.route("/api/price-history")
@@ -1157,6 +1199,8 @@ def main():
     print("終了するには Ctrl+C を押してください。")
     if not args.no_browser:
         threading.Thread(target=_open_when_ready, args=(local_url, "127.0.0.1", port), daemon=True).start()
+    # 起動時に最新の基準価額を強制取得し、当日分を表・グラフ・評価額へ反映（非ブロッキング）
+    threading.Thread(target=_startup_price_refresh, daemon=True).start()
     app.run(host=bind_host, port=port, debug=False)
 
 
