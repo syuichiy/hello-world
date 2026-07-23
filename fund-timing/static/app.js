@@ -691,7 +691,53 @@ function shortTermSignal(s) {
   return null;
 }
 
-// 短期の売り時・買い時サマリーを画面上部に大きく表示
+// シグナルの強さ（±30〜±100）に応じた売買の口数・金額の目安を算出
+function shortTermAdvice(s, signal) {
+  const h = (s.hz || []).find((x) => x.key === "short");
+  const score = h && h.score != null ? Math.abs(h.score) : 30;
+  const strength = Math.min(1, Math.max(0, (score - 30) / 70)); // 0〜1
+  const price = Number(s.latest_price) || 0;
+  const units = Number(s.units) || 0;
+  const value = Number(s.value) || 0;
+  const isStock = s.kind === "stock";
+
+  if (signal === "sell") {
+    const pol = s.sell_policy || "full";
+    if (pol === "locked") return { hold: true };
+    let frac = 0.10 + strength * 0.20;                 // 10〜30%
+    if (pol === "partial") frac = Math.min(frac, 0.15); // 「一部可」は控えめに
+    const amount = Math.round(value * frac);
+    const u = units > 0 ? Math.round(units * frac) : null;
+    return { kind: "sell", frac, amount, units: u, isStock };
+  }
+  const frac = 0.05 + strength * 0.10;                  // 買い増しは 5〜15%
+  const amount = Math.round(value * frac);
+  const u = units > 0 ? Math.round(units * frac)
+          : (price > 0 && amount > 0 ? Math.round(amount / price * 10000) : null);
+  return { kind: "buy", frac, amount, units: u, isStock };
+}
+
+// 口数・金額の目安を読みやすい日本語にする
+function shortTermAdviceText(s, signal) {
+  const a = shortTermAdvice(s, signal);
+  if (a.hold) return "売却不可設定のため今回は見送り（ホールド）";
+  const hasAmt = a.amount > 0;
+  const uStr = (a.units != null && a.units > 0)
+    ? (a.isStock ? `${a.units.toLocaleString()}株` : `${a.units.toLocaleString()}口`) : null;
+  const amtStr = hasAmt ? `約 ${a.amount.toLocaleString()} 円` : null;
+  if (!hasAmt && !uStr) {
+    return signal === "buy"
+      ? "口数を入力すると買い増しの目安金額を表示します"
+      : "口数を入力すると売却の目安金額を表示します";
+  }
+  const detail = (amtStr && uStr) ? `${amtStr}（≈ ${uStr}）` : (amtStr || uStr);
+  const pct = Math.round(a.frac * 100);
+  return signal === "buy"
+    ? `買い増し目安 ${detail}・保有の約${pct}%`
+    : `一部利益確定 ${detail}・保有の約${pct}%を売却検討`;
+}
+
+// 短期の売り時・買い時サマリーを画面上部に大きく表示（売買の目安つき）
 function renderShortTermBanner() {
   const el = $("short-term-banner");
   if (!el) return;
@@ -706,24 +752,26 @@ function renderShortTermBanner() {
     el.innerHTML = "";
     return;
   }
-  const names = (arr) => arr
-    .map((s) => `<span class="st-name">${escapeHtml(s.account || s.name)}</span>`)
-    .join("");
+  const list = (arr, signal) => arr.map((s) =>
+    `<li><span class="st-item-nm">${escapeHtml(s.account || s.name)}</span>`
+    + `<span class="st-item-adv">${escapeHtml(shortTermAdviceText(s, signal))}</span></li>`
+  ).join("");
   let html = "";
   if (buys.length) {
     html += `<div class="st-line st-line-buy">
-      <span class="st-icon">🟢🔔</span>
-      <span class="st-text"><b>短期の買い時</b>が ${buys.length} 件あります
-        <span class="st-hint">（押し目・積立継続を検討できる水準）</span></span>
-      <span class="st-names">${names(buys)}</span></div>`;
+      <div class="st-head"><span class="st-icon">🟢🔔</span>
+        <span class="st-text"><b>短期の買い時</b> ${buys.length} 件
+          <span class="st-hint">（押し目・積立継続／買い増しを検討できる水準）</span></span></div>
+      <ul class="st-list">${list(buys, "buy")}</ul></div>`;
   }
   if (sells.length) {
     html += `<div class="st-line st-line-sell">
-      <span class="st-icon">🔴🔔</span>
-      <span class="st-text"><b>短期の売り時</b>が ${sells.length} 件あります
-        <span class="st-hint">（過熱気味・一部利益確定も選択肢）</span></span>
-      <span class="st-names">${names(sells)}</span></div>`;
+      <div class="st-head"><span class="st-icon">🔴🔔</span>
+        <span class="st-text"><b>短期の売り時</b> ${sells.length} 件
+          <span class="st-hint">（過熱気味／一部利益確定を検討できる水準）</span></span></div>
+      <ul class="st-list">${list(sells, "sell")}</ul></div>`;
   }
+  html += `<div class="st-note">※ 口数・金額はシグナルの強さから算出した機械的な目安です（保有評価額に対する割合。税・手数料・分配金は未考慮）。投資助言ではありません。</div>`;
   el.innerHTML = html;
   el.hidden = false;
 }

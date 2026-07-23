@@ -483,24 +483,27 @@ tr:hover .row-del { opacity: 1; }
 /* ------------------------------------------------ 短期シグナル（買い時・売り時） */
 .st-banner { margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
 .st-line {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
   padding: 13px 16px; border-radius: 12px; font-weight: 600;
   border: 1px solid transparent;
 }
-.st-line-buy  { background: rgba(22,163,74,.10); border-color: rgba(22,163,74,.28); color: var(--buy); }
-.st-line-sell { background: rgba(225,29,72,.09); border-color: rgba(225,29,72,.28); color: var(--sell); }
+.st-line-buy  { background: rgba(22,163,74,.10); border-color: rgba(22,163,74,.28); }
+.st-line-sell { background: rgba(225,29,72,.09); border-color: rgba(225,29,72,.28); }
+.st-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .st-line .st-icon { font-size: 18px; line-height: 1; }
 .st-line .st-text { font-size: 14.5px; color: var(--ink); }
-.st-line .st-text b { color: inherit; }
 .st-line-buy  .st-text b { color: var(--buy); }
 .st-line-sell .st-text b { color: var(--sell); }
 .st-hint { font-size: 12px; font-weight: 500; color: var(--ink-soft); }
-.st-names { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
-.st-name {
-  display: inline-block; font-size: 12px; font-weight: 700;
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: 999px; padding: 2px 10px; white-space: nowrap; color: var(--ink);
+.st-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.st-list li {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+  padding: 7px 11px; border-radius: 9px; background: var(--card); border: 1px solid var(--line);
 }
+.st-item-nm { font-size: 13px; font-weight: 700; color: var(--ink); min-width: 120px; }
+.st-item-adv { font-size: 13px; font-weight: 700; margin-left: auto; }
+.st-line-buy  .st-item-adv { color: var(--buy); }
+.st-line-sell .st-item-adv { color: var(--sell); }
+.st-note { font-size: 11.5px; font-weight: 500; color: var(--ink-soft); padding: 2px 4px; }
 .st-badge {
   display: inline-block; font-size: 10.5px; font-weight: 800;
   border-radius: 999px; padding: 1px 8px; margin-left: 8px; white-space: nowrap;
@@ -511,7 +514,7 @@ tr:hover .row-del { opacity: 1; }
 .watch-row.st-row-buy  { box-shadow: inset 4px 0 0 var(--buy); }
 .watch-row.st-row-sell { box-shadow: inset 4px 0 0 var(--sell); }
 @media (prefers-color-scheme: dark) {
-  .st-name { background: #1a1f36; }
+  .st-list li { background: #1a1f36; }
 }
 
 /* ------------------------------------------------ リバランスのアドバイス */
