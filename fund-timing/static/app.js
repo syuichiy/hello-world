@@ -487,7 +487,7 @@ function renderPriceSummary(data) {
 
 function renderPriceChart(holdings, totals) {
   const empty = $("price-empty");
-  if (!holdings.length) { empty.hidden = false; Plotly.purge("price-chart"); return; }
+  if (!holdings.length) { empty.hidden = false; Plotly.purge("actual-chart"); return; }
   empty.hidden = true;
   const amountMode = priceMode === "amount";
   const totalOnly = lineMode === "total";
@@ -531,7 +531,7 @@ function renderPriceChart(holdings, totals) {
     layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
       line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
   }
-  Plotly.newPlot("price-chart", traces, layout, { responsive: true, displayModeBar: false });
+  Plotly.newPlot("actual-chart", traces, layout, { responsive: true, displayModeBar: false });
 }
 
 const BROKER_ORDER = { "SBI証券": 0, "三菱UFJスマート証券": 1, "楽天証券": 2 };
