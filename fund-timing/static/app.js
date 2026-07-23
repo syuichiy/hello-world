@@ -454,6 +454,20 @@ let lastActualData = null;
 let priceMode = "ratio";   // "ratio"（比率%）| "amount"（実額円）
 let lineMode = "products";  // "products"（商品別）| "total"（合計のみ）
 let priceRange = "6m";      // 価格推移グラフの期間
+let trendFilter = "all";    // "all" | "up"（上昇）| "flat"（横ばい）| "down"（下降）
+
+// 商品の評価額推移から上昇/横ばい/下降トレンドを判定（表示期間の始点→終点の変化率）
+function holdingTrend(h) {
+  const src = (h.ratio && h.ratio.length) ? h.ratio : (h.amount || []);
+  const vals = src.filter((v) => v != null);
+  if (vals.length < 2) return "flat";
+  const first = vals[0], last = vals[vals.length - 1];
+  if (!first) return "flat";
+  const chg = (last - first) / Math.abs(first) * 100;  // 変化率(%)
+  if (chg >= 3) return "up";
+  if (chg <= -3) return "down";
+  return "flat";
+}
 
 function renderPriceSummary(data) {
   const card = $("price-summary-card");
@@ -488,10 +502,16 @@ function renderPriceSummary(data) {
 
 function renderPriceChart(holdings, totals) {
   const empty = $("price-empty");
-  if (!holdings.length) { empty.hidden = false; Plotly.purge("actual-chart"); return; }
+  if (!holdings.length) {
+    empty.textContent = "取引履歴データがありません。";
+    empty.hidden = false; Plotly.purge("actual-chart"); return;
+  }
   empty.hidden = true;
   const amountMode = priceMode === "amount";
   const totalOnly = lineMode === "total";
+  // トレンド絞り込みは商品別モードのみ有効。合計のみのときはトグルを無効表示に
+  const trendToggle = $("price-trend-toggle");
+  if (trendToggle) trendToggle.classList.toggle("disabled", totalOnly);
   const traces = [];
   if (totalOnly && totals.length) {   // 合計線は「合計のみ」モードでのみ表示
     traces.push({
@@ -508,6 +528,7 @@ function renderPriceChart(holdings, totals) {
     holdings.forEach((h) => { nameCount[h.name] = (nameCount[h.name] || 0) + 1; });
     holdings.forEach((h, i) => {
       if (h.kind === "stock") return;   // 日立などの個別株は商品別グラフから除外
+      if (trendFilter !== "all" && holdingTrend(h) !== trendFilter) return;  // トレンド絞り込み
       const y = amountMode ? h.amount : h.ratio;
       if (!y || !y.length) return;   // データが無いものだけ除外
       const nm = (nameCount[h.name] > 1 && h.account) ? `${h.name}（${h.account}）` : h.name;
@@ -518,6 +539,11 @@ function renderPriceChart(holdings, totals) {
                                   : "%{x}<br>" + escapeHtml(nm) + " %{y:.1f}%<extra></extra>",
       });
     });
+  }
+  if (!traces.length) {   // トレンド絞り込みで該当なし
+    const label = { up: "上昇傾向", flat: "横ばい", down: "下降傾向" }[trendFilter] || "";
+    empty.textContent = `${label}の商品はありません。別のトレンドを選ぶか「すべて」に戻してください。`;
+    empty.hidden = false; Plotly.purge("actual-chart"); return;
   }
   const layout = baseLayout();
   layout.height = 460;
@@ -1417,6 +1443,17 @@ $("price-line-toggle").addEventListener("click", (e) => {
   lineMode = b.dataset.line;
   document.querySelectorAll("#price-line-toggle .pm-btn").forEach((x) =>
     x.classList.toggle("active", x.dataset.line === lineMode));
+  if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
+});
+
+// 価格推移グラフのトレンド絞り込み（上昇 / 横ばい / 下降）※商品別モードのみ
+$("price-trend-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest(".pm-btn");
+  if (!b || b.dataset.trend === trendFilter) return;
+  if (lineMode === "total") return;   // 合計のみモードでは無効
+  trendFilter = b.dataset.trend;
+  document.querySelectorAll("#price-trend-toggle .pm-btn").forEach((x) =>
+    x.classList.toggle("active", x.dataset.trend === trendFilter));
   if (lastActualData) renderPriceChart(lastActualData.holdings || [], lastActualData.totals || []);
 });
 
