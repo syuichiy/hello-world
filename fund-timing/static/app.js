@@ -98,6 +98,7 @@ async function loadWatchlist(force) {
   setDashStatus("");
   if (Array.isArray(data.brokers) && data.brokers.length) BROKERS = data.brokers;
   lastSummaries = data.items || [];
+  renderShortTermBanner();
   renderWatchTable();
   renderPortfolio(data.portfolio);
   renderAllocation(data.allocation);
@@ -680,6 +681,53 @@ function setDashStatus(msg, kind) {
 
 const VERDICT_ORDER = { buy: 3, neutral: 2, sell: 1 };
 
+// 短期ホライズンのスコアから 買い時(buy)/売り時(sell) を判定（±30が閾値）
+function shortTermSignal(s) {
+  if (!s || !s.ok || !Array.isArray(s.hz)) return null;
+  const h = s.hz.find((x) => x.key === "short" && x.ok && x.score != null);
+  if (!h) return null;
+  if (h.score >= 30) return "buy";
+  if (h.score <= -30) return "sell";
+  return null;
+}
+
+// 短期の売り時・買い時サマリーを画面上部に大きく表示
+function renderShortTermBanner() {
+  const el = $("short-term-banner");
+  if (!el) return;
+  const buys = [], sells = [];
+  lastSummaries.forEach((s) => {
+    const st = shortTermSignal(s);
+    if (st === "buy") buys.push(s);
+    else if (st === "sell") sells.push(s);
+  });
+  if (!buys.length && !sells.length) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const names = (arr) => arr
+    .map((s) => `<span class="st-name">${escapeHtml(s.account || s.name)}</span>`)
+    .join("");
+  let html = "";
+  if (buys.length) {
+    html += `<div class="st-line st-line-buy">
+      <span class="st-icon">🟢🔔</span>
+      <span class="st-text"><b>短期の買い時</b>が ${buys.length} 件あります
+        <span class="st-hint">（押し目・積立継続を検討できる水準）</span></span>
+      <span class="st-names">${names(buys)}</span></div>`;
+  }
+  if (sells.length) {
+    html += `<div class="st-line st-line-sell">
+      <span class="st-icon">🔴🔔</span>
+      <span class="st-text"><b>短期の売り時</b>が ${sells.length} 件あります
+        <span class="st-hint">（過熱気味・一部利益確定も選択肢）</span></span>
+      <span class="st-names">${names(sells)}</span></div>`;
+  }
+  el.innerHTML = html;
+  el.hidden = false;
+}
+
 function renderWatchTable() {
   const body = $("watch-body");
   const empty = $("empty-watch");
@@ -707,15 +755,23 @@ function renderWatchTable() {
         <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td></tr>`;
     }
     const badge = verdictBadge(s.verdict, s.verdict_label);
+    const st = shortTermSignal(s);
+    const stBadge = st === "buy"
+      ? '<span class="st-badge st-buy" title="短期指標が買い寄り（押し目）の水準です">🔔 短期 買い時</span>'
+      : st === "sell"
+      ? '<span class="st-badge st-sell" title="短期指標が過熱・売り寄りの水準です">🔔 短期 売り時</span>'
+      : "";
+    const rowCls = st === "buy" ? "watch-row st-row-buy"
+      : st === "sell" ? "watch-row st-row-sell" : "watch-row";
     const chg = s.change_pct == null ? "—"
       : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
     const price = s.latest_price == null ? "—" : Number(s.latest_price).toLocaleString() + " 円";
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
     const plSub = (s.pl_pct == null) ? ""
       : `<div class="pl-sub ${s.pl_pct >= 0 ? "up" : "down"}">損益 ${s.pl_pct >= 0 ? "+" : ""}${s.pl_pct}%</div>`;
-    return `<tr class="watch-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
+    return `<tr class="${rowCls}" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
-        <div class="fund-nm">${escapeHtml(s.name)}</div>
+        <div class="fund-nm">${escapeHtml(s.name)}${stBadge}</div>
         <div class="fund-sub">${classChip(s.asset_class)}${s.account && s.account !== s.name ? `<span class="acct-chip">${escapeHtml(s.account)}</span>` : ""}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
       </td>
       <td>${badge}</td>
