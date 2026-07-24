@@ -1116,9 +1116,10 @@ _AI_SYSTEM_PROMPT = (
     "あなたは日本の個人投資家の投資信託ポートフォリオを見て、保有者向けのコメントを書くアシスタントです。"
     "入力はテクニカル指標（スコアや判定）・損益・資産配分・リバランス計算の結果です。"
     "これらを横断的に解釈し、次の3種類の日本語コメントをJSONで返してください。\n"
-    "- overall: ポートフォリオ全体の総合コメント（3〜5文）。偏り・過熱/割安・損益の傾向に触れる。\n"
-    "- rebalance: リバランスや資産配分の観点での提案（2〜4文）。\n"
-    "- funds: 各商品の短いコメント（1商品につき1〜2文）。watch_id で必ず対応づける。\n"
+    "- overall: ポートフォリオ全体の総合コメント（3文以内・150字以内）。偏り・過熱/割安・損益の傾向に触れる。\n"
+    "- rebalance: リバランスや資産配分の観点での提案（2文以内・120字以内）。\n"
+    "- funds: 各商品の短いコメント（1商品につき1文・50字以内）。watch_id で必ず対応づける。\n"
+    "重要: 全体で簡潔にまとめること。冗長な前置きや繰り返しは避ける。\n"
     "制約: 断定を避け『〜を検討できる水準』等の表現にする。売買を強制しない。"
     "税・手数料・分配金は考慮していない旨は全体で1度触れれば十分。"
     "これは機械的な参考情報であり投資助言ではありません。"
@@ -1175,7 +1176,7 @@ def api_ai_advice():
         client = anthropic.Anthropic(api_key=key)
         resp = client.messages.create(
             model=model_id,
-            max_tokens=4000,
+            max_tokens=12000,   # 日本語＋多数の銘柄でも途中で切れないよう十分な上限
             system=[{"type": "text", "text": _AI_SYSTEM_PROMPT,
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content":
@@ -1183,7 +1184,16 @@ def api_ai_advice():
             output_config={"format": {"type": "json_schema", "schema": _AI_SCHEMA}},
         )
         text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        data = json.loads(text) if text else {}
+        stop = getattr(resp, "stop_reason", None)
+        try:
+            data = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            if stop == "max_tokens":
+                return jsonify({"ok": False, "error":
+                                "AIの応答が長すぎて途中で切れました。もう一度お試しください"
+                                "（改善しない場合はHaikuモデルでお試しください）。"}), 502
+            return jsonify({"ok": False, "error":
+                            "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
     except Exception as e:
         return jsonify({"ok": False, "error": f"AI呼び出しに失敗しました: {e}"}), 502
 
