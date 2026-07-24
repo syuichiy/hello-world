@@ -19,6 +19,7 @@ function switchView(view) {
   $("dashboard-view").hidden = view !== "dashboard";
   $("portfolio-view").hidden = view !== "portfolio";
   $("price-view").hidden = view !== "price";
+  $("settings-view").hidden = view !== "settings";
   document.querySelectorAll(".nav-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
   // 非表示中に描画したPlotlyのグラフはサイズが正しく取れないため、
@@ -32,6 +33,8 @@ function switchView(view) {
     });
   } else if (view === "price") {
     loadPriceHistory();
+  } else if (view === "settings") {
+    loadSettings();
   }
   window.scrollTo(0, 0);
 }
@@ -45,6 +48,7 @@ function showDetail() {
   $("dashboard-view").hidden = true;
   $("portfolio-view").hidden = true;
   $("price-view").hidden = true;
+  $("settings-view").hidden = true;
   $("detail-view").hidden = false;
   window.scrollTo(0, 0);
 }
@@ -104,6 +108,10 @@ async function loadWatchlist(force) {
   renderAllocation(data.allocation);
   renderClassEditor();
   loadPresetCatalog();
+  // AIアドバイス：有効時のみ。初回 or 「最新に更新」時だけ呼ぶ（毎回は叩かない）。
+  if (aiSettings.ai_model !== "off" && (force || !aiLoadedOnce)) {
+    loadAiAdvice();
+  }
 }
 
 // ============================================================ 資産配分・リバランス
@@ -849,10 +857,13 @@ function renderWatchTable() {
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
     const plSub = (s.pl_pct == null) ? ""
       : `<div class="pl-sub ${s.pl_pct >= 0 ? "up" : "down"}">損益 ${s.pl_pct >= 0 ? "+" : ""}${s.pl_pct}%</div>`;
+    const aiAdv = aiAdviceByWatch[s.watch_id]
+      ? `<div class="ai-fund-advice">🤖 ${escapeHtml(aiAdviceByWatch[s.watch_id])}</div>` : "";
     return `<tr class="${rowCls}" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}${stBadge}</div>
         <div class="fund-sub">${classChip(s.asset_class)}${s.account && s.account !== s.name ? `<span class="acct-chip">${escapeHtml(s.account)}</span>` : ""}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
+        ${aiAdv}
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
@@ -1512,5 +1523,112 @@ $("detail-range").addEventListener("click", (e) => {
 });
 $("back-btn").addEventListener("click", showDashboard);
 
-// 初期表示
-loadWatchlist();
+// ============================================================ 設定 / AIアドバイス
+let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false };
+let aiAdviceByWatch = {};   // watch_id -> コメント
+let aiLoadedOnce = false;
+
+async function loadSettings() {
+  try {
+    const r = await fetch("/api/settings");
+    const d = await r.json();
+    if (d && d.ok) { aiSettings = d; renderSettingsUI(); }
+  } catch (_) { /* 設定取得失敗時は既定(off)のまま */ }
+}
+
+function renderSettingsUI() {
+  document.querySelectorAll("#ai-model-toggle .seg-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.model === aiSettings.ai_model));
+  const st = $("ai-key-status");
+  if (!st) return;
+  if (!aiSettings.ai_available) {
+    st.innerHTML = "⚠️ anthropic パッケージが未インストールです。<code>pip install anthropic</code> を実行してください。";
+  } else if (aiSettings.ai_key_from_env) {
+    st.textContent = "✅ 環境変数 ANTHROPIC_API_KEY を使用中（こちらが優先されます）。";
+  } else if (aiSettings.ai_key_set) {
+    st.textContent = "✅ APIキーは保存済みです（変更する場合のみ再入力してください）。";
+  } else {
+    st.textContent = "APIキーは未設定です。";
+  }
+}
+
+async function saveAiModel(model) {
+  aiSettings.ai_model = model;
+  renderSettingsUI();
+  try {
+    await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ai_model: model }) });
+  } catch (_) {}
+  if (model === "off") {
+    aiAdviceByWatch = {}; aiLoadedOnce = false;
+    const b = $("ai-advice-banner"); b.hidden = true; b.innerHTML = "";
+    renderWatchTable();
+    toast("AIアドバイスをオフにしました");
+  } else {
+    toast(`AIアドバイス: ${model === "sonnet" ? "Sonnet" : "Haiku"} に設定しました`);
+    aiLoadedOnce = false;
+    loadAiAdvice();
+  }
+}
+
+async function saveAiKey() {
+  const key = $("ai-key-input").value.trim();
+  try {
+    await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ai_api_key: key }) });
+    $("ai-key-input").value = "";
+    toast(key ? "APIキーを保存しました" : "APIキーを削除しました");
+    await loadSettings();
+  } catch (_) { toast("保存に失敗しました", "error"); }
+}
+
+async function loadAiAdvice(fromTest) {
+  const banner = $("ai-advice-banner");
+  const testStatus = $("ai-test-status");
+  if (aiSettings.ai_model === "off") { banner.hidden = true; return; }
+  if (fromTest && testStatus) testStatus.textContent = "問い合わせ中… ⏳";
+  banner.hidden = false;
+  banner.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> AIがコメントを生成中… ⏳</div>';
+  try {
+    const r = await fetch(`/api/ai-advice?range=${encodeURIComponent(dashRange)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      banner.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIアドバイスを取得できませんでした")}</div>`;
+      if (fromTest && testStatus) testStatus.textContent = "⚠️ " + (d.error || "失敗");
+      return;
+    }
+    aiLoadedOnce = true;
+    renderAiAdvice(d.advice, d.model);
+    if (fromTest && testStatus) testStatus.textContent = "✅ 成功（銘柄一覧に表示しました）";
+  } catch (_) {
+    banner.innerHTML = '<div class="ai-head ai-err"><span class="ai-ico">🤖</span> AI呼び出しに失敗しました</div>';
+    if (fromTest && testStatus) testStatus.textContent = "⚠️ 失敗";
+  }
+}
+
+function renderAiAdvice(advice, model) {
+  const banner = $("ai-advice-banner");
+  advice = advice || {};
+  aiAdviceByWatch = {};
+  (advice.funds || []).forEach((f) => {
+    if (f && f.watch_id != null) aiAdviceByWatch[f.watch_id] = f.advice;
+  });
+  const label = model === "sonnet" ? "Sonnet" : "Haiku";
+  let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>AIアドバイス</b><span class="ai-model">${label}</span></div>`;
+  if (advice.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(advice.overall)}</div></div>`;
+  if (advice.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(advice.rebalance)}</div></div>`;
+  html += '<div class="ai-foot">※ 機械的な参考情報であり投資助言ではありません。</div>';
+  banner.innerHTML = html;
+  banner.hidden = false;
+  renderWatchTable();   // 銘柄別コメントを表に反映
+}
+
+$("ai-model-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest(".seg-btn");
+  if (b && b.dataset.model !== aiSettings.ai_model) saveAiModel(b.dataset.model);
+});
+$("ai-key-save").addEventListener("click", saveAiKey);
+$("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
+
+// 初期表示（設定を先に読み込んでからウォッチリストを表示）
+loadSettings().then(loadWatchlist);

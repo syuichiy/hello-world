@@ -21,6 +21,7 @@
       <button class="nav-tab active" data-view="dashboard">📋 銘柄一覧</button>
       <button class="nav-tab" data-view="portfolio">🧺 ポートフォリオ</button>
       <button class="nav-tab" data-view="price">📈 価格推移</button>
+      <button class="nav-tab" data-view="settings">⚙️ 設定</button>
     </nav>
 
     <!-- ========================= 一覧ビュー ========================= -->
@@ -72,6 +73,8 @@
       <div id="dash-status" class="status" hidden></div>
 
       <div id="short-term-banner" class="st-banner" hidden></div>
+
+      <div id="ai-advice-banner" class="ai-banner" hidden></div>
 
       <div class="card table-card">
         <table class="watch-table">
@@ -312,6 +315,51 @@
             <thead><tr id="price-table-head"></tr></thead>
             <tbody id="price-table-body"></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================= 設定ビュー ========================= -->
+    <section id="settings-view" hidden>
+      <div class="card settings-card">
+        <h2>🤖 AIアドバイス（クラウド連携）</h2>
+        <p class="hint">
+          保有状況とテクニカル指標を <strong>Claude（Anthropic）</strong> に送り、
+          総合・リバランス・銘柄別のコメントを生成して銘柄一覧に表示します。
+          起動時（と「↻最新に更新」時）に<strong>1回だけ</strong>呼び出します。
+        </p>
+
+        <div class="setting-row">
+          <div class="setting-label">利用モデル</div>
+          <div class="seg-toggle" id="ai-model-toggle">
+            <button class="seg-btn" data-model="off">オフ</button>
+            <button class="seg-btn" data-model="haiku">Haiku（最安・高速）</button>
+            <button class="seg-btn" data-model="sonnet">Sonnet（推奨）</button>
+          </div>
+        </div>
+        <p class="hint model-cost-hint">
+          目安コスト：Haiku ≈ 1円/回、Sonnet ≈ 3円/回（従量課金）。「オフ」ならAIには一切送信しません。
+        </p>
+
+        <div class="setting-row" id="ai-key-row">
+          <div class="setting-label">APIキー</div>
+          <div class="setting-field">
+            <input id="ai-key-input" type="password" autocomplete="off"
+                   placeholder="sk-ant-... （ここに貼り付けて保存）">
+            <button id="ai-key-save" type="button" class="ghost-btn">保存</button>
+          </div>
+        </div>
+        <p class="hint" id="ai-key-status"></p>
+
+        <div class="setting-row">
+          <button id="ai-test-btn" type="button">接続テスト（1回呼び出す）</button>
+          <span id="ai-test-status" class="ai-test-status"></span>
+        </div>
+
+        <div class="settings-note">
+          <p>⚠️ <strong>プライバシー：</strong>「オフ以外」を選ぶと、保有銘柄名・評価額・損益・資産配分がAnthropicのサーバーに送信されます。ご自身のAPIキー・ご自身の判断でご利用ください。</p>
+          <p>💡 APIキーは環境変数 <code>ANTHROPIC_API_KEY</code> でも設定できます（そちらが優先されます）。未インストールの場合は <code>pip install anthropic</code> が必要です。</p>
+          <p>※ AIのコメントは機械的な参考情報であり、投資助言ではありません。税・手数料・分配金は考慮していません。</p>
         </div>
       </div>
     </section>

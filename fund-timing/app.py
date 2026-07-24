@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import math
+import os
 import re
 import socket
 import threading
@@ -305,11 +307,8 @@ def _summarize_fund(row, range_key, force=False):
     return summary
 
 
-@app.route("/api/watchlist/analyze")
-def api_watchlist_analyze():
-    """ウォッチリスト各投信の判定サマリ＋保有全体（ポートフォリオ）の目安を返す。"""
-    range_key = request.args.get("range", "1y")
-    force = request.args.get("force") in ("1", "true", "yes")
+def _build_summaries(range_key, force=False):
+    """ウォッチリスト各投信の判定サマリ一覧を作る（評価額・損益つき）。"""
     histories = db.get_all_amount_histories()
     summaries = []
     for it in db.list_watchlist():
@@ -348,6 +347,15 @@ def api_watchlist_analyze():
             s["pl"] = None
             s["pl_pct"] = None
         summaries.append(s)
+    return summaries
+
+
+@app.route("/api/watchlist/analyze")
+def api_watchlist_analyze():
+    """ウォッチリスト各投信の判定サマリ＋保有全体（ポートフォリオ）の目安を返す。"""
+    range_key = request.args.get("range", "1y")
+    force = request.args.get("force") in ("1", "true", "yes")
+    summaries = _build_summaries(range_key, force)
     portfolio = signal_mod.portfolio_advice(summaries)
     for s in summaries:
         s.pop("_w", None)  # portfolio_adviceが付ける内部ウェイトは返さない
@@ -1007,6 +1015,179 @@ def api_analyze():
         "reasons": analysis.reasons,
         "stats": stats,
     })
+
+
+# ================================================================== 設定 / AIアドバイス
+# クラウドのAI（Claude）に保有状況とテクニカル指標を渡して、総合コメントを1回で生成する。
+# 完全に任意の機能で、既定は "off"（AIには一切送信しない）。
+try:
+    import anthropic  # type: ignore
+    _HAS_ANTHROPIC = True
+except Exception:
+    _HAS_ANTHROPIC = False
+
+# 画面の選択肢 → 実際のモデルID
+_AI_MODELS = {
+    "haiku": "claude-haiku-4-5",
+    "sonnet": "claude-sonnet-5",
+}
+
+
+def _ai_api_key():
+    """APIキーを取得（環境変数 ANTHROPIC_API_KEY を優先、無ければ設定に保存された値）。"""
+    return (os.environ.get("ANTHROPIC_API_KEY") or db.get_setting("ai_api_key", "") or "").strip()
+
+
+def _settings_state():
+    model = db.get_setting("ai_model", "off") or "off"
+    if model not in ("off", "haiku", "sonnet"):
+        model = "off"
+    return {
+        "ai_model": model,
+        "ai_available": _HAS_ANTHROPIC,            # anthropic パッケージが入っているか
+        "ai_key_set": bool(_ai_api_key()),         # キーが使える状態か（値は返さない）
+        "ai_key_from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
+    }
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        if "ai_model" in data:
+            m = str(data.get("ai_model") or "off")
+            db.set_setting("ai_model", m if m in ("off", "haiku", "sonnet") else "off")
+        # APIキーは「値が来たときだけ」更新。空文字クリアも受け付ける。
+        if "ai_api_key" in data:
+            key = str(data.get("ai_api_key") or "").strip()
+            db.set_setting("ai_api_key", key)
+    return jsonify({"ok": True, **_settings_state()})
+
+
+def _short_term_signal(s):
+    """短期ホライズンのスコアから buy/sell/neutral を返す（±30が閾値）。"""
+    for h in (s.get("hz") or []):
+        if h.get("key") == "short" and h.get("ok") and h.get("score") is not None:
+            sc = h["score"]
+            if sc >= 30:
+                return "buy", sc
+            if sc <= -30:
+                return "sell", sc
+            return "neutral", sc
+    return "neutral", None
+
+
+def _build_ai_context(summaries, allocation):
+    """AIに渡すコンパクトな保有状況（銘柄・指標・リバランス）を組み立てる。"""
+    funds = []
+    for s in summaries:
+        if not s.get("ok"):
+            continue
+        st, st_score = _short_term_signal(s)
+        funds.append({
+            "watch_id": s.get("watch_id"),
+            "name": s.get("name"),
+            "account": s.get("account") or "",
+            "asset_class": s.get("asset_class") or "",
+            "verdict": s.get("verdict"),
+            "score": s.get("score"),
+            "short_term": st,
+            "short_score": st_score,
+            "value": s.get("value"),
+            "invested": s.get("invested"),
+            "pl_pct": s.get("pl_pct"),
+            "sell_policy": s.get("sell_policy"),
+            "change_pct": s.get("change_pct"),
+        })
+    ctx = {"funds": funds}
+    if allocation:
+        ctx["allocation"] = {
+            "classes": [
+                {"name": c.get("name"), "current_pct": c.get("share"),
+                 "target_pct": c.get("target"), "diff": c.get("diff")}
+                for c in (allocation.get("classes") or [])
+            ],
+            "rebalance_summary": (allocation.get("plan") or {}).get("summary"),
+        }
+    return ctx
+
+
+_AI_SYSTEM_PROMPT = (
+    "あなたは日本の個人投資家の投資信託ポートフォリオを見て、保有者向けのコメントを書くアシスタントです。"
+    "入力はテクニカル指標（スコアや判定）・損益・資産配分・リバランス計算の結果です。"
+    "これらを横断的に解釈し、次の3種類の日本語コメントをJSONで返してください。\n"
+    "- overall: ポートフォリオ全体の総合コメント（3〜5文）。偏り・過熱/割安・損益の傾向に触れる。\n"
+    "- rebalance: リバランスや資産配分の観点での提案（2〜4文）。\n"
+    "- funds: 各商品の短いコメント（1商品につき1〜2文）。watch_id で必ず対応づける。\n"
+    "制約: 断定を避け『〜を検討できる水準』等の表現にする。売買を強制しない。"
+    "税・手数料・分配金は考慮していない旨は全体で1度触れれば十分。"
+    "これは機械的な参考情報であり投資助言ではありません。"
+)
+
+_AI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overall": {"type": "string"},
+        "rebalance": {"type": "string"},
+        "funds": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "watch_id": {"type": "integer"},
+                    "advice": {"type": "string"},
+                },
+                "required": ["watch_id", "advice"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["overall", "rebalance", "funds"],
+    "additionalProperties": False,
+}
+
+
+@app.route("/api/ai-advice")
+def api_ai_advice():
+    """保有状況をClaudeに1回で問い合わせ、総合・リバランス・銘柄別コメントを返す。"""
+    state = _settings_state()
+    model_key = state["ai_model"]
+    if model_key == "off":
+        return jsonify({"ok": False, "disabled": True,
+                        "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
+    if not _HAS_ANTHROPIC:
+        return jsonify({"ok": False, "error":
+                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
+    key = _ai_api_key()
+    if not key:
+        return jsonify({"ok": False, "error":
+                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
+
+    range_key = request.args.get("range", "1y")
+    summaries = _build_summaries(range_key, force=False)
+    allocation = _build_allocation(summaries)
+    ctx = _build_ai_context(summaries, allocation)
+    if not ctx["funds"]:
+        return jsonify({"ok": False, "error": "分析できる保有商品がありません。"})
+
+    model_id = _AI_MODELS[model_key]
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model=model_id,
+            max_tokens=4000,
+            system=[{"type": "text", "text": _AI_SYSTEM_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content":
+                       "次の保有状況にコメントしてください。\n" + json.dumps(ctx, ensure_ascii=False)}],
+            output_config={"format": {"type": "json_schema", "schema": _AI_SCHEMA}},
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        data = json.loads(text) if text else {}
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"AI呼び出しに失敗しました: {e}"}), 502
+
+    return jsonify({"ok": True, "model": model_key, "advice": data})
 
 
 # ------------------------------------------------------------------ 起動
