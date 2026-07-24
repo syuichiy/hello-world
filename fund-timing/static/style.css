@@ -759,3 +759,8 @@ main > section { display: block; }
 @media (prefers-color-scheme: dark) {
   .ai-fund-advice, .ai-banner { background: rgba(91,141,239,.13); }
 }
+
+.ai-portfolio-card { border-color: rgba(91,141,239,.28); background: rgba(91,141,239,.05); }
+.ai-portfolio-card .ai-block:first-child { margin-top: 4px; }
+.ai-portfolio-card .ai-foot .ai-model { margin-right: 6px; }
+@media (prefers-color-scheme: dark) { .ai-portfolio-card { background: rgba(91,141,239,.10); } }

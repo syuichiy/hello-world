@@ -25,6 +25,7 @@ function switchView(view) {
   // 非表示中に描画したPlotlyのグラフはサイズが正しく取れないため、
   // 表示に切り替えてレイアウトが確定してからリサイズする
   if (view === "portfolio") {
+    renderPortfolioAi();
     requestAnimationFrame(() => {
       ["pie-current", "pie-target"].forEach((id) => {
         const el = $(id);
@@ -1526,6 +1527,8 @@ $("back-btn").addEventListener("click", showDashboard);
 // ============================================================ 設定 / AIアドバイス
 let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false };
 let aiAdviceByWatch = {};   // watch_id -> コメント
+let lastAiAdvice = null;    // 直近のAIアドバイス全体 {overall, rebalance, funds}
+let lastAiModel = null;
 let aiLoadedOnce = false;
 
 async function loadSettings() {
@@ -1560,9 +1563,10 @@ async function saveAiModel(model) {
       body: JSON.stringify({ ai_model: model }) });
   } catch (_) {}
   if (model === "off") {
-    aiAdviceByWatch = {}; aiLoadedOnce = false;
+    aiAdviceByWatch = {}; lastAiAdvice = null; aiLoadedOnce = false;
     const b = $("ai-advice-banner"); b.hidden = true; b.innerHTML = "";
     renderWatchTable();
+    renderPortfolioAi();
     toast("AIアドバイスをオフにしました");
   } else {
     toast(`AIアドバイス: ${model === "sonnet" ? "Sonnet" : "Haiku"} に設定しました`);
@@ -1609,6 +1613,8 @@ async function loadAiAdvice(fromTest) {
 function renderAiAdvice(advice, model) {
   const banner = $("ai-advice-banner");
   advice = advice || {};
+  lastAiAdvice = advice;
+  lastAiModel = model;
   aiAdviceByWatch = {};
   (advice.funds || []).forEach((f) => {
     if (f && f.watch_id != null) aiAdviceByWatch[f.watch_id] = f.advice;
@@ -1621,6 +1627,23 @@ function renderAiAdvice(advice, model) {
   banner.innerHTML = html;
   banner.hidden = false;
   renderWatchTable();   // 銘柄別コメントを表に反映
+  renderPortfolioAi();  // ポートフォリオ画面のAIカードにも反映
+}
+
+// ポートフォリオ画面の「🤖 AIの見解」カード（総合・リバランス）
+function renderPortfolioAi() {
+  const card = $("ai-portfolio-card");
+  if (!card) return;
+  if (aiSettings.ai_model === "off" || !lastAiAdvice) { card.hidden = true; return; }
+  const a = lastAiAdvice;
+  const label = lastAiModel === "sonnet" ? "Sonnet" : "Haiku";
+  let html = "";
+  if (a.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(a.overall)}</div></div>`;
+  if (a.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(a.rebalance)}</div></div>`;
+  if (!html) { card.hidden = true; return; }
+  html += `<div class="ai-foot"><span class="ai-model">${label}</span> ※ 機械的な参考情報であり投資助言ではありません。</div>`;
+  $("ai-portfolio-body").innerHTML = html;
+  card.hidden = false;
 }
 
 $("ai-model-toggle").addEventListener("click", (e) => {
