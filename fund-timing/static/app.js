@@ -4,8 +4,8 @@ const $ = (id) => document.getElementById(id);
 
 let dashRange = "1y";
 let detailRange = "3y";
-let sortKey = "score";
-let sortDir = -1;           // -1: 降順, 1: 昇順
+let sortKey = "broker";     // 既定は証券会社順（SBI→UFJ→楽天）
+let sortDir = 1;            // -1: 降順, 1: 昇順
 let lastSummaries = [];
 let detailCtx = null;       // {catalog_id} or {q, name}
 
@@ -820,6 +820,7 @@ function renderShortTermBanner() {
 function renderWatchTable() {
   const body = $("watch-body");
   const empty = $("empty-watch");
+  updateSortHeaders();   // 現在のソート列に▲/▼を反映（初回描画でも）
   if (!lastSummaries.length) {
     body.innerHTML = ""; empty.hidden = false; return;
   }
@@ -827,6 +828,14 @@ function renderWatchTable() {
 
   const rows = lastSummaries.slice().sort((a, b) => {
     let va, vb;
+    if (sortKey === "broker") {
+      // 証券会社: SBI → 三菱UFJ → 楽天 の順（未設定・その他は末尾）
+      const oa = BROKER_ORDER[a.broker] ?? 99;
+      const ob = BROKER_ORDER[b.broker] ?? 99;
+      if (oa !== ob) return sortDir * (oa - ob);
+      // 同じ証券会社内はシグナル強度の高い順
+      return (b.score ?? -999) - (a.score ?? -999);
+    }
     if (sortKey === "verdict") { va = VERDICT_ORDER[a.verdict] || 0; vb = VERDICT_ORDER[b.verdict] || 0; }
     else if (sortKey === "name") { va = a.name || ""; vb = b.name || ""; return sortDir * va.localeCompare(vb, "ja"); }
     else { va = a[sortKey]; vb = b[sortKey]; }
@@ -1412,7 +1421,7 @@ document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
   th.addEventListener("click", () => {
     const key = th.dataset.key;
     if (sortKey === key) sortDir = -sortDir;
-    else { sortKey = key; sortDir = (key === "name") ? 1 : -1; }
+    else { sortKey = key; sortDir = (key === "name" || key === "broker") ? 1 : -1; }
     updateSortHeaders();
     renderWatchTable();
   });
