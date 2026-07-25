@@ -19,6 +19,7 @@ function switchView(view) {
   $("dashboard-view").hidden = view !== "dashboard";
   $("portfolio-view").hidden = view !== "portfolio";
   $("price-view").hidden = view !== "price";
+  $("plan-view").hidden = view !== "plan";
   $("settings-view").hidden = view !== "settings";
   document.querySelectorAll(".nav-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
@@ -34,6 +35,8 @@ function switchView(view) {
     });
   } else if (view === "price") {
     loadPriceHistory();
+  } else if (view === "plan") {
+    loadPlan();
   } else if (view === "settings") {
     loadSettings();
   }
@@ -49,6 +52,7 @@ function showDetail() {
   $("dashboard-view").hidden = true;
   $("portfolio-view").hidden = true;
   $("price-view").hidden = true;
+  $("plan-view").hidden = true;
   $("settings-view").hidden = true;
   $("detail-view").hidden = false;
   window.scrollTo(0, 0);
@@ -1668,6 +1672,250 @@ $("ai-model-toggle").addEventListener("click", (e) => {
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
 $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
+
+// ============================================================ 資産プラン
+let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
+const DIV_FREQ = {   // 決算頻度 → 年間の回数（基準月から等間隔）
+  none: { label: "なし", n: 0, step: 0 },
+  monthly: { label: "毎月", n: 12, step: 1 },
+  q4: { label: "年4回", n: 4, step: 3 },
+  semi: { label: "年2回", n: 2, step: 6 },
+  annual: { label: "年1回", n: 1, step: 12 },
+};
+
+async function loadPlan() {
+  try {
+    const r = await fetch(`/api/plan?range=${encodeURIComponent(dashRange)}`);
+    const d = await r.json();
+    if (!d.ok) return;
+    planData = d;
+    planData.plan = planData.plan || {};
+    planData.plan.dividends = planData.plan.dividends || {};
+    // 入力欄へ反映
+    $("plan-goal").value = fmtInt(planData.plan.goal || 0);
+    $("plan-monthly").value = fmtInt(planData.plan.monthly || 0);
+    $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
+    renderPlanGoal();
+    renderPlanSim();
+    renderPlanDividends();
+  } catch (_) {}
+}
+
+let planSaveTimer = null;
+function savePlan(payload) {
+  clearTimeout(planSaveTimer);
+  planSaveTimer = setTimeout(() => {
+    fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload) }).catch(() => {});
+  }, 450);
+}
+
+// --- 目標・FIRE進捗 ---
+function renderPlanGoal() {
+  const goal = planData.plan.goal || 0;
+  const cur = planData.total_value || 0;
+  const pct = goal > 0 ? (cur / goal * 100) : 0;
+  $("fire-fill").style.width = Math.min(100, pct).toFixed(1) + "%";
+  $("fire-pct").textContent = goal > 0 ? `達成率 ${pct.toFixed(1)}%` : "目標額を入力してください";
+  const remain = goal - cur;
+  $("fire-remain").textContent = goal > 0
+    ? (remain > 0 ? `あと ${Math.round(remain).toLocaleString()} 円` : "🎉 目標達成！")
+    : "";
+  $("plan-goal-note").textContent = goal > 0
+    ? `現在の評価額 ${Math.round(cur).toLocaleString()} 円 ／ 目標 ${Math.round(goal).toLocaleString()} 円`
+    : "";
+}
+
+// --- 積立シミュレーション ---
+function fvAtMonths(cur, monthly, annualRate, months) {
+  const rm = Math.pow(1 + annualRate, 1 / 12) - 1;
+  const growth = cur * Math.pow(1 + rm, months);
+  const sip = rm > 0 ? monthly * ((Math.pow(1 + rm, months) - 1) / rm) : monthly * months;
+  return growth + sip;
+}
+function renderPlanSim() {
+  const cur = planData.total_value || 0;
+  const inv = planData.total_invested || 0;
+  const monthly = planData.plan.monthly || 0;
+  const rate = (planData.plan.return_rate || 0) / 100;
+
+  // グラフ（0〜30年）
+  const years = [], evalLine = [], prinLine = [];
+  for (let y = 0; y <= 30; y++) {
+    years.push(y);
+    evalLine.push(Math.round(fvAtMonths(cur, monthly, rate, y * 12)));
+    prinLine.push(Math.round(inv + monthly * 12 * y));
+  }
+  const dark = (typeof isDark === "function") && isDark();
+  const traces = [
+    { x: years, y: evalLine, name: "予想評価額", mode: "lines",
+      line: { width: 2.5, color: "#5b8def" },
+      hovertemplate: "%{x}年後<br>予想評価額 %{y:,.0f} 円<extra></extra>" },
+    { x: years, y: prinLine, name: "投資元本", mode: "lines",
+      line: { width: 1.8, color: "#8a8f9c", dash: "dot" },
+      hovertemplate: "%{x}年後<br>投資元本 %{y:,.0f} 円<extra></extra>" },
+  ];
+  const layout = (typeof baseLayout === "function") ? baseLayout() : {};
+  layout.height = 300;
+  layout.margin = { l: 70, r: 16, t: 10, b: 36 };
+  layout.hovermode = "x unified";
+  layout.legend = { orientation: "h", y: -0.2, font: { size: 11 } };
+  layout.xaxis = Object.assign(layout.xaxis || {}, { title: "年後", dtick: 5 });
+  layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円" });
+  Plotly.newPlot("plan-sim-chart", traces, layout, { responsive: true, displayModeBar: false });
+
+  // 表（節目の年）
+  const marks = [5, 10, 15, 20, 30];
+  let rows = "<tr><th>年後</th><th class='num'>投資元本</th><th class='num'>予想評価額</th><th class='num'>予想含み損益</th></tr>";
+  marks.forEach((y) => {
+    const ev = fvAtMonths(cur, monthly, rate, y * 12);
+    const pr = inv + monthly * 12 * y;
+    const gain = ev - pr;
+    rows += `<tr><td>${y}年</td>`
+      + `<td class="num">${Math.round(pr).toLocaleString()}</td>`
+      + `<td class="num"><b>${Math.round(ev).toLocaleString()}</b></td>`
+      + `<td class="num ${gain >= 0 ? "up" : "down"}">${gain >= 0 ? "+" : ""}${Math.round(gain).toLocaleString()}</td></tr>`;
+  });
+  $("plan-sim-table").innerHTML = rows;
+
+  // 目標達成予想
+  const goal = planData.plan.goal || 0;
+  const eta = $("plan-eta");
+  if (!goal) { eta.textContent = ""; }
+  else if (cur >= goal) { eta.textContent = "🎉 すでに目標を達成しています。"; }
+  else if (monthly <= 0 && rate <= 0) { eta.textContent = "積立額または想定年利を入力すると、目標達成の予想時期を表示します。"; }
+  else {
+    let m = 0, found = -1;
+    for (m = 1; m <= 600; m++) {   // 最長50年
+      if (fvAtMonths(cur, monthly, rate, m) >= goal) { found = m; break; }
+    }
+    eta.textContent = found > 0
+      ? `🎯 このペースなら 約 ${Math.floor(found / 12)}年${found % 12}ヶ月後 に目標（${Math.round(goal).toLocaleString()}円）へ到達する見込みです。`
+      : "🎯 現在の条件では50年以内に目標へ到達しません。積立額や想定年利を見直してみてください。";
+  }
+}
+
+// --- 分配金カレンダー ---
+function divMonths(freq, base) {
+  const f = DIV_FREQ[freq]; if (!f || f.n === 0) return [];
+  if (freq === "monthly") return [1,2,3,4,5,6,7,8,9,10,11,12];
+  const out = [];
+  for (let i = 0; i < f.n; i++) out.push(((base - 1 + f.step * i) % 12) + 1);
+  return out;
+}
+function renderPlanDividends() {   // テーブル（初期表示）＋カレンダー
+  const divs = planData.plan.dividends || {};
+  const holds = planData.holdings || [];
+  const monthOpts = Array.from({ length: 12 }, (_, i) =>
+    `<option value="${i + 1}">${i + 1}月</option>`).join("");
+  const freqOpts = Object.keys(DIV_FREQ).map((k) =>
+    `<option value="${k}">${DIV_FREQ[k].label}</option>`).join("");
+
+  let rows = "<tr><th>商品</th><th class='num'>年間分配金（見込み・円）</th><th>決算</th><th>基準月</th></tr>";
+  holds.forEach((h) => {
+    const d = divs[h.watch_id] || { annual: 0, freq: "none", base: 1 };
+    const nm = escapeHtml(h.account || h.name);
+    rows += `<tr data-watch="${h.watch_id}">
+      <td class="pd-nm">${nm}</td>
+      <td class="num"><input class="pd-annual" type="text" inputmode="numeric" value="${fmtInt(d.annual)}" placeholder="0"></td>
+      <td><select class="pd-freq">${freqOpts}</select></td>
+      <td><select class="pd-base" ${(d.freq === "none" || d.freq === "monthly") ? "disabled" : ""}>${monthOpts}</select></td>
+    </tr>`;
+  });
+  const tbl = $("plan-div-table");
+  tbl.innerHTML = rows;
+  // 選択値を反映
+  holds.forEach((h) => {
+    const d = divs[h.watch_id] || { annual: 0, freq: "none", base: 1 };
+    const tr = tbl.querySelector(`tr[data-watch="${h.watch_id}"]`);
+    if (tr) { tr.querySelector(".pd-freq").value = d.freq || "none";
+      tr.querySelector(".pd-base").value = d.base || 1; }
+  });
+  renderPlanDivCalendar();
+}
+
+// 分配金カレンダー・年間合計（テーブルは作り直さない＝入力中もカーソルを保つ）
+function renderPlanDivCalendar() {
+  const divs = planData.plan.dividends || {};
+  const holds = planData.holdings || [];
+  const monthTotal = Array(13).fill(0);
+  let annualTotal = 0;
+  holds.forEach((h) => {
+    const d = divs[h.watch_id]; if (!d || !d.annual) return;
+    const ms = divMonths(d.freq, d.base || 1);
+    if (!ms.length) return;
+    const per = d.annual / ms.length;
+    ms.forEach((m) => { monthTotal[m] += per; });
+    annualTotal += Number(d.annual) || 0;
+  });
+  const maxM = Math.max(1, ...monthTotal.slice(1));
+  let cal = "";
+  for (let m = 1; m <= 12; m++) {
+    const v = monthTotal[m];
+    const hpct = (v / maxM * 100).toFixed(0);
+    cal += `<div class="pd-cal-col"><div class="pd-cal-bar-wrap">`
+      + `<div class="pd-cal-bar" style="height:${v > 0 ? Math.max(6, hpct) : 0}%" title="${Math.round(v).toLocaleString()}円"></div></div>`
+      + `<div class="pd-cal-amt">${v > 0 ? Math.round(v).toLocaleString() : "—"}</div>`
+      + `<div class="pd-cal-m">${m}月</div></div>`;
+  }
+  $("plan-div-calendar").innerHTML = cal;
+  const yieldPct = planData.total_value > 0 ? (annualTotal / planData.total_value * 100) : 0;
+  $("plan-div-summary").innerHTML = annualTotal > 0
+    ? `年間分配金の見込み合計：<b>${Math.round(annualTotal).toLocaleString()} 円</b>（評価額に対する分配利回り 約 ${yieldPct.toFixed(2)}%／月あたり 約 ${Math.round(annualTotal / 12).toLocaleString()} 円）`
+    : "各商品の年間分配金と決算タイミングを入力すると、月別の分配金と年間合計を表示します。";
+}
+
+function collectDividends() {
+  const divs = {};
+  $("plan-div-table").querySelectorAll("tr[data-watch]").forEach((tr) => {
+    const wid = tr.dataset.watch;
+    const annual = parseIntComma(tr.querySelector(".pd-annual").value);
+    const freq = tr.querySelector(".pd-freq").value;
+    const base = parseInt(tr.querySelector(".pd-base").value, 10) || 1;
+    if (annual > 0 && freq !== "none") divs[wid] = { annual, freq, base };
+  });
+  planData.plan.dividends = divs;
+  return divs;
+}
+
+// 入力ハンドラ（目標・積立・年利）
+$("plan-goal").addEventListener("input", (e) => {
+  reformatCommaInput(e.target);
+  planData.plan.goal = parseIntComma(e.target.value);
+  renderPlanGoal(); renderPlanSim();
+  savePlan({ goal: planData.plan.goal });
+});
+$("plan-monthly").addEventListener("input", (e) => {
+  reformatCommaInput(e.target);
+  planData.plan.monthly = parseIntComma(e.target.value);
+  renderPlanSim();
+  savePlan({ monthly: planData.plan.monthly });
+});
+$("plan-return").addEventListener("input", (e) => {
+  planData.plan.return_rate = parseFloat(e.target.value) || 0;
+  renderPlanSim();
+  savePlan({ return_rate: planData.plan.return_rate });
+});
+
+// 分配金テーブルの入力・選択（テーブルは作り直さず、カレンダーだけ更新）
+$("plan-div-table").addEventListener("input", (e) => {
+  if (e.target.classList.contains("pd-annual")) {
+    reformatCommaInput(e.target);
+    collectDividends(); renderPlanDivCalendar();
+    savePlan({ dividends: planData.plan.dividends });
+  }
+});
+$("plan-div-table").addEventListener("change", (e) => {
+  if (e.target.classList.contains("pd-freq") || e.target.classList.contains("pd-base")) {
+    // 頻度=なし/毎月のときは基準月を無効化
+    if (e.target.classList.contains("pd-freq")) {
+      const tr = e.target.closest("tr");
+      tr.querySelector(".pd-base").disabled = (e.target.value === "none" || e.target.value === "monthly");
+    }
+    collectDividends(); renderPlanDivCalendar();
+    savePlan({ dividends: planData.plan.dividends });
+  }
+});
 
 // 初期表示（設定を先に読み込んでからウォッチリストを表示）
 loadSettings().then(loadWatchlist);

@@ -764,3 +764,60 @@ main > section { display: block; }
 .ai-portfolio-card .ai-block:first-child { margin-top: 4px; }
 .ai-portfolio-card .ai-foot .ai-model { margin-right: 6px; }
 @media (prefers-color-scheme: dark) { .ai-portfolio-card { background: rgba(91,141,239,.10); } }
+
+/* ------------------------------------------------ 資産プラン */
+.plan-card { max-width: 860px; }
+.plan-fields { display: flex; gap: 18px; flex-wrap: wrap; }
+.plan-field { display: flex; flex-direction: column; gap: 5px; margin: 6px 0 4px; }
+.plan-label { font-weight: 700; font-size: 13px; }
+.plan-input { padding: 10px 13px; border: 1.5px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--ink); font-size: 15px; width: 220px; text-align: right; }
+.plan-input-sm { width: 110px; }
+.plan-input:focus { outline: none; border-color: var(--accent); }
+.plan-note, .plan-eta, .plan-div-summary { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
+.plan-eta { font-weight: 700; color: var(--ink); }
+.plan-div-summary { font-weight: 600; color: var(--ink); }
+
+/* FIREゲージ */
+.fire-gauge { margin: 14px 0 4px; }
+.fire-gauge-track { height: 22px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 999px; overflow: hidden; }
+.fire-gauge-fill { height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, #16a34a 0%, #5b8def 100%); transition: width .4s ease; }
+.fire-gauge-labels { display: flex; justify-content: space-between; margin-top: 6px;
+  font-size: 13px; font-weight: 700; color: var(--ink); }
+
+/* シミュレーション表 */
+.plan-sim-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.plan-sim-table th, .plan-sim-table td { padding: 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 13px; text-align: left; }
+.plan-sim-table th.num, .plan-sim-table td.num { text-align: right; }
+.plan-sim-table th { color: var(--ink-soft); font-weight: 700; }
+#plan-sim-chart { margin-top: 8px; }
+
+/* 分配金テーブル */
+.plan-div-table { width: 100%; border-collapse: collapse; }
+.plan-div-table th, .plan-div-table td { padding: 7px 9px; border-bottom: 1px solid var(--line);
+  font-size: 13px; text-align: left; vertical-align: middle; }
+.plan-div-table th.num, .plan-div-table td.num { text-align: right; }
+.plan-div-table th { color: var(--ink-soft); font-weight: 700; }
+.plan-div-table .pd-nm { font-weight: 700; min-width: 130px; }
+.plan-div-table input.pd-annual { width: 130px; text-align: right; padding: 6px 9px;
+  border: 1.5px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 13px; }
+.plan-div-table select { padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); font-size: 13px; }
+.plan-div-table select:disabled { opacity: .45; }
+
+/* 分配金カレンダー（12ヶ月の棒） */
+.plan-div-calendar { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px;
+  align-items: end; margin: 18px 0 4px; min-height: 130px; }
+.pd-cal-col { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.pd-cal-bar-wrap { height: 90px; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.pd-cal-bar { width: 62%; min-width: 8px; background: linear-gradient(180deg, #f59e0b 0%, #f6c667 100%);
+  border-radius: 4px 4px 0 0; }
+.pd-cal-amt { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
+.pd-cal-m { font-size: 10.5px; font-weight: 700; color: var(--ink-soft); }
+@media (max-width: 680px) {
+  .pd-cal-amt { display: none; }
+  .plan-input, .plan-input-sm { width: 100%; }
+}

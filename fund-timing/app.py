@@ -1200,6 +1200,43 @@ def api_ai_advice():
     return jsonify({"ok": True, "model": model_key, "advice": data})
 
 
+# ================================================================== 資産プラン
+# 積立シミュレーション・分配金カレンダー・目標(FIRE)進捗のための設定と現況を返す。
+@app.route("/api/plan", methods=["GET", "POST"])
+def api_plan():
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        plan = db.get_setting("plan", {}) or {}
+        for k in ("goal", "monthly", "return_rate"):
+            if k in data:
+                try:
+                    plan[k] = float(data.get(k) or 0)
+                except (TypeError, ValueError):
+                    plan[k] = 0
+        if isinstance(data.get("dividends"), dict):
+            plan["dividends"] = data["dividends"]
+        db.set_setting("plan", plan)
+        return jsonify({"ok": True})
+
+    summaries = _build_summaries(request.args.get("range", "1y"), force=False)
+    holdings, total_value, total_invested = [], 0, 0
+    for s in summaries:
+        if not s.get("ok"):
+            continue
+        val = s.get("value") or 0
+        holdings.append({
+            "watch_id": s["watch_id"], "name": s.get("name"),
+            "account": s.get("account") or "", "broker": s.get("broker") or "",
+            "value": round(val),
+        })
+        total_value += val
+        total_invested += s.get("invested") or 0
+    plan = db.get_setting("plan", {}) or {}
+    return jsonify({"ok": True, "total_value": round(total_value),
+                    "total_invested": round(total_invested),
+                    "holdings": holdings, "plan": plan})
+
+
 # ------------------------------------------------------------------ 起動
 def _port_is_free(port, host="127.0.0.1"):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
