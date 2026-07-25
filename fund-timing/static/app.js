@@ -1696,7 +1696,9 @@ async function loadPlanHistory() {
   try {
     const r = await fetch(`/api/actual-history?range=${encodeURIComponent(planRange)}`);
     const d = await r.json();
-    lastPlanTotals = (d && d.totals) ? d.totals.map((t) => ({ date: t.date, amount: t.amount })) : [];
+    // totals_full は選択期間に応じた推移（totals は記録実額の期間に固定）
+    const src = (d && (d.totals_full || d.totals)) || [];
+    lastPlanTotals = src.map((t) => ({ date: t.date, amount: t.amount }));
   } catch (_) { lastPlanTotals = []; }
   renderPlanHistory();
 }

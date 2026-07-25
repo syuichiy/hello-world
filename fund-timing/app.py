@@ -934,9 +934,17 @@ def api_actual_history():
         ssum = round(sum(_carry(s, d) for s in hmaps))
         totals.append({"date": d, "amount": ssum,
                        "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
+    # 期間(range)に応じた評価額合計の推移（全保有の日付＝graph_dates で積み上げ）。
+    # excel_dates 基準の totals と違い、選択期間に合わせて長さが変わる（資産プランの推移グラフ用）。
+    totals_full = []
+    for d in graph_dates:
+        ssum = round(sum(_carry(s, d) for s in hmaps))
+        totals_full.append({"date": d, "amount": ssum,
+                            "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
                     "excel_dates": excel_dates, "range": range_key,
-                    "total_invested": round(total_inv), "totals": totals})
+                    "total_invested": round(total_inv),
+                    "totals": totals, "totals_full": totals_full})
 
 
 @app.route("/api/ranking")
