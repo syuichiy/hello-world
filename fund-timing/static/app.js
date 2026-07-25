@@ -577,6 +577,7 @@ function renderPriceChart(holdings, totals) {
 }
 
 const BROKER_ORDER = { "SBI証券": 0, "三菱UFJスマート証券": 1, "楽天証券": 2 };
+const POLICY_ORDER = { full: 0, partial: 1, locked: 2 };   // 売却可→一部可→不可
 function renderPriceTable(holdings, dates, totals) {
   const card = $("price-table-card");
   if (!holdings.length || !dates.length) { card.hidden = true; return; }
@@ -835,6 +836,12 @@ function renderWatchTable() {
       if (oa !== ob) return sortDir * (oa - ob);
       // 同じ証券会社内はシグナル強度の高い順
       return (b.score ?? -999) - (a.score ?? -999);
+    }
+    if (sortKey === "sell_policy") {
+      // 売却設定: 売却可 → 一部可 → 不可 の順
+      va = POLICY_ORDER[a.sell_policy] ?? 9;
+      vb = POLICY_ORDER[b.sell_policy] ?? 9;
+      return sortDir * (va - vb);
     }
     if (sortKey === "verdict") { va = VERDICT_ORDER[a.verdict] || 0; vb = VERDICT_ORDER[b.verdict] || 0; }
     else if (sortKey === "name") { va = a.name || ""; vb = b.name || ""; return sortDir * va.localeCompare(vb, "ja"); }
@@ -1421,7 +1428,7 @@ document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
   th.addEventListener("click", () => {
     const key = th.dataset.key;
     if (sortKey === key) sortDir = -sortDir;
-    else { sortKey = key; sortDir = (key === "name" || key === "broker") ? 1 : -1; }
+    else { sortKey = key; sortDir = (key === "name" || key === "broker" || key === "sell_policy") ? 1 : -1; }
     updateSortHeaders();
     renderWatchTable();
   });
