@@ -1686,6 +1686,8 @@ async function loadPlan() {
       planData = d;
       planData.plan = planData.plan || {};
       $("plan-goal").value = fmtInt(planData.plan.goal || 0);
+      $("plan-monthly").value = fmtInt(planData.plan.monthly || 0);
+      $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
       renderPlanGoal();
     }
   } catch (_) {}
@@ -1728,56 +1730,113 @@ function renderPlanGoal() {
     : "";
 }
 
-// --- 資産の推移と目標 ---
+// --- 資産の推移＋将来予測と目標達成予定 ---
+function addMonths(dateStr, n) {
+  const d = new Date(dateStr);
+  const r = new Date(d.getFullYear(), d.getMonth() + n, d.getDate());
+  return r.toISOString().slice(0, 10);
+}
 function renderPlanHistory() {
   const empty = $("plan-history-empty");
   const note = $("plan-history-note");
+  const eta = $("plan-eta");
   const totals = lastPlanTotals || [];
   if (!totals.length) {
     empty.hidden = false;
-    note.textContent = "";
+    note.textContent = ""; eta.textContent = "";
     Plotly.purge("plan-history-chart");
     return;
   }
   empty.hidden = true;
   const goal = planData.plan.goal || 0;
-  const dates = totals.map((t) => t.date);
-  const amounts = totals.map((t) => Math.round(t.amount));
+  const monthly = planData.plan.monthly || 0;
+  const rate = (planData.plan.return_rate || 0) / 100;
+  const pastDates = totals.map((t) => t.date);
+  const pastAmt = totals.map((t) => Math.round(t.amount));
+  const lastDate = pastDates[pastDates.length - 1];
+  const cur = pastAmt[pastAmt.length - 1];
+
+  // 将来予測（最終実績日から月次で複利運用）
+  const canProject = (monthly > 0 || rate > 0);
+  const rm = Math.pow(1 + rate, 1 / 12) - 1;
+  const futDates = [lastDate], futAmt = [cur];
+  let v = cur, achMonth = -1;
+  if (canProject) {
+    const MAXM = 480;   // 最長40年
+    for (let m = 1; m <= MAXM; m++) {
+      v = v * (1 + rm) + monthly;
+      futDates.push(addMonths(lastDate, m));
+      futAmt.push(Math.round(v));
+      if (achMonth < 0 && goal > 0 && cur < goal && v >= goal) achMonth = m;
+      if (achMonth > 0 && m >= achMonth + 6) break;          // 達成後は半年だけ延長して停止
+      if ((goal <= 0 || cur >= goal) && m >= 120) break;      // 目標なし/達成済みは10年で停止
+    }
+  }
+
   const traces = [{
-    x: dates, y: amounts, name: "評価額合計", mode: "lines",
-    line: { width: 2.5, color: "#5b8def" }, fill: "tozeroy",
-    fillcolor: "rgba(91,141,239,0.08)",
-    hovertemplate: "%{x}<br>評価額合計 %{y:,.0f} 円<extra></extra>",
+    x: pastDates, y: pastAmt, name: "実績", mode: "lines",
+    line: { width: 2.5, color: "#5b8def" }, fill: "tozeroy", fillcolor: "rgba(91,141,239,0.08)",
+    hovertemplate: "%{x}<br>実績 %{y:,.0f} 円<extra></extra>",
   }];
+  if (canProject && futDates.length > 1) {
+    traces.push({
+      x: futDates, y: futAmt, name: "予測", mode: "lines",
+      line: { width: 2, color: "#5b8def", dash: "dot" },
+      hovertemplate: "%{x}<br>予測 %{y:,.0f} 円<extra></extra>",
+    });
+  }
+
+  const allAmt = pastAmt.concat(canProject ? futAmt : []);
+  const maxY = Math.max(goal || 0, ...allAmt);
   const layout = (typeof baseLayout === "function") ? baseLayout() : {};
-  layout.height = 320;
+  layout.height = 340;
   layout.margin = { l: 72, r: 16, t: 12, b: 40 };
   layout.hovermode = "x unified";
-  layout.showlegend = false;
-  layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円", rangemode: "tozero" });
-  if (goal > 0) {   // 目標ラインを点線で描画
-    layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: goal, y1: goal,
-      line: { color: "#16a34a", width: 1.6, dash: "dash" } }];
-    layout.annotations = [{ xref: "paper", x: 1, y: goal, xanchor: "right", yanchor: "bottom",
+  layout.showlegend = true;
+  layout.legend = { orientation: "h", y: -0.18, font: { size: 11 } };
+  layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円", range: [0, maxY * 1.08] });
+  layout.shapes = []; layout.annotations = [];
+  if (goal > 0) {   // 目標ライン
+    layout.shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, y0: goal, y1: goal,
+      line: { color: "#16a34a", width: 1.6, dash: "dash" } });
+    layout.annotations.push({ xref: "paper", x: 0, y: goal, xanchor: "left", yanchor: "bottom",
       text: `目標 ${Math.round(goal).toLocaleString()}円`, showarrow: false,
-      font: { size: 11, color: "#16a34a" } }];
-    const maxY = Math.max(goal, ...amounts);
-    layout.yaxis.range = [0, maxY * 1.08];
+      font: { size: 11, color: "#16a34a" } });
+  }
+  if (achMonth > 0) {   // 目標達成の交点にマーカー
+    const achDate = addMonths(lastDate, achMonth);
+    traces.push({
+      x: [achDate], y: [goal], mode: "markers", name: "目標達成",
+      marker: { size: 11, color: "#16a34a", symbol: "star" },
+      hovertemplate: `目標達成 ${achDate}<extra></extra>`,
+    });
+    layout.annotations.push({ x: achDate, y: goal, xanchor: "center", yanchor: "top", ay: 28,
+      text: `達成 ${achDate.slice(0, 7)}`, showarrow: true, arrowhead: 0,
+      font: { size: 10.5, color: "#16a34a" }, arrowcolor: "#16a34a" });
   }
   Plotly.newPlot("plan-history-chart", traces, layout, { responsive: true, displayModeBar: false });
 
-  // 期間内の推移コメント
-  const first = amounts[0], last = amounts[amounts.length - 1];
+  // 達成予定コメント
+  if (goal <= 0) {
+    eta.textContent = "目標資産額を入力すると、達成予定を表示します。";
+  } else if (cur >= goal) {
+    eta.textContent = "🎉 すでに目標を達成しています。";
+  } else if (!canProject) {
+    eta.textContent = "毎月の積立額または想定年利を入力すると、目標達成の予定時期をグラフに表示します。";
+  } else if (achMonth > 0) {
+    const y = Math.floor(achMonth / 12), mo = achMonth % 12;
+    const achDate = addMonths(lastDate, achMonth);
+    eta.textContent = `🎯 このペースなら 約 ${y}年${mo}ヶ月後（${achDate.slice(0, 4)}年${Number(achDate.slice(5, 7))}月頃）に目標 ${Math.round(goal).toLocaleString()} 円へ到達する見込みです。`;
+  } else {
+    eta.textContent = "🎯 現在の条件では40年以内に目標へ到達しません。積立額や想定年利を見直してみてください。";
+  }
+
+  // 実績のコメント
+  const first = pastAmt[0], last = cur;
   const diff = last - first;
   const pctChg = first ? (diff / first * 100) : 0;
-  let msg = `期間内の評価額：${first.toLocaleString()} 円 → ${last.toLocaleString()} 円`
+  note.textContent = `実績（期間内）：${first.toLocaleString()} 円 → ${last.toLocaleString()} 円`
     + `（${diff >= 0 ? "+" : ""}${diff.toLocaleString()} 円 / ${pctChg >= 0 ? "+" : ""}${pctChg.toFixed(1)}%）`;
-  if (goal > 0) {
-    const p = (last / goal * 100);
-    msg += `。目標達成率 ${p.toFixed(1)}%`;
-    if (last < goal) msg += `（あと ${Math.round(goal - last).toLocaleString()} 円）`;
-  }
-  note.textContent = msg;
 }
 
 // 目標額の入力
@@ -1785,8 +1844,21 @@ $("plan-goal").addEventListener("input", (e) => {
   reformatCommaInput(e.target);
   planData.plan.goal = parseIntComma(e.target.value);
   renderPlanGoal();
-  renderPlanHistory();   // 目標ラインを更新
+  renderPlanHistory();   // 目標ライン・達成予測を更新
   savePlan({ goal: planData.plan.goal });
+});
+// 毎月の積立額
+$("plan-monthly").addEventListener("input", (e) => {
+  reformatCommaInput(e.target);
+  planData.plan.monthly = parseIntComma(e.target.value);
+  renderPlanHistory();
+  savePlan({ monthly: planData.plan.monthly });
+});
+// 想定年利
+$("plan-return").addEventListener("input", (e) => {
+  planData.plan.return_rate = parseFloat(e.target.value) || 0;
+  renderPlanHistory();
+  savePlan({ return_rate: planData.plan.return_rate });
 });
 
 // 推移グラフの期間切替
