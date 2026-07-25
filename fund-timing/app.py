@@ -1429,7 +1429,9 @@ def main():
         threading.Thread(target=_open_when_ready, args=(local_url, "127.0.0.1", port), daemon=True).start()
     # 起動時に最新の基準価額を強制取得し、当日分を表・グラフ・評価額へ反映（非ブロッキング）
     threading.Thread(target=_startup_price_refresh, daemon=True).start()
-    app.run(host=bind_host, port=port, debug=False)
+    # threaded=True: AIアドバイスや価格取得など時間のかかる処理の実行中でも
+    # 他の操作（画面遷移・更新）をブロックしないよう複数リクエストを並行処理する
+    app.run(host=bind_host, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
