@@ -342,39 +342,23 @@
         <p class="plan-note" id="plan-goal-note"></p>
       </div>
 
-      <!-- 積立と将来シミュレーション -->
+      <!-- 資産の推移と目標 -->
       <div class="card plan-card">
-        <h2>📈 積立と将来シミュレーション</h2>
-        <div class="plan-fields">
-          <div class="plan-field">
-            <label class="plan-label" for="plan-monthly">毎月の積立（円）</label>
-            <input id="plan-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）100,000">
-          </div>
-          <div class="plan-field">
-            <label class="plan-label" for="plan-return">想定年利（%）</label>
-            <input id="plan-return" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）5">
-          </div>
+        <h2>📈 資産の推移と目標</h2>
+        <div class="range-group" id="plan-range">
+          <button class="range-btn" data-range="6m">6ヶ月</button>
+          <button class="range-btn active" data-range="1y">1年</button>
+          <button class="range-btn" data-range="3y">3年</button>
         </div>
-        <p class="hint">現在の評価額を起点に、毎月の積立と想定年利で複利運用した場合の予想です（あくまで試算・保証ではありません）。</p>
-        <div id="plan-sim-chart"></div>
-        <div class="table-scroll">
-          <table class="plan-sim-table" id="plan-sim-table"></table>
-        </div>
-        <p class="plan-eta" id="plan-eta"></p>
-      </div>
-
-      <!-- 分配金カレンダー -->
-      <div class="card plan-card">
-        <h2>💰 分配金カレンダー</h2>
         <p class="hint">
-          各商品の<strong>年間分配金の見込み額</strong>と<strong>決算のタイミング</strong>を設定すると、
-          月ごとの分配金と年間合計・分配利回りを表示します（実際の分配金は運用状況で変動します）。
+          各商品の<strong>実際の基準価額 × 口数</strong>（取引履歴の実額を優先）による、これまでの評価額合計の推移です。
+          点線が目標資産額で、目標までの距離と到達度を確認できます。
         </p>
-        <div class="table-scroll">
-          <table class="plan-div-table" id="plan-div-table"></table>
-        </div>
-        <div id="plan-div-calendar" class="plan-div-calendar"></div>
-        <p class="plan-div-summary" id="plan-div-summary"></p>
+        <div id="plan-history-chart"></div>
+        <p id="plan-history-empty" class="empty-watch" hidden>
+          推移を表示するには、銘柄一覧で各商品の口数を入力してください。
+        </p>
+        <p class="plan-note" id="plan-history-note"></p>
       </div>
     </section>
 
