@@ -355,6 +355,11 @@
             <input id="plan-return" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）5">
           </div>
         </div>
+        <div class="plan-ai-row" id="plan-ai-row" hidden>
+          <button id="plan-ai-btn" type="button">🤖 AIに想定利回りを予測してもらう</button>
+          <button id="plan-ai-clear" type="button" class="ghost-btn" hidden>手動に戻す</button>
+          <span id="plan-ai-status" class="ai-test-status"></span>
+        </div>
         <div class="range-group" id="plan-range">
           <button class="range-btn" data-range="6m">実績6ヶ月</button>
           <button class="range-btn active" data-range="1y">実績1年</button>
@@ -365,6 +370,7 @@
           （毎月の積立＋想定年利で複利運用した場合）です。<span class="plan-goal-legend">緑の線</span>が目標額で、
           交差する時点が達成予定です（あくまで試算・保証ではありません）。
         </p>
+        <p class="plan-note" id="plan-ai-comment" hidden></p>
         <div id="plan-history-chart"></div>
         <p id="plan-history-empty" class="empty-watch" hidden>
           推移を表示するには、銘柄一覧で各商品の口数を入力してください。

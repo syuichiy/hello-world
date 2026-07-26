@@ -1245,6 +1245,73 @@ def api_plan():
                     "holdings": holdings, "plan": plan})
 
 
+_AI_PLAN_PROMPT = (
+    "あなたは投資信託ポートフォリオの長期（10年以上）の年率期待リターンを見積もるアシスタントです。"
+    "入力の資産配分・保有商品から、現実的な年率リターンを『標準』『楽観』『悲観』の3つ、%（数値）で示してください"
+    "（例：標準5、楽観8、悲観2）。過度に楽観的にせず、株式インデックスの長期実績（年率おおむね数%〜7%程度）や"
+    "分散状況・資産クラスの偏りを踏まえます。comment には根拠と目標達成の見通しを日本語で2〜3文で述べてください。"
+    "これは機械的な参考情報であり、将来を保証する投資助言ではありません。"
+)
+
+_AI_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "base_return": {"type": "number"},
+        "optimistic_return": {"type": "number"},
+        "pessimistic_return": {"type": "number"},
+        "comment": {"type": "string"},
+    },
+    "required": ["base_return", "optimistic_return", "pessimistic_return", "comment"],
+    "additionalProperties": False,
+}
+
+
+@app.route("/api/ai-plan")
+def api_ai_plan():
+    """AIにポートフォリオの長期期待リターン（標準/楽観/悲観）を見積もらせる。"""
+    state = _settings_state()
+    if state["ai_model"] == "off":
+        return jsonify({"ok": False, "disabled": True,
+                        "error": "AIはオフです（設定画面で有効化できます）。"})
+    if not _HAS_ANTHROPIC:
+        return jsonify({"ok": False, "error":
+                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
+    key = _ai_api_key()
+    if not key:
+        return jsonify({"ok": False, "error": "APIキーが未設定です。設定画面で入力してください。"})
+
+    summaries = _build_summaries(request.args.get("range", "1y"), force=False)
+    allocation = _build_allocation(summaries)
+    plan = db.get_setting("plan", {}) or {}
+    ctx = {
+        "current_total": round(sum((s.get("value") or 0) for s in summaries if s.get("ok"))),
+        "goal": plan.get("goal", 0),
+        "monthly": plan.get("monthly", 0),
+        "holdings": [{"name": s.get("name"), "asset_class": s.get("asset_class"),
+                      "value": s.get("value"), "pl_pct": s.get("pl_pct")}
+                     for s in summaries if s.get("ok")],
+        "allocation": [{"name": c.get("name"), "current_pct": c.get("share")}
+                       for c in ((allocation or {}).get("classes") or []) if c.get("share")],
+    }
+    model_id = _AI_MODELS[state["ai_model"]]
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model=model_id, max_tokens=1500,
+            system=[{"type": "text", "text": _AI_PLAN_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content":
+                       "次のポートフォリオの長期期待リターンを見積もってください。\n"
+                       + json.dumps(ctx, ensure_ascii=False)}],
+            output_config={"format": {"type": "json_schema", "schema": _AI_PLAN_SCHEMA}},
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        data = json.loads(text) if text else {}
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"AI呼び出しに失敗しました: {e}"}), 502
+    return jsonify({"ok": True, "model": state["ai_model"], "prediction": data})
+
+
 # ------------------------------------------------------------------ 起動
 def _port_is_free(port, host="127.0.0.1"):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
