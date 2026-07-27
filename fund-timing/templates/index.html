@@ -366,9 +366,10 @@
           <button class="range-btn" data-range="3y">実績3年</button>
         </div>
         <p class="hint">
-          設定画面の「資産プランの前提」を設定すると、<strong>現在〜退職 → 退職〜年金開始 → 取り崩し初期 → 寿命付近</strong>の
-          ライフステージ別にグラフを分けて表示します（<span style="color:#5b8def">青の点線＝積立</span>・<span style="color:#f59e0b">オレンジ＝取り崩し</span>）。
-          取り崩し期間は長いので、後半は「開始の数年」と「終わりの数年（＝資産が尽きる頃／100歳付近）」を拡大しています。
+          設定画面の「資産プランの前提」を設定すると、現在から寿命までの資産推移を<strong>1本の線</strong>で表示します
+          （<span style="color:#5b8def">青の点線＝退職までの積立</span>・<span style="color:#f59e0b">オレンジ＝退職後の取り崩し</span>）。
+          <strong>積立は退職時点で停止</strong>します。退職後は期間が長いので横軸を圧縮して表示し、
+          <span style="color:#6f7488">退職</span>・<span style="color:#2f6fed">年金開始</span>のタイミングに縦線を入れています。
           <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
           <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です（あくまで試算・保証ではありません）。
         </p>

@@ -1981,133 +1981,128 @@ function renderPlanHistory() {
   Plotly.newPlot("plan-history-chart", traces, layout, { responsive: true, displayModeBar: false });
 }
 
-// ライフステージ別に区切ったパネル表示（現在〜退職 / 退職〜年金 / 取り崩し初期 / 寿命付近）
-// 取り崩し期間が長いので、区間ごとに横幅を分けて拡大表示し、イベントと寿命を見やすくする
+// ライフプランの生涯推移を「連続した1本の線」で表示する。
+// 積立は退職時点で停止（buildLifePath 準拠）。退職〜寿命は横軸を圧縮して線の連続性を保ち、
+// 退職・年金開始のタイミングに縦線を入れる。
 function renderLifeStages(o) {
   const { cur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary } = o;
   const path = buildLifePath(cur, lastDate, monthly, baseRate, lp);
   const pts = path.pts;
-  const r1 = (a) => Math.round(a * 10) / 10;
   const fa = (a) => Math.round(a);
-  const valAt = (age) => {
-    let best = pts[0], bd = Infinity;
-    for (const p of pts) { const d = Math.abs(p.age - age); if (d < bd) { bd = d; best = p; } }
-    return best.v;
-  };
   const retireAge = lp.retire, penAge = lp.penAge;
   const hasGap = penAge > retireAge + 1e-6;
   const depAge = path.depletionAge;                 // 枯渇年齢（-1なら枯渇しない）
   const endAge = depAge > 0 ? depAge : 100;
-  const Ls = hasGap ? penAge : retireAge;           // 定常取り崩し（年金あり）の開始年齢
   const accMonths = Math.max(1, Math.round((retireAge - lp.age0) * 12));
   const ach = projMonthsToGoal(cur, monthly, baseRate, goal, accMonths);
   const achAge = ach > 0 ? lp.age0 + ach / 12 : -1;
-  const K = 6;   // 「開始／終了の数年分」の年数
 
-  // 表示パネルを組み立てる（枯渇する場合は寿命=枯渇年齢まで、その付近を表示）
-  const gapEnd = hasGap ? Math.min(penAge, endAge) : retireAge;
-  const panels = [];
-  panels.push({ a0: lp.age0, a1: retireAge, title: "現在〜退職", phase: "acc" });
-  if (hasGap && gapEnd > retireAge + 0.05)
-    panels.push({ a0: retireAge, a1: gapEnd, title: "退職〜年金開始", phase: "gap" });
-  const startTitle = hasGap ? "年金開始〜" : "取り崩し開始〜";
-  if (endAge > Ls + 0.05) {   // 年金あり取り崩し期がある場合
-    if (endAge - Ls > 2 * K + 1) {   // 長いので「開始の数年」と「終わり（寿命）の数年」に分割
-      panels.push({ a0: Ls, a1: Ls + K, title: startTitle, phase: "dd" });
-      panels.push({ a0: Math.max(Ls + K, endAge - K), a1: endAge, phase: "dd", tail: true,
-        title: depAge > 0 ? "資産が尽きる頃" : "100歳付近" });
+  // 横軸の区間と表示幅（画面比率）。退職後（＝取り崩し期）は長いので幅を絞って圧縮する。
+  const segs = [{ a0: lp.age0, a1: retireAge, wid: 0.46 }];
+  if (endAge > retireAge + 0.02) {
+    if (hasGap) {
+      const gEnd = Math.min(penAge, endAge);
+      if (gEnd > retireAge + 0.02) segs.push({ a0: retireAge, a1: gEnd, wid: 0.16 });
+      if (endAge > penAge + 0.02) segs.push({ a0: penAge, a1: endAge, wid: 0.38 });
     } else {
-      panels.push({ a0: Ls, a1: endAge, phase: "dd", tail: true,
-        title: depAge > 0 ? "取り崩し〜寿命" : startTitle });
+      segs.push({ a0: retireAge, a1: endAge, wid: 0.54 });
     }
   }
-  const P = panels.filter((p) => p.a1 - p.a0 > 0.05);
-  const N = P.length;
+  const totW = segs.reduce((t, s) => t + s.wid, 0);
+  let accW = 0;
+  segs.forEach((s) => { s.x0 = accW / totW; accW += s.wid; s.x1 = accW / totW; });
+  const lo = segs[0].a0, hi = segs[segs.length - 1].a1;
+  const X = (age) => {   // 年齢 → プロット座標(0〜1)。区間ごとに線形。
+    const a = Math.min(Math.max(age, lo), hi);
+    for (const s of segs) if (a <= s.a1 + 1e-6) return s.x0 + (a - s.a0) / (s.a1 - s.a0) * (s.x1 - s.x0);
+    return 1;
+  };
 
   const traces = [];
   const layout = (typeof baseLayout === "function") ? baseLayout() : {};
-  layout.height = 380;
-  layout.margin = { l: 58, r: 14, t: 40, b: 46 };
+  layout.height = 360;
+  layout.margin = { l: 60, r: 24, t: 30, b: 38 };
   layout.showlegend = false;
   layout.hovermode = "closest";
   layout.shapes = []; layout.annotations = [];
-  const gapW = 0.05;
-  const w = (1 - gapW * (N - 1)) / N;
 
-  // 全パネル共通の縦軸スケール（大きさを横断的に比較できるよう目盛りを揃える）
   const gMax = Math.max(1, goal || 0, ...pts.filter((p) => p.age <= endAge + 0.12).map((p) => p.v));
   const gTicks = niceTicks(gMax, 5);
   const gTop = gMax * 1.12;
 
-  // 各パネル：資産推移ライン・軸・見出し（マーカーはループ後にまとめて配置）
-  P.forEach((pn, i) => {
-    const sfx = i === 0 ? "" : String(i + 1);
-    const xa = "x" + sfx, ya = "y" + sfx;
-    pn.xa = xa; pn.ya = ya;
-    const dom0 = i * (w + gapW), dom1 = dom0 + w;
-    const seg = pts.filter((p) => p.age >= pn.a0 - 0.05 && p.age <= pn.a1 + 0.12);
-    const isAcc = pn.phase === "acc";
-    const color = isAcc ? "#5b8def" : "#f59e0b";
-    traces.push({
-      x: seg.map((s) => r1(s.age)), y: seg.map((s) => s.v), xaxis: xa, yaxis: ya,
-      mode: "lines", line: { width: 2.4, color, dash: isAcc ? "dot" : "solid" },
-      fill: "tozeroy", fillcolor: isAcc ? "rgba(91,141,239,0.09)" : "rgba(245,158,11,0.10)",
-      hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>",
-    });
-    layout["xaxis" + sfx] = {
-      domain: [dom0, dom1], anchor: ya, range: [pn.a0, pn.a1],
-      title: { text: `${fa(pn.a0)}〜${fa(pn.a1)}歳`, font: { size: 10 } },
-      tickfont: { size: 9 }, ticksuffix: "歳", showgrid: false, zeroline: false,
-    };
-    layout["yaxis" + sfx] = {
-      anchor: xa, range: [0, gTop], tickvals: gTicks, ticktext: gTicks.map(jpYenShort),
-      showticklabels: i === 0, tickfont: { size: 9 }, showgrid: true,
-      gridcolor: "rgba(140,140,160,0.16)", zeroline: false,
-    };
-    layout.annotations.push({
-      xref: "paper", yref: "paper", x: (dom0 + dom1) / 2, y: 1.045,
-      xanchor: "center", yanchor: "bottom", showarrow: false,
-      text: pn.title, font: { size: 11.5, color: isAcc ? "#3f63b8" : "#b45309" },
-    });
-    // 目標ラインは積立パネルに表示
-    if (isAcc && goal > 0) {
-      layout.shapes.push({ type: "line", xref: xa, yref: ya, x0: pn.a0, x1: pn.a1, y0: goal, y1: goal,
-        line: { color: "#16a34a", width: 1.5, dash: "dash" } });
-      layout.annotations.push({ xref: xa, yref: ya, x: pn.a0, y: goal, xanchor: "left", yanchor: "bottom",
-        text: `目標 ${jpYenShort(goal)}`, showarrow: false, font: { size: 9.5, color: "#16a34a" } });
-    }
+  // 資産推移ライン（積立＝青点線 / 取り崩し＝オレンジ実線）。退職の点を共有して連続させる。
+  const accPts = pts.filter((p) => p.age <= retireAge + 1e-6);
+  const ddPts = pts.filter((p) => p.age >= retireAge - 1e-6);
+  traces.push({
+    x: accPts.map((p) => X(p.age)), y: accPts.map((p) => p.v), customdata: accPts.map((p) => p.age),
+    mode: "lines", line: { width: 2.4, color: "#5b8def", dash: "dot" },
+    fill: "tozeroy", fillcolor: "rgba(91,141,239,0.09)",
+    hovertemplate: "%{customdata:.0f}歳<br>積立 %{y:,.0f} 円<extra></extra>",
+  });
+  if (ddPts.length > 1) traces.push({
+    x: ddPts.map((p) => X(p.age)), y: ddPts.map((p) => p.v), customdata: ddPts.map((p) => p.age),
+    mode: "lines", line: { width: 2.4, color: "#f59e0b" },
+    fill: "tozeroy", fillcolor: "rgba(245,158,11,0.10)",
+    hovertemplate: "%{customdata:.0f}歳<br>取り崩し %{y:,.0f} 円<extra></extra>",
   });
 
-  // イベント年齢が入るパネルを探してマーカー＋ラベルを配置（境界は後フェーズ側）
-  const findPanel = (age) => {
-    for (let i = P.length - 1; i >= 0; i--)
-      if (age >= P[i].a0 - 0.05 && age <= P[i].a1 + 0.05) return P[i];
-    return null;
+  // 横軸：年齢の目盛り（区間境界＋10年刻み）。退職後は圧縮されて表示される。
+  const bnd = [lp.age0, retireAge, endAge];
+  if (hasGap && penAge < endAge) bnd.push(penAge);
+  const tickSet = new Set(bnd);
+  for (let a = Math.ceil(lp.age0 / 10) * 10; a < endAge; a += 10)
+    if (bnd.every((b) => Math.abs(a - b) > 1.5)) tickSet.add(a);
+  const tArr = [...tickSet].filter((a) => a >= lo - 0.01 && a <= hi + 0.01).sort((x, y) => x - y);
+  layout.xaxis = {
+    range: [0, 1], tickvals: tArr.map(X), ticktext: tArr.map((a) => fa(a) + "歳"),
+    tickfont: { size: 9.5 }, showgrid: false, zeroline: false,
   };
-  const marker = (age, val, text, color, star) => {
-    const pn = findPanel(age); if (!pn) return;
-    traces.push({ x: [r1(age)], y: [val], xaxis: pn.xa, yaxis: pn.ya, mode: "markers",
-      marker: { size: star ? 13 : 9, color, symbol: star ? "star" : "circle" },
-      hovertemplate: `${text}${val > 0 ? " %{y:,.0f} 円" : ""}<extra></extra>` });
-    layout.annotations.push({ xref: pn.xa, yref: pn.ya, x: age, y: val,
-      yanchor: star ? "bottom" : "top", yshift: star ? 8 : -8, xanchor: "center", align: "center",
-      text: val > 0 ? `${text}<br>${jpYenShort(val)}` : text,
-      showarrow: false, font: { size: 9.5, color } });
+  layout.yaxis = {
+    range: [0, gTop], tickvals: gTicks, ticktext: gTicks.map(jpYenShort),
+    tickfont: { size: 9.5 }, showgrid: true, gridcolor: "rgba(140,140,160,0.16)", zeroline: false,
   };
-  marker(lp.age0, cur, "現在", "#5b8def");
-  if (retireAge > lp.age0 + 0.01) marker(retireAge, path.retireBal, "退職", "#6f7488");
-  if (hasGap && penAge <= endAge + 0.01) marker(penAge, valAt(penAge), "年金開始", "#5b8def");
-  if (depAge > 0) marker(depAge, 0, `枯渇 ${fa(depAge)}歳`, "#e11d48", true);
-  else marker(100, path.endBal, "100歳", "#f59e0b");
-  if (goal > 0 && achAge > 0 && achAge <= retireAge + 0.01) marker(achAge, goal, `達成 ${fa(achAge)}歳`, "#16a34a", true);
 
-  // 分割された取り崩しパネルの間に「中略」を表示
-  if (N >= 2 && P[N - 1].tail && P[N - 2] && P[N - 2].phase === "dd") {
-    const cx = ((N - 1) * (w + gapW)) - gapW / 2;
-    layout.annotations.push({ xref: "paper", yref: "paper", x: cx, y: 0.5,
-      xanchor: "center", yanchor: "middle", showarrow: false,
-      text: "⋯<br>中略", font: { size: 11, color: "#9aa0b4" } });
+  // 退職・年金開始のタイミングに縦線
+  const vline = (age, color, text) => {
+    const x = X(age);
+    layout.shapes.push({ type: "line", xref: "x", x0: x, x1: x, yref: "paper", y0: 0, y1: 1,
+      line: { color, width: 1.4, dash: "dash" } });
+    layout.annotations.push({ xref: "x", x, yref: "paper", y: 1.0, yanchor: "bottom", xanchor: "center",
+      text, showarrow: false, font: { size: 10.5, color } });
+  };
+  vline(retireAge, "#6f7488", `退職 ${fa(retireAge)}歳`);
+  if (hasGap && penAge < endAge) vline(penAge, "#2f6fed", `年金 ${fa(penAge)}歳`);
+
+  // 目標ライン＋達成マーカー
+  if (goal > 0) {
+    layout.shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: goal, y1: goal,
+      line: { color: "#16a34a", width: 1.5, dash: "dash" } });
+    layout.annotations.push({ xref: "paper", x: 0, yref: "y", y: goal, xanchor: "left", yanchor: "bottom",
+      text: `目標 ${jpYenShort(goal)}`, showarrow: false, font: { size: 10, color: "#16a34a" } });
+    if (achAge > 0 && achAge <= retireAge + 0.01) {
+      traces.push({ x: [X(achAge)], y: [goal], mode: "markers", marker: { size: 13, color: "#16a34a", symbol: "star" },
+        hovertemplate: `目標達成 ${fa(achAge)}歳<extra></extra>` });
+      layout.annotations.push({ xref: "x", x: X(achAge), yref: "y", y: goal, yanchor: "bottom", yshift: 8,
+        xanchor: "center", text: `達成 ${fa(achAge)}歳`, showarrow: false, font: { size: 9.5, color: "#16a34a" } });
+    }
   }
+
+  // マーカー：現在・退職時資産・枯渇/100歳
+  const dot = (age, val, text, color, star) => {
+    const px = X(age);
+    const xanchor = px > 0.93 ? "right" : px < 0.06 ? "left" : "center";
+    const xshift = xanchor === "right" ? -6 : xanchor === "left" ? 6 : 0;
+    traces.push({ x: [px], y: [val], mode: "markers",
+      marker: { size: star ? 13 : 8, color, symbol: star ? "star" : "circle" },
+      hovertemplate: `${text}${val > 0 ? " %{y:,.0f} 円" : ""}<extra></extra>` });
+    layout.annotations.push({ xref: "x", x: px, yref: "y", y: val,
+      yanchor: star ? "bottom" : "top", yshift: star ? 8 : -8, xanchor, xshift,
+      text: val > 0 ? `${text} ${jpYenShort(val)}` : text, showarrow: false, font: { size: 9.5, color } });
+  };
+  dot(lp.age0, cur, "現在", "#5b8def");
+  if (retireAge > lp.age0 + 0.01) dot(retireAge, path.retireBal, "退職時", "#6f7488");
+  if (depAge > 0) dot(depAge, 0, `枯渇 ${fa(depAge)}歳`, "#e11d48", true);
+  else dot(100, path.endBal, "100歳", "#f59e0b");
 
   Plotly.newPlot("plan-history-chart", traces, layout, { responsive: true, displayModeBar: false });
 
