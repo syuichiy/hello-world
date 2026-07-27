@@ -2031,8 +2031,13 @@ function renderLifeStages(o) {
   layout.showlegend = false;
   layout.hovermode = "closest";
   layout.shapes = []; layout.annotations = [];
-  const gapW = 0.055;
+  const gapW = 0.05;
   const w = (1 - gapW * (N - 1)) / N;
+
+  // 全パネル共通の縦軸スケール（大きさを横断的に比較できるよう目盛りを揃える）
+  const gMax = Math.max(1, goal || 0, ...pts.filter((p) => p.age <= endAge + 0.12).map((p) => p.v));
+  const gTicks = niceTicks(gMax, 5);
+  const gTop = gMax * 1.12;
 
   // 各パネル：資産推移ライン・軸・見出し（マーカーはループ後にまとめて配置）
   P.forEach((pn, i) => {
@@ -2049,17 +2054,15 @@ function renderLifeStages(o) {
       fill: "tozeroy", fillcolor: isAcc ? "rgba(91,141,239,0.09)" : "rgba(245,158,11,0.10)",
       hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>",
     });
-    let segMax = Math.max(1, ...seg.map((s) => s.v));
-    if (isAcc && goal > 0) segMax = Math.max(segMax, goal);
-    const tickvals = niceTicks(segMax, 4);
     layout["xaxis" + sfx] = {
       domain: [dom0, dom1], anchor: ya, range: [pn.a0, pn.a1],
       title: { text: `${fa(pn.a0)}〜${fa(pn.a1)}歳`, font: { size: 10 } },
       tickfont: { size: 9 }, ticksuffix: "歳", showgrid: false, zeroline: false,
     };
     layout["yaxis" + sfx] = {
-      anchor: xa, range: [0, segMax * 1.14], tickvals, ticktext: tickvals.map(jpYenShort),
-      tickfont: { size: 9 }, showgrid: true, gridcolor: "rgba(140,140,160,0.16)", zeroline: false,
+      anchor: xa, range: [0, gTop], tickvals: gTicks, ticktext: gTicks.map(jpYenShort),
+      showticklabels: i === 0, tickfont: { size: 9 }, showgrid: true,
+      gridcolor: "rgba(140,140,160,0.16)", zeroline: false,
     };
     layout.annotations.push({
       xref: "paper", yref: "paper", x: (dom0 + dom1) / 2, y: 1.045,
