@@ -1215,14 +1215,14 @@ def api_plan():
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         plan = db.get_setting("plan", {}) or {}
-        for k in ("goal", "monthly", "return_rate"):
+        for k in ("goal", "monthly", "return_rate",
+                  "current_age", "retire_age", "pension_age",
+                  "pension_monthly", "spend_monthly", "inflation"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
                 except (TypeError, ValueError):
                     plan[k] = 0
-        if isinstance(data.get("dividends"), dict):
-            plan["dividends"] = data["dividends"]
         db.set_setting("plan", plan)
         return jsonify({"ok": True})
 
@@ -1246,10 +1246,14 @@ def api_plan():
 
 
 _AI_PLAN_PROMPT = (
-    "あなたは投資信託ポートフォリオの長期（10年以上）の年率期待リターンを見積もるアシスタントです。"
-    "入力の資産配分・保有商品から、現実的な年率リターンを『標準』『楽観』『悲観』の3つ、%（数値）で示してください"
-    "（例：標準5、楽観8、悲観2）。過度に楽観的にせず、株式インデックスの長期実績（年率おおむね数%〜7%程度）や"
-    "分散状況・資産クラスの偏りを踏まえます。comment には根拠と目標達成の見通しを日本語で2〜3文で述べてください。"
+    "あなたは投資信託ポートフォリオの資産形成と、リタイア後の取り崩し（資産寿命）を見立てるアシスタントです。"
+    "入力の資産配分・保有商品・ライフプラン前提（年齢・退職・年金・生活費・インフレ率・資産寿命の試算結果）を踏まえ、"
+    "次をJSONで返してください。\n"
+    "- base_return / optimistic_return / pessimistic_return: 長期(10年以上)の現実的な年率リターン%（標準/楽観/悲観、数値）。"
+    "過度に楽観的にせず、株式インデックスの長期実績（年率おおむね数%〜7%程度）や分散状況を踏まえる。\n"
+    "- comment_growth: 資産形成・目標達成の見通しコメント（日本語2〜3文）。\n"
+    "- comment_drawdown: リタイア後の取り崩し戦略のコメント（資産寿命・年金とのバランス・インフレ・注意点や工夫）を日本語2〜3文。"
+    "前提が未設定なら、設定を促す一言でよい。\n"
     "これは機械的な参考情報であり、将来を保証する投資助言ではありません。"
 )
 
@@ -1259,9 +1263,11 @@ _AI_PLAN_SCHEMA = {
         "base_return": {"type": "number"},
         "optimistic_return": {"type": "number"},
         "pessimistic_return": {"type": "number"},
-        "comment": {"type": "string"},
+        "comment_growth": {"type": "string"},
+        "comment_drawdown": {"type": "string"},
     },
-    "required": ["base_return", "optimistic_return", "pessimistic_return", "comment"],
+    "required": ["base_return", "optimistic_return", "pessimistic_return",
+                 "comment_growth", "comment_drawdown"],
     "additionalProperties": False,
 }
 
@@ -1286,10 +1292,15 @@ def api_ai_plan():
     ctx = {
         "current_total": round(sum((s.get("value") or 0) for s in summaries if s.get("ok"))),
         "goal": plan.get("goal", 0),
-        "monthly": plan.get("monthly", 0),
-        "holdings": [{"name": s.get("name"), "asset_class": s.get("asset_class"),
-                      "value": s.get("value"), "pl_pct": s.get("pl_pct")}
-                     for s in summaries if s.get("ok")],
+        "monthly_contribution": plan.get("monthly", 0),
+        "life_plan": {
+            "current_age": plan.get("current_age", 0),
+            "retire_age": plan.get("retire_age", 0),
+            "pension_start_age": plan.get("pension_age", 0),
+            "pension_monthly": plan.get("pension_monthly", 0),
+            "spend_monthly": plan.get("spend_monthly", 0),
+            "inflation_pct": plan.get("inflation", 0),
+        },
         "allocation": [{"name": c.get("name"), "current_pct": c.get("share")}
                        for c in ((allocation or {}).get("classes") or []) if c.get("share")],
     }

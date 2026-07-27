@@ -378,6 +378,22 @@
         <p class="plan-eta" id="plan-eta"></p>
         <p class="plan-note" id="plan-history-note"></p>
       </div>
+
+      <!-- 取り崩し戦略（リタイア後の資産寿命） -->
+      <div class="card plan-card">
+        <h2>🏖 取り崩し戦略（リタイア後の資産寿命）</h2>
+        <p class="hint">
+          <strong>設定画面の前提</strong>（退職年齢・年金・生活費・インフレ率）をもとに、リタイア後に資産を取り崩した場合の
+          残高推移と<strong>資産寿命</strong>（何歳まで持つか）を試算します。
+          <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
+        </p>
+        <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
+        <div id="plan-dd-chart"></div>
+        <p id="plan-dd-empty" class="empty-watch" hidden>
+          設定画面の「資産プランの前提」で 現在の年齢・退職年齢・生活費 などを入力すると、取り崩しの試算を表示します。
+        </p>
+        <p class="plan-eta" id="plan-dd-summary"></p>
+      </div>
     </section>
 
     <!-- ========================= 設定ビュー ========================= -->
@@ -422,6 +438,38 @@
           <p>💡 APIキーは環境変数 <code>ANTHROPIC_API_KEY</code> でも設定できます（そちらが優先されます）。未インストールの場合は <code>pip install anthropic</code> が必要です。</p>
           <p>※ AIのコメントは機械的な参考情報であり、投資助言ではありません。税・手数料・分配金は考慮していません。</p>
         </div>
+      </div>
+
+      <div class="card settings-card">
+        <h2>🏖 資産プランの前提（取り崩し戦略）</h2>
+        <p class="hint">リタイア後の「取り崩し戦略（資産寿命）」の計算に使う前提です。資産プラン画面のグラフに反映されます。</p>
+        <div class="plan-premise-grid">
+          <div class="plan-field">
+            <label class="plan-label" for="set-current-age">現在の年齢（歳）</label>
+            <input id="set-current-age" type="number" class="plan-input plan-input-sm" placeholder="例）45">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-retire-age">退職年齢（歳）</label>
+            <input id="set-retire-age" type="number" class="plan-input plan-input-sm" placeholder="例）65">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-pension-age">年金受給開始（歳）</label>
+            <input id="set-pension-age" type="number" class="plan-input plan-input-sm" placeholder="例）65">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-pension-monthly">年金（月額・円）</label>
+            <input id="set-pension-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）150,000">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-spend-monthly">退職後の生活費（月額・円）</label>
+            <input id="set-spend-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）250,000">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-inflation">想定インフレ率（%）</label>
+            <input id="set-inflation" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）2">
+          </div>
+        </div>
+        <p class="hint">退職後は、生活費から年金を引いた不足分を資産から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>
       </div>
     </section>
 

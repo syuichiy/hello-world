@@ -821,3 +821,8 @@ main > section { display: block; }
   .pd-cal-amt { display: none; }
   .plan-input, .plan-input-sm { width: 100%; }
 }
+
+/* 資産プランの前提（設定画面のグリッド） */
+.plan-premise-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px 20px; margin: 10px 0; }
+.plan-premise-grid .plan-input { width: 100%; }
+@media (max-width: 560px) { .plan-premise-grid { grid-template-columns: 1fr; } }

@@ -1557,6 +1557,20 @@ async function loadSettings() {
     const d = await r.json();
     if (d && d.ok) { aiSettings = d; renderSettingsUI(); }
   } catch (_) { /* 設定取得失敗時は既定(off)のまま */ }
+  // 資産プランの前提（取り崩し戦略）の値を設定画面へ反映
+  try {
+    const pr = await fetch("/api/plan");
+    const pd = await pr.json();
+    if (pd && pd.ok) {
+      const pl = pd.plan || {};
+      $("set-current-age").value = pl.current_age || "";
+      $("set-retire-age").value = pl.retire_age || "";
+      $("set-pension-age").value = pl.pension_age || "";
+      $("set-pension-monthly").value = fmtInt(pl.pension_monthly || 0);
+      $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
+      $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
+    }
+  } catch (_) {}
 }
 
 function renderSettingsUI() {
@@ -1672,6 +1686,23 @@ $("ai-model-toggle").addEventListener("click", (e) => {
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
 $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
+
+// 資産プランの前提（設定画面）— 入力を /api/plan に保存
+function bindPremise(id, key, comma) {
+  const el = $(id); if (!el) return;
+  el.addEventListener("input", (e) => {
+    let v;
+    if (comma) { reformatCommaInput(e.target); v = parseIntComma(e.target.value); }
+    else { v = parseFloat(e.target.value) || 0; }
+    savePlan({ [key]: v });
+  });
+}
+bindPremise("set-current-age", "current_age", false);
+bindPremise("set-retire-age", "retire_age", false);
+bindPremise("set-pension-age", "pension_age", false);
+bindPremise("set-pension-monthly", "pension_monthly", true);
+bindPremise("set-spend-monthly", "spend_monthly", true);
+bindPremise("set-inflation", "inflation", false);
 
 // ============================================================ 資産プラン
 let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
@@ -1874,6 +1905,99 @@ function renderPlanHistory() {
   const first = pastAmt[0], diff = cur - first, pctChg = first ? (diff / first * 100) : 0;
   note.textContent = `実績（期間内）：${first.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
     + `（${diff >= 0 ? "+" : ""}${diff.toLocaleString()} 円 / ${pctChg >= 0 ? "+" : ""}${pctChg.toFixed(1)}%）`;
+
+  renderDrawdown();   // 取り崩し戦略のグラフも同じ前提で更新
+}
+
+// --- 取り崩し戦略（リタイア後の資産寿命） ---
+function renderDrawdown() {
+  const empty = $("plan-dd-empty");
+  const summary = $("plan-dd-summary");
+  const p = planData.plan || {};
+  const age0 = +p.current_age || 0, retire = +p.retire_age || 0;
+  const cur = planData.total_value || 0;
+  if (!age0 || !retire || retire < age0) {   // 前提不足
+    empty.hidden = false; summary.textContent = "";
+    Plotly.purge("plan-dd-chart"); return;
+  }
+  empty.hidden = true;
+  const monthly = p.monthly || 0;
+  const annual = ((aiBand ? aiBand.base : p.return_rate) || 0) / 100;
+  const infl = (p.inflation || 0) / 100;
+  const penAge = +p.pension_age || retire;
+  const pension = p.pension_monthly || 0;
+  const spend = p.spend_monthly || 0;
+  const endAge = 100;
+  const rm = Math.pow(1 + annual, 1 / 12) - 1;
+  const totalMonths = (endAge - age0) * 12;
+
+  let v = cur, depletionAge = -1, retireBal = null;
+  const S = [{ age: age0, v: cur }];
+  for (let m = 1; m <= totalMonths; m++) {
+    const age = age0 + m / 12;
+    v = v * (1 + rm);
+    const inflF = Math.pow(1 + infl, m / 12);
+    if (age < retire) {
+      v += monthly;
+    } else {
+      if (retireBal === null) retireBal = v;
+      const pen = (age >= penAge) ? pension * inflF : 0;
+      v -= (spend * inflF - pen);   // 生活費−年金（年金余剰なら加算）
+    }
+    if (v < 0) v = 0;
+    if (m % 3 === 0 || m === totalMonths) S.push({ age, v });
+    if (v <= 0) { depletionAge = age; S.push({ age, v: 0 }); break; }
+  }
+  if (retireBal === null) retireBal = v;   // 退職が計算範囲末尾のケース
+
+  // 積立期・取り崩し期で色分け（境界点を共有して連結）
+  const accX = [], accY = [], ddX = [], ddY = [];
+  const r1 = (a) => Math.round(a * 10) / 10;
+  S.forEach((pt) => {
+    if (pt.age <= retire) { accX.push(r1(pt.age)); accY.push(Math.round(pt.v)); }
+    else { ddX.push(r1(pt.age)); ddY.push(Math.round(pt.v)); }
+  });
+  if (accX.length && ddX.length) { ddX.unshift(accX[accX.length - 1]); ddY.unshift(accY[accY.length - 1]); }
+
+  const traces = [
+    { x: accX, y: accY, name: "積立期", mode: "lines", line: { width: 2.5, color: "#5b8def" },
+      fill: "tozeroy", fillcolor: "rgba(91,141,239,0.08)",
+      hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>" },
+    { x: ddX, y: ddY, name: "取り崩し期", mode: "lines", line: { width: 2.5, color: "#f59e0b" },
+      fill: "tozeroy", fillcolor: "rgba(245,158,11,0.08)",
+      hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>" },
+  ];
+  const layout = (typeof baseLayout === "function") ? baseLayout() : {};
+  layout.height = 320;
+  layout.margin = { l: 72, r: 16, t: 12, b: 40 };
+  layout.hovermode = "x unified";
+  layout.showlegend = true;
+  layout.legend = { orientation: "h", y: -0.18, font: { size: 11 } };
+  layout.xaxis = Object.assign(layout.xaxis || {}, { title: "年齢（歳）" });
+  const maxY = Math.max(retireBal, cur, ...accY, ...ddY);
+  layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円", range: [0, (maxY || 1) * 1.08] });
+  layout.shapes = [{ type: "line", x0: retire, x1: retire, yref: "paper", y0: 0, y1: 1,
+    line: { color: "#9aa0b4", width: 1.2, dash: "dot" } }];
+  layout.annotations = [{ x: retire, yref: "paper", y: 1, yanchor: "top", xanchor: "left",
+    text: ` 退職 ${retire}歳`, showarrow: false, font: { size: 10.5, color: "#6f7488" } }];
+  if (depletionAge > 0) {
+    layout.annotations.push({ x: r1(depletionAge), y: 0, yanchor: "bottom", xanchor: "center", ay: -26,
+      text: `枯渇 ${Math.floor(depletionAge)}歳`, showarrow: true, arrowhead: 0,
+      font: { size: 10.5, color: "#e11d48" }, arrowcolor: "#e11d48" });
+  }
+  Plotly.newPlot("plan-dd-chart", traces, layout, { responsive: true, displayModeBar: false });
+
+  // サマリー
+  let msg = `退職時（${retire}歳）の想定資産 約 ${Math.round(retireBal).toLocaleString()} 円。`;
+  if (spend <= 0) {
+    msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
+  } else if (depletionAge > 0) {
+    msg += `年金＋取り崩しの前提では、資産は 約 ${Math.floor(depletionAge)}歳 で尽きる見込みです。`;
+  } else {
+    const endBal = S[S.length - 1].v;
+    msg += `年金＋取り崩しの前提でも、資産は ${endAge}歳まで持続する見込みです（${endAge}歳時点で 約 ${Math.round(endBal).toLocaleString()} 円）。`;
+  }
+  summary.textContent = msg;
 }
 
 // 目標額の入力
@@ -1893,7 +2017,8 @@ $("plan-monthly").addEventListener("input", (e) => {
 // 想定年利（手動入力するとAI予測バンドは解除）
 $("plan-return").addEventListener("input", (e) => {
   planData.plan.return_rate = parseFloat(e.target.value) || 0;
-  if (aiBand) { aiBand = null; $("plan-ai-clear").hidden = true; $("plan-ai-comment").hidden = true; }
+  if (aiBand) { aiBand = null; $("plan-ai-clear").hidden = true;
+    $("plan-ai-comment").hidden = true; $("plan-dd-ai-comment").hidden = true; }
   renderPlanHistory();
   savePlan({ return_rate: planData.plan.return_rate });
 });
@@ -1910,12 +2035,15 @@ $("plan-ai-btn").addEventListener("click", async () => {
     aiBand = { base: p.base_return, optimistic: p.optimistic_return, pessimistic: p.pessimistic_return };
     planData.plan.return_rate = Number(p.base_return) || 0;
     $("plan-return").value = planData.plan.return_rate;
-    const cm = $("plan-ai-comment");
-    cm.textContent = "🤖 " + (p.comment || "");
-    cm.hidden = !p.comment;
+    const cg = $("plan-ai-comment");
+    cg.textContent = "🤖 " + (p.comment_growth || "");
+    cg.hidden = !p.comment_growth;
+    const cd = $("plan-dd-ai-comment");
+    cd.textContent = "🤖 " + (p.comment_drawdown || "");
+    cd.hidden = !p.comment_drawdown;
     $("plan-ai-clear").hidden = false;
     st.textContent = "✅ 予測を反映しました";
-    renderPlanHistory();
+    renderPlanHistory();   // 資産推移＋取り崩し戦略の両方を再描画
     savePlan({ return_rate: planData.plan.return_rate });
   } catch (_) { st.textContent = "⚠️ 失敗しました"; }
 });
@@ -1924,9 +2052,12 @@ $("plan-ai-clear").addEventListener("click", () => {
   aiBand = null;
   $("plan-ai-clear").hidden = true;
   $("plan-ai-comment").hidden = true;
+  $("plan-dd-ai-comment").hidden = true;
   $("plan-ai-status").textContent = "";
   renderPlanHistory();
 });
+// 取り崩しカードの「設定を開く」
+$("plan-goto-settings").addEventListener("click", () => switchView("settings"));
 
 // 推移グラフの期間切替
 $("plan-range").addEventListener("click", (e) => {
