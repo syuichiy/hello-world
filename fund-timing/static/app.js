@@ -1711,6 +1711,7 @@ let lastPlanTotals = [];   // 直近取得した資産推移 [{date, amount}]
 let aiBand = null;         // AI予測の年率 {base, optimistic, pessimistic}（無ければ手動）
 
 async function loadPlan() {
+  await flushPlanSave();   // 設定画面での前提変更を確定させてから取得（即時反映）
   try {
     const r = await fetch("/api/plan");
     const d = await r.json();
@@ -1741,12 +1742,24 @@ async function loadPlanHistory() {
 }
 
 let planSaveTimer = null;
+let planSavePending = null;             // 未送信の変更（まとめて送る）
+let planSaveInflight = Promise.resolve();
 function savePlan(payload) {
+  // 変更を即メモリへ反映（メニュー切替時に古い値を再取得して上書きされないように）
+  planData.plan = Object.assign(planData.plan || {}, payload);
+  planSavePending = Object.assign(planSavePending || {}, payload);
   clearTimeout(planSaveTimer);
-  planSaveTimer = setTimeout(() => {
-    fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload) }).catch(() => {});
-  }, 450);
+  planSaveTimer = setTimeout(flushPlanSave, 450);
+}
+// 保留中の変更を即時に送信し、直近の保存完了を待てる Promise を返す
+function flushPlanSave() {
+  clearTimeout(planSaveTimer);
+  if (planSavePending) {
+    const body = planSavePending; planSavePending = null;
+    planSaveInflight = fetch("/api/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  }
+  return planSaveInflight;
 }
 
 // --- 目標・進捗 ---
