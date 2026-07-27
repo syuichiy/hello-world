@@ -366,33 +366,22 @@
           <button class="range-btn" data-range="3y">実績3年</button>
         </div>
         <p class="hint">
-          <strong>実線</strong>がこれまでの実績（各商品の基準価額 × 口数）、<strong>点線</strong>が今後の予測
-          （毎月の積立＋想定年利で複利運用した場合）です。<span class="plan-goal-legend">緑の線</span>が目標額で、
-          交差する時点が達成予定です（あくまで試算・保証ではありません）。
+          <strong>実線</strong>がこれまでの実績（各商品の基準価額 × 口数）、<strong>青の点線</strong>が退職までの積立予測、
+          <strong>オレンジ</strong>が退職後に資産を取り崩したときの推移です。<span class="plan-goal-legend">緑の線</span>が目標額。
+          設定画面の「資産プランの前提」で退職年齢・年金・生活費・インフレ率を設定すると、
+          リタイア後の<strong>資産寿命</strong>まで表示します。
+          <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
+          <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です（あくまで試算・保証ではありません）。
         </p>
         <p class="plan-note" id="plan-ai-comment" hidden></p>
+        <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
         <div id="plan-history-chart"></div>
         <p id="plan-history-empty" class="empty-watch" hidden>
           推移を表示するには、銘柄一覧で各商品の口数を入力してください。
         </p>
         <p class="plan-eta" id="plan-eta"></p>
-        <p class="plan-note" id="plan-history-note"></p>
-      </div>
-
-      <!-- 取り崩し戦略（リタイア後の資産寿命） -->
-      <div class="card plan-card">
-        <h2>🏖 取り崩し戦略（リタイア後の資産寿命）</h2>
-        <p class="hint">
-          <strong>設定画面の前提</strong>（退職年齢・年金・生活費・インフレ率）をもとに、リタイア後に資産を取り崩した場合の
-          残高推移と<strong>資産寿命</strong>（何歳まで持つか）を試算します。
-          <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
-        </p>
-        <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
-        <div id="plan-dd-chart"></div>
-        <p id="plan-dd-empty" class="empty-watch" hidden>
-          設定画面の「資産プランの前提」で 現在の年齢・退職年齢・生活費 などを入力すると、取り崩しの試算を表示します。
-        </p>
         <p class="plan-eta" id="plan-dd-summary"></p>
+        <p class="plan-note" id="plan-history-note"></p>
       </div>
     </section>
 

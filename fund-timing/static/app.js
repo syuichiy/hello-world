@@ -1794,16 +1794,66 @@ function achLabel(lastDate, m) {
   return `${d.slice(0, 4)}年${Number(d.slice(5, 7))}月頃`;
 }
 
+// 設定画面の「資産プランの前提」を取り出す（ライフプラン確定なら ok:true）
+function planLifePlan() {
+  const p = planData.plan || {};
+  const age0 = +p.current_age || 0, retire = +p.retire_age || 0;
+  return {
+    ok: !!(age0 && retire && retire >= age0),
+    age0, retire,
+    penAge: +p.pension_age || retire,
+    pension: p.pension_monthly || 0,
+    spend: p.spend_monthly || 0,
+    infl: (p.inflation || 0) / 100,
+  };
+}
+// 生涯の資産推移（積立期→退職→取り崩し期）を月次で構築
+// 返り値: 積立期/取り崩し期の日付・金額配列と、退職・年金開始・枯渇の情報
+function buildLifePath(cur, lastDate, monthly, annual, lp) {
+  const rm = projMonthlyRate(annual);
+  const accDates = [lastDate], accVals = [Math.round(cur)];
+  const ddDates = [], ddVals = [];
+  let v = cur, depletionDate = null, depletionAge = -1;
+  let retireDate = null, retireBal = null, penStartDate = null;
+  const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
+  for (let m = 1; m <= endMonths; m++) {
+    const age = lp.age0 + m / 12;
+    const dt = addMonths(lastDate, m);
+    v = v * (1 + rm);
+    if (age < lp.retire) {
+      v += monthly;
+      accDates.push(dt); accVals.push(Math.round(v));
+    } else {
+      if (retireBal === null) {   // 退職の瞬間：境界点を取り崩し系列にも共有
+        retireBal = v; retireDate = dt;
+        ddDates.push(accDates[accDates.length - 1]); ddVals.push(accVals[accVals.length - 1]);
+      }
+      const inflF = Math.pow(1 + lp.infl, m / 12);
+      // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
+      const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
+      if (lp.penAge > lp.retire && age >= lp.penAge && !penStartDate) penStartDate = dt;
+      v -= (lp.spend * inflF - pen);
+      if (v < 0) v = 0;
+      ddDates.push(dt); ddVals.push(Math.round(v));
+      if (v <= 0) { depletionDate = dt; depletionAge = age; break; }
+    }
+  }
+  if (retireBal === null) retireBal = v;
+  const endBal = (ddVals.length ? ddVals[ddVals.length - 1] : accVals[accVals.length - 1]);
+  return { accDates, accVals, ddDates, ddVals, retireDate, retireBal, penStartDate, depletionDate, depletionAge, endBal };
+}
+
 function renderPlanHistory() {
   const empty = $("plan-history-empty");
   const note = $("plan-history-note");
   const eta = $("plan-eta");
+  const ddSummary = $("plan-dd-summary");
   const totals = lastPlanTotals || [];
   if (!totals.length) {
-    empty.hidden = false; note.textContent = ""; eta.textContent = "";
+    empty.hidden = false; note.textContent = ""; eta.textContent = ""; ddSummary.textContent = "";
     Plotly.purge("plan-history-chart"); return;
   }
-  empty.hidden = true;
+  empty.hidden = true; ddSummary.textContent = "";
   const goal = planData.plan.goal || 0;
   const monthly = planData.plan.monthly || 0;
   const pastDates = totals.map((t) => t.date);
@@ -1813,13 +1863,17 @@ function renderPlanHistory() {
   const CAP = 480;   // 最長40年
 
   const useAi = !!aiBand && aiSettings.ai_model !== "off";
+  const baseRate = (useAi ? Number(aiBand.base) : (planData.plan.return_rate || 0)) / 100;
+  const lp = planLifePlan();
+  const canProject = (monthly > 0 || baseRate > 0);
+
   const traces = [{
     x: pastDates, y: pastAmt, name: "実績", mode: "lines",
     line: { width: 2.5, color: "#5b8def" }, fill: "tozeroy", fillcolor: "rgba(91,141,239,0.08)",
     hovertemplate: "%{x}<br>実績 %{y:,.0f} 円<extra></extra>",
   }];
   const layout = (typeof baseLayout === "function") ? baseLayout() : {};
-  layout.height = 340;
+  layout.height = 360;
   layout.margin = { l: 72, r: 16, t: 12, b: 40 };
   layout.hovermode = "x unified";
   layout.showlegend = true;
@@ -1827,9 +1881,88 @@ function renderPlanHistory() {
   layout.shapes = []; layout.annotations = [];
   let maxY = goal || 0;
 
-  if (useAi) {
-    // AI予測：標準/楽観/悲観の3本＋バンド
-    const base = Number(aiBand.base) / 100, opt = Number(aiBand.optimistic) / 100, pess = Number(aiBand.pessimistic) / 100;
+  // 目標達成マーカーを追加する共通処理
+  const addGoalStar = (ach) => {
+    if (!(ach > 0) || goal <= 0) return;
+    const achDate = addMonths(lastDate, ach);
+    traces.push({ x: [achDate], y: [goal], mode: "markers", name: "目標達成",
+      marker: { size: 11, color: "#16a34a", symbol: "star" },
+      hovertemplate: `目標達成 ${achDate}<extra></extra>` });
+    layout.annotations.push({ x: achDate, y: goal, xanchor: "center", yanchor: "top", ay: 28,
+      text: `達成 ${achDate.slice(0, 7)}`, showarrow: true, arrowhead: 0,
+      font: { size: 10.5, color: "#16a34a" }, arrowcolor: "#16a34a" });
+  };
+
+  if (lp.ok && canProject) {
+    // === 生涯の推移（積立→退職→取り崩し）を1本のグラフにまとめて表示 ===
+    const accMonths = Math.max(0, Math.round((lp.retire - lp.age0) * 12));
+    // AI予測時は退職までの積立フェーズに楽観〜悲観バンドを重ねる
+    if (useAi && accMonths > 0) {
+      const opt = Number(aiBand.optimistic) / 100, pess = Number(aiBand.pessimistic) / 100;
+      const bandDates = [lastDate];
+      for (let m = 1; m <= accMonths; m++) bandDates.push(addMonths(lastDate, m));
+      const sO = projSeries(cur, monthly, opt, accMonths);
+      const sP = projSeries(cur, monthly, pess, accMonths);
+      maxY = Math.max(maxY, ...sO);
+      traces.push({ x: bandDates, y: sP, name: `悲観 ${aiBand.pessimistic}%`, mode: "lines",
+        line: { width: 1, color: "#9db8ef", dash: "dot" },
+        hovertemplate: "%{x}<br>悲観 %{y:,.0f} 円<extra></extra>" });
+      traces.push({ x: bandDates, y: sO, name: `楽観 ${aiBand.optimistic}%`, mode: "lines",
+        line: { width: 1, color: "#9db8ef", dash: "dot" }, fill: "tonexty", fillcolor: "rgba(91,141,239,0.12)",
+        hovertemplate: "%{x}<br>楽観 %{y:,.0f} 円<extra></extra>" });
+    }
+    // 基準シナリオの生涯パス
+    const path = buildLifePath(cur, lastDate, monthly, baseRate, lp);
+    if (path.accDates.length > 1) {
+      maxY = Math.max(maxY, ...path.accVals);
+      traces.push({ x: path.accDates, y: path.accVals,
+        name: useAi ? `積立（AI標準 ${aiBand.base}%）` : "積立予測", mode: "lines",
+        line: { width: 2, color: "#5b8def", dash: "dot" },
+        hovertemplate: "%{x}<br>積立 %{y:,.0f} 円<extra></extra>" });
+    }
+    if (path.ddDates.length > 1) {
+      maxY = Math.max(maxY, ...path.ddVals);
+      traces.push({ x: path.ddDates, y: path.ddVals, name: "取り崩し", mode: "lines",
+        line: { width: 2.5, color: "#f59e0b" }, fill: "tozeroy", fillcolor: "rgba(245,158,11,0.08)",
+        hovertemplate: "%{x}<br>取り崩し %{y:,.0f} 円<extra></extra>" });
+    }
+    // 目標達成（積立期のうちに到達した場合）
+    const ach = projMonthsToGoal(cur, monthly, baseRate, goal, accMonths || CAP);
+    addGoalStar(ach);
+    // 退職・年金開始・枯渇のマーカー
+    if (path.retireDate) {
+      layout.shapes.push({ type: "line", x0: path.retireDate, x1: path.retireDate, yref: "paper", y0: 0, y1: 1,
+        line: { color: "#9aa0b4", width: 1.2, dash: "dot" } });
+      layout.annotations.push({ x: path.retireDate, yref: "paper", y: 1, yanchor: "top", xanchor: "left",
+        text: ` 退職 ${lp.retire}歳`, showarrow: false, font: { size: 10.5, color: "#6f7488" } });
+    }
+    if (path.penStartDate) {
+      layout.shapes.push({ type: "line", x0: path.penStartDate, x1: path.penStartDate, yref: "paper", y0: 0, y1: 1,
+        line: { color: "#5b8def", width: 1, dash: "dot" } });
+      layout.annotations.push({ x: path.penStartDate, yref: "paper", y: 0.9, yanchor: "top", xanchor: "left",
+        text: ` 年金 ${lp.penAge}歳`, showarrow: false, font: { size: 10.5, color: "#5b8def" } });
+    }
+    if (path.depletionDate) {
+      layout.annotations.push({ x: path.depletionDate, y: 0, yanchor: "bottom", xanchor: "center", ay: -26,
+        text: `枯渇 ${Math.floor(path.depletionAge)}歳`, showarrow: true, arrowhead: 0,
+        font: { size: 10.5, color: "#e11d48" }, arrowcolor: "#e11d48" });
+    }
+    // 目標達成のテキスト
+    if (goal <= 0) eta.textContent = useAi ? "目標資産額を入力すると、AI予測での達成予定を表示します。" : "目標資産額を入力すると、達成予定を表示します。";
+    else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
+    else if (ach > 0) eta.textContent = (useAi ? `🤖 AI予測（年率${aiBand.base}%）：` : "🎯 このペースなら ")
+      + `${achLabel(lastDate, ach)}（約 ${Math.floor(ach / 12)}年${ach % 12}ヶ月後）に目標 ${Math.round(goal).toLocaleString()} 円へ到達見込みです。`;
+    else eta.textContent = `🎯 現在の条件では、退職（${lp.retire}歳）までに目標へ到達しません。積立額や想定年利を見直してみてください。`;
+    // 取り崩しサマリー
+    let msg = `退職時（${lp.retire}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円。`;
+    if (lp.penAge > lp.retire) msg += `退職〜年金開始（${lp.penAge}歳）までは年金なしで取り崩す前提です。`;
+    if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
+    else if (path.depletionAge > 0) msg += `この前提では、資産は 約 ${Math.floor(path.depletionAge)}歳 で尽きる見込みです。`;
+    else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;
+    ddSummary.textContent = msg;
+  } else if (useAi && canProject) {
+    // === ライフプラン未設定：AI予測の標準/楽観/悲観バンド（従来どおり） ===
+    const base = baseRate, opt = Number(aiBand.optimistic) / 100, pess = Number(aiBand.pessimistic) / 100;
     const baseAch = projMonthsToGoal(cur, monthly, base, goal, CAP);
     const horizon = Math.max(24, Math.min(CAP, baseAch > 0 ? Math.ceil(baseAch * 1.3) : 360));
     const futDates = [lastDate];
@@ -1847,27 +1980,20 @@ function renderPlanHistory() {
     traces.push({ x: futDates, y: sB, name: `AI標準 ${aiBand.base}%`, mode: "lines",
       line: { width: 2, color: "#5b8def", dash: "dot" },
       hovertemplate: "%{x}<br>AI標準 %{y:,.0f} 円<extra></extra>" });
-    if (baseAch > 0) {
-      const achDate = addMonths(lastDate, baseAch);
-      traces.push({ x: [achDate], y: [goal], mode: "markers", name: "目標達成",
-        marker: { size: 11, color: "#16a34a", symbol: "star" },
-        hovertemplate: `目標達成(標準) ${achDate}<extra></extra>` });
-      layout.annotations.push({ x: achDate, y: goal, xanchor: "center", yanchor: "top", ay: 28,
-        text: `達成 ${achDate.slice(0, 7)}`, showarrow: true, arrowhead: 0,
-        font: { size: 10.5, color: "#16a34a" }, arrowcolor: "#16a34a" });
-    }
+    addGoalStar(baseAch);
     const optAch = projMonthsToGoal(cur, monthly, opt, goal, CAP);
     const pessAch = projMonthsToGoal(cur, monthly, pess, goal, CAP);
     if (goal <= 0) eta.textContent = "目標資産額を入力すると、AI予測での達成予定を表示します。";
     else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
     else eta.textContent = `🤖 AI予測：標準（年率${aiBand.base}%）で ${achLabel(lastDate, baseAch)}、`
       + `楽観（${aiBand.optimistic}%）〜悲観（${aiBand.pessimistic}%）で ${achLabel(lastDate, optAch)}〜${achLabel(lastDate, pessAch)} に到達見込みです。`;
+    ddSummary.textContent = "設定画面の「資産プランの前提」で退職年齢・生活費を入力すると、退職後の取り崩し（資産寿命）も表示します。";
   } else {
-    // 手動：想定年利による1本
-    const rate = (planData.plan.return_rate || 0) / 100;
-    const canProject = (monthly > 0 || rate > 0);
+    // === ライフプラン未設定・手動：想定年利による1本 ===
+    const rate = baseRate;
+    const canProj = (monthly > 0 || rate > 0);
     const ach = projMonthsToGoal(cur, monthly, rate, goal, CAP);
-    if (canProject) {
+    if (canProj) {
       const horizon = Math.max(24, Math.min(CAP, ach > 0 ? Math.ceil(ach * 1.3) : 360));
       const futDates = [lastDate];
       for (let m = 1; m <= horizon; m++) futDates.push(addMonths(lastDate, m));
@@ -1876,21 +2002,14 @@ function renderPlanHistory() {
       traces.push({ x: futDates, y: s, name: "予測", mode: "lines",
         line: { width: 2, color: "#5b8def", dash: "dot" },
         hovertemplate: "%{x}<br>予測 %{y:,.0f} 円<extra></extra>" });
-      if (ach > 0) {
-        const achDate = addMonths(lastDate, ach);
-        traces.push({ x: [achDate], y: [goal], mode: "markers", name: "目標達成",
-          marker: { size: 11, color: "#16a34a", symbol: "star" },
-          hovertemplate: `目標達成 ${achDate}<extra></extra>` });
-        layout.annotations.push({ x: achDate, y: goal, xanchor: "center", yanchor: "top", ay: 28,
-          text: `達成 ${achDate.slice(0, 7)}`, showarrow: true, arrowhead: 0,
-          font: { size: 10.5, color: "#16a34a" }, arrowcolor: "#16a34a" });
-      }
+      addGoalStar(ach);
     } else { maxY = Math.max(maxY, ...pastAmt); }
     if (goal <= 0) eta.textContent = "目標資産額を入力すると、達成予定を表示します。";
     else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
-    else if (!canProject) eta.textContent = "毎月の積立額または想定年利を入力すると、目標達成の予定時期をグラフに表示します。";
+    else if (!canProj) eta.textContent = "毎月の積立額または想定年利を入力すると、目標達成の予定時期をグラフに表示します。";
     else if (ach > 0) eta.textContent = `🎯 このペースなら 約 ${Math.floor(ach / 12)}年${ach % 12}ヶ月後（${achLabel(lastDate, ach)}）に目標 ${Math.round(goal).toLocaleString()} 円へ到達する見込みです。`;
     else eta.textContent = "🎯 現在の条件では40年以内に目標へ到達しません。積立額や想定年利を見直してみてください。";
+    ddSummary.textContent = "設定画面の「資産プランの前提」で退職年齢・生活費を入力すると、退職後の取り崩し（資産寿命）も表示します。";
   }
 
   layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円", range: [0, (maxY || 1) * 1.08] });
@@ -1905,99 +2024,6 @@ function renderPlanHistory() {
   const first = pastAmt[0], diff = cur - first, pctChg = first ? (diff / first * 100) : 0;
   note.textContent = `実績（期間内）：${first.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
     + `（${diff >= 0 ? "+" : ""}${diff.toLocaleString()} 円 / ${pctChg >= 0 ? "+" : ""}${pctChg.toFixed(1)}%）`;
-
-  renderDrawdown();   // 取り崩し戦略のグラフも同じ前提で更新
-}
-
-// --- 取り崩し戦略（リタイア後の資産寿命） ---
-function renderDrawdown() {
-  const empty = $("plan-dd-empty");
-  const summary = $("plan-dd-summary");
-  const p = planData.plan || {};
-  const age0 = +p.current_age || 0, retire = +p.retire_age || 0;
-  const cur = planData.total_value || 0;
-  if (!age0 || !retire || retire < age0) {   // 前提不足
-    empty.hidden = false; summary.textContent = "";
-    Plotly.purge("plan-dd-chart"); return;
-  }
-  empty.hidden = true;
-  const monthly = p.monthly || 0;
-  const annual = ((aiBand ? aiBand.base : p.return_rate) || 0) / 100;
-  const infl = (p.inflation || 0) / 100;
-  const penAge = +p.pension_age || retire;
-  const pension = p.pension_monthly || 0;
-  const spend = p.spend_monthly || 0;
-  const endAge = 100;
-  const rm = Math.pow(1 + annual, 1 / 12) - 1;
-  const totalMonths = (endAge - age0) * 12;
-
-  let v = cur, depletionAge = -1, retireBal = null;
-  const S = [{ age: age0, v: cur }];
-  for (let m = 1; m <= totalMonths; m++) {
-    const age = age0 + m / 12;
-    v = v * (1 + rm);
-    const inflF = Math.pow(1 + infl, m / 12);
-    if (age < retire) {
-      v += monthly;
-    } else {
-      if (retireBal === null) retireBal = v;
-      const pen = (age >= penAge) ? pension * inflF : 0;
-      v -= (spend * inflF - pen);   // 生活費−年金（年金余剰なら加算）
-    }
-    if (v < 0) v = 0;
-    if (m % 3 === 0 || m === totalMonths) S.push({ age, v });
-    if (v <= 0) { depletionAge = age; S.push({ age, v: 0 }); break; }
-  }
-  if (retireBal === null) retireBal = v;   // 退職が計算範囲末尾のケース
-
-  // 積立期・取り崩し期で色分け（境界点を共有して連結）
-  const accX = [], accY = [], ddX = [], ddY = [];
-  const r1 = (a) => Math.round(a * 10) / 10;
-  S.forEach((pt) => {
-    if (pt.age <= retire) { accX.push(r1(pt.age)); accY.push(Math.round(pt.v)); }
-    else { ddX.push(r1(pt.age)); ddY.push(Math.round(pt.v)); }
-  });
-  if (accX.length && ddX.length) { ddX.unshift(accX[accX.length - 1]); ddY.unshift(accY[accY.length - 1]); }
-
-  const traces = [
-    { x: accX, y: accY, name: "積立期", mode: "lines", line: { width: 2.5, color: "#5b8def" },
-      fill: "tozeroy", fillcolor: "rgba(91,141,239,0.08)",
-      hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>" },
-    { x: ddX, y: ddY, name: "取り崩し期", mode: "lines", line: { width: 2.5, color: "#f59e0b" },
-      fill: "tozeroy", fillcolor: "rgba(245,158,11,0.08)",
-      hovertemplate: "%{x}歳<br>%{y:,.0f} 円<extra></extra>" },
-  ];
-  const layout = (typeof baseLayout === "function") ? baseLayout() : {};
-  layout.height = 320;
-  layout.margin = { l: 72, r: 16, t: 12, b: 40 };
-  layout.hovermode = "x unified";
-  layout.showlegend = true;
-  layout.legend = { orientation: "h", y: -0.18, font: { size: 11 } };
-  layout.xaxis = Object.assign(layout.xaxis || {}, { title: "年齢（歳）" });
-  const maxY = Math.max(retireBal, cur, ...accY, ...ddY);
-  layout.yaxis = Object.assign(layout.yaxis || {}, { title: "円", range: [0, (maxY || 1) * 1.08] });
-  layout.shapes = [{ type: "line", x0: retire, x1: retire, yref: "paper", y0: 0, y1: 1,
-    line: { color: "#9aa0b4", width: 1.2, dash: "dot" } }];
-  layout.annotations = [{ x: retire, yref: "paper", y: 1, yanchor: "top", xanchor: "left",
-    text: ` 退職 ${retire}歳`, showarrow: false, font: { size: 10.5, color: "#6f7488" } }];
-  if (depletionAge > 0) {
-    layout.annotations.push({ x: r1(depletionAge), y: 0, yanchor: "bottom", xanchor: "center", ay: -26,
-      text: `枯渇 ${Math.floor(depletionAge)}歳`, showarrow: true, arrowhead: 0,
-      font: { size: 10.5, color: "#e11d48" }, arrowcolor: "#e11d48" });
-  }
-  Plotly.newPlot("plan-dd-chart", traces, layout, { responsive: true, displayModeBar: false });
-
-  // サマリー
-  let msg = `退職時（${retire}歳）の想定資産 約 ${Math.round(retireBal).toLocaleString()} 円。`;
-  if (spend <= 0) {
-    msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
-  } else if (depletionAge > 0) {
-    msg += `年金＋取り崩しの前提では、資産は 約 ${Math.floor(depletionAge)}歳 で尽きる見込みです。`;
-  } else {
-    const endBal = S[S.length - 1].v;
-    msg += `年金＋取り崩しの前提でも、資産は ${endAge}歳まで持続する見込みです（${endAge}歳時点で 約 ${Math.round(endBal).toLocaleString()} 円）。`;
-  }
-  summary.textContent = msg;
 }
 
 // 目標額の入力
