@@ -1565,6 +1565,8 @@ async function loadSettings() {
     const pd = await pr.json();
     if (pd && pd.ok) {
       const pl = pd.plan || {};
+      $("set-cash").value = fmtInt(pl.cash || 0);
+      $("set-bonds").value = fmtInt(pl.bonds || 0);
       $("set-current-age").value = pl.current_age || "";
       $("set-retire-age").value = pl.retire_age || "";
       $("set-pension-age").value = pl.pension_age || "";
@@ -1699,6 +1701,8 @@ function bindPremise(id, key, comma) {
     savePlan({ [key]: v });
   });
 }
+bindPremise("set-cash", "cash", true);
+bindPremise("set-bonds", "bonds", true);
 bindPremise("set-current-age", "current_age", false);
 bindPremise("set-retire-age", "retire_age", false);
 bindPremise("set-pension-age", "pension_age", false);
@@ -1764,10 +1768,21 @@ function flushPlanSave() {
   return planSaveInflight;
 }
 
+// 保有現金＋債券（値上がりを見込まない安定資産）
+function planReserve() {
+  return (planData.plan.cash || 0) + (planData.plan.bonds || 0);
+}
+// 投信評価額
+function planFundValue() { return planData.total_value || 0; }
+// 総資産（投信＋現金＋債券）
+function planTotalAssets() { return planFundValue() + planReserve(); }
+
 // --- 目標・進捗 ---
 function renderPlanGoal() {
   const goal = planData.plan.goal || 0;
-  const cur = planData.total_value || 0;
+  const fund = planFundValue();
+  const reserve = planReserve();
+  const cur = fund + reserve;   // 総資産で進捗を判定
   const pct = goal > 0 ? (cur / goal * 100) : 0;
   $("fire-fill").style.width = Math.min(100, pct).toFixed(1) + "%";
   $("fire-pct").textContent = goal > 0 ? `達成率 ${pct.toFixed(1)}%` : "目標額を入力してください";
@@ -1775,9 +1790,14 @@ function renderPlanGoal() {
   $("fire-remain").textContent = goal > 0
     ? (remain > 0 ? `あと ${Math.round(remain).toLocaleString()} 円` : "🎉 目標達成！")
     : "";
-  $("plan-goal-note").textContent = goal > 0
-    ? `現在の評価額 ${Math.round(cur).toLocaleString()} 円 ／ 目標 ${Math.round(goal).toLocaleString()} 円`
-    : "";
+  let note = "";
+  if (goal > 0) {
+    note = `総資産 ${Math.round(cur).toLocaleString()} 円 ／ 目標 ${Math.round(goal).toLocaleString()} 円`;
+    if (reserve > 0) note += `（内訳：投信 ${Math.round(fund).toLocaleString()} 円`
+      + `＋現金 ${Math.round(planData.plan.cash || 0).toLocaleString()} 円`
+      + `＋債券 ${Math.round(planData.plan.bonds || 0).toLocaleString()} 円）`;
+  }
+  $("plan-goal-note").textContent = note;
 }
 
 // --- 資産の推移＋将来予測と目標達成予定 ---
@@ -1824,30 +1844,39 @@ function planLifePlan() {
 }
 // 生涯の資産推移（積立期→退職→取り崩し期）を月次で構築
 // 返り値: 月次の {age,date,v} 系列 pts と、退職・年金開始・枯渇の情報
-function buildLifePath(cur, lastDate, monthly, annual, lp) {
+function buildLifePath(cur, lastDate, monthly, annual, lp, reserve) {
   const rm = projMonthlyRate(annual);
-  const pts = [{ age: lp.age0, date: lastDate, v: Math.round(cur) }];
-  let v = cur, depletionAge = -1, penStartAge = -1, retireBal = null;
+  let fund = cur;              // 運用資産（投信）：想定年利で成長
+  let res = reserve || 0;      // 現金＋債券：値上がりを見込まない安定資産（据え置き）
+  const pts = [{ age: lp.age0, date: lastDate, v: Math.round(fund + res) }];
+  let depletionAge = -1, penStartAge = -1, retireBal = null;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
-    v = v * (1 + rm);
+    fund = fund * (1 + rm);              // 運用資産のみ成長
     if (age < lp.retire) {
-      v += monthly;
+      fund += monthly;
     } else {
-      if (retireBal === null) retireBal = v;   // 退職時点の資産
+      if (retireBal === null) retireBal = fund + res;   // 退職時点の総資産
       const inflF = Math.pow(1 + lp.infl, m / 12);
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
-      v -= (lp.spend * inflF - pen);
-      if (v < 0) v = 0;
+      let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
+      if (w >= 0) {                       // まず現金・債券から、足りなければ運用資産から取り崩す
+        if (res >= w) { res -= w; }
+        else { w -= res; res = 0; fund -= w; }
+      } else {                            // 年金＞生活費の余剰は運用資産へ
+        fund -= w;
+      }
+      if (fund < 0) fund = 0;
     }
-    pts.push({ age, date: dt, v: Math.round(v) });
-    if (v <= 0) { depletionAge = age; break; }
+    const total = fund + res;
+    pts.push({ age, date: dt, v: Math.round(total) });
+    if (total <= 0) { depletionAge = age; break; }
   }
-  if (retireBal === null) retireBal = v;
+  if (retireBal === null) retireBal = fund + res;
   const endBal = pts[pts.length - 1].v;
   return { pts, retireBal, penStartAge, depletionAge, endBal };
 }
@@ -1885,25 +1914,33 @@ function renderPlanHistory() {
   empty.hidden = true; ddSummary.textContent = "";
   const goal = planData.plan.goal || 0;
   const monthly = planData.plan.monthly || 0;
+  const reserve = planReserve();                       // 現金＋債券（据え置きの安定資産）
   const pastDates = totals.map((t) => t.date);
-  const pastAmt = totals.map((t) => Math.round(t.amount));
+  const pastFund = totals.map((t) => Math.round(t.amount));   // 投信の実額
+  const pastAmt = pastFund.map((a) => a + reserve);    // 総資産（現金・債券を加算）
   const lastDate = pastDates[pastDates.length - 1];
-  const cur = pastAmt[pastAmt.length - 1];
+  const fundCur = pastFund[pastFund.length - 1];        // 投信のみの現在値（成長の起点）
+  const cur = pastAmt[pastAmt.length - 1];              // 総資産（現在）
   const CAP = 480;   // 最長40年
 
   const useAi = !!aiBand && aiSettings.ai_model !== "off";
   const baseRate = (useAi ? Number(aiBand.base) : (planData.plan.return_rate || 0)) / 100;
   const lp = planLifePlan();
   const canProject = (monthly > 0 || baseRate > 0);
+  // 投信のみ成長・現金債券は据え置きで総資産系列を作るヘルパー
+  const projT = (rate, h) => projSeries(fundCur, monthly, rate, h).map((v) => v + reserve);
+  const m2g = (rate) => (goal > 0 && cur >= goal) ? 0
+    : projMonthsToGoal(fundCur, monthly, rate, Math.max(1, goal - reserve), CAP);
 
   // 実績サマリー（全ケース共通）
   const first0 = pastAmt[0], diff0 = cur - first0, pctChg0 = first0 ? (diff0 / first0 * 100) : 0;
-  note.textContent = `実績（期間内）：${first0.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
-    + `（${diff0 >= 0 ? "+" : ""}${diff0.toLocaleString()} 円 / ${pctChg0 >= 0 ? "+" : ""}${pctChg0.toFixed(1)}%）`;
+  note.textContent = `${reserve > 0 ? "総資産" : "実績"}（期間内）：${first0.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
+    + `（${diff0 >= 0 ? "+" : ""}${diff0.toLocaleString()} 円 / ${pctChg0 >= 0 ? "+" : ""}${pctChg0.toFixed(1)}%）`
+    + (reserve > 0 ? `　※現金・債券 ${reserve.toLocaleString()} 円を含む` : "");
 
   // ライフプランが確定していれば「ライフステージ別」パネルで表示
   if (lp.ok && canProject) {
-    renderLifeStages({ cur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary });
+    renderLifeStages({ cur: fundCur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary, reserve });
     return;
   }
 
@@ -1937,13 +1974,13 @@ function renderPlanHistory() {
   if (useAi && canProject) {
     // === AI予測の標準/楽観/悲観バンド（従来どおり） ===
     const base = baseRate, opt = Number(aiBand.optimistic) / 100, pess = Number(aiBand.pessimistic) / 100;
-    const baseAch = projMonthsToGoal(cur, monthly, base, goal, CAP);
+    const baseAch = m2g(base);
     const horizon = Math.max(24, Math.min(CAP, baseAch > 0 ? Math.ceil(baseAch * 1.3) : 360));
     const futDates = [lastDate];
     for (let m = 1; m <= horizon; m++) futDates.push(addMonths(lastDate, m));
-    const sB = projSeries(cur, monthly, base, horizon);
-    const sO = projSeries(cur, monthly, opt, horizon);
-    const sP = projSeries(cur, monthly, pess, horizon);
+    const sB = projT(base, horizon);
+    const sO = projT(opt, horizon);
+    const sP = projT(pess, horizon);
     maxY = Math.max(maxY, ...sO);
     traces.push({ x: futDates, y: sP, name: `悲観 ${aiBand.pessimistic}%`, mode: "lines",
       line: { width: 1, color: "#9db8ef", dash: "dot" },
@@ -1955,8 +1992,8 @@ function renderPlanHistory() {
       line: { width: 2, color: "#5b8def", dash: "dot" },
       hovertemplate: "%{x}<br>AI標準 %{y:,.0f} 円<extra></extra>" });
     addGoalStar(baseAch);
-    const optAch = projMonthsToGoal(cur, monthly, opt, goal, CAP);
-    const pessAch = projMonthsToGoal(cur, monthly, pess, goal, CAP);
+    const optAch = m2g(opt);
+    const pessAch = m2g(pess);
     if (goal <= 0) eta.textContent = "目標資産額を入力すると、AI予測での達成予定を表示します。";
     else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
     else eta.textContent = `🤖 AI予測：標準（年率${aiBand.base}%）で ${achLabel(lastDate, baseAch)}、`
@@ -1966,12 +2003,12 @@ function renderPlanHistory() {
     // === ライフプラン未設定・手動：想定年利による1本 ===
     const rate = baseRate;
     const canProj = (monthly > 0 || rate > 0);
-    const ach = projMonthsToGoal(cur, monthly, rate, goal, CAP);
+    const ach = m2g(rate);
     if (canProj) {
       const horizon = Math.max(24, Math.min(CAP, ach > 0 ? Math.ceil(ach * 1.3) : 360));
       const futDates = [lastDate];
       for (let m = 1; m <= horizon; m++) futDates.push(addMonths(lastDate, m));
-      const s = projSeries(cur, monthly, rate, horizon);
+      const s = projT(rate, horizon);
       maxY = Math.max(maxY, ...s);
       traces.push({ x: futDates, y: s, name: "予測", mode: "lines",
         line: { width: 2, color: "#5b8def", dash: "dot" },
@@ -2001,7 +2038,9 @@ function renderPlanHistory() {
 // 退職・年金開始のタイミングに縦線を入れる。
 function renderLifeStages(o) {
   const { cur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary } = o;
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp);
+  const reserve = o.reserve || 0;                    // 現金＋債券（据え置き）
+  const curTotal = cur + reserve;                    // 現在の総資産
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, reserve);
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -2009,7 +2048,9 @@ function renderLifeStages(o) {
   const depAge = path.depletionAge;                 // 枯渇年齢（-1なら枯渇しない）
   const endAge = depAge > 0 ? depAge : 100;
   const accMonths = Math.max(1, Math.round((retireAge - lp.age0) * 12));
-  const ach = projMonthsToGoal(cur, monthly, baseRate, goal, accMonths);
+  // 目標達成：投信は成長・現金債券は据え置き → 投信が (目標−現金債券) に到達した時点
+  const ach = (goal > 0 && curTotal >= goal) ? 0
+    : projMonthsToGoal(cur, monthly, baseRate, Math.max(1, goal - reserve), accMonths);
   const achAge = ach > 0 ? lp.age0 + ach / 12 : -1;
 
   // 横軸の区間と表示幅（画面比率）。退職後（＝取り崩し期）は長いので幅を絞って圧縮する。
@@ -2114,7 +2155,7 @@ function renderLifeStages(o) {
       yanchor: star ? "bottom" : "top", yshift: star ? 8 : -8, xanchor, xshift,
       text: val > 0 ? `${text} ${jpYenShort(val)}` : text, showarrow: false, font: { size: 9.5, color } });
   };
-  dot(lp.age0, cur, "現在", "#5b8def");
+  dot(lp.age0, curTotal, "現在", "#5b8def");
   if (retireAge > lp.age0 + 0.01) dot(retireAge, path.retireBal, "退職時", "#6f7488");
   if (depAge > 0) dot(depAge, 0, `枯渇 ${fa(depAge)}歳`, "#e11d48", true);
   else dot(100, path.endBal, "100歳", "#f59e0b");
@@ -2123,14 +2164,15 @@ function renderLifeStages(o) {
 
   // 目標達成テキスト
   if (goal <= 0) eta.textContent = useAi ? "目標資産額を入力すると、AI予測での達成予定を表示します。" : "目標資産額を入力すると、達成予定を表示します。";
-  else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
+  else if (curTotal >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
   else if (ach > 0) eta.textContent = (useAi ? `🤖 AI予測（年率${aiBand.base}%）：` : "🎯 このペースなら ")
     + `${achLabel(lastDate, ach)}（約 ${Math.floor(ach / 12)}年${ach % 12}ヶ月後）に目標 ${Math.round(goal).toLocaleString()} 円へ到達見込みです。`;
   else eta.textContent = `🎯 現在の条件では、退職（${retireAge}歳）までに目標へ到達しません。積立額や想定年利を見直してみてください。`;
 
   // 取り崩しサマリー
-  let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円。`;
-  if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで取り崩す前提です。`;
+  let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
+  msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
+  if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金・債券から取り崩す前提です。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;

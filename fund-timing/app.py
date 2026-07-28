@@ -1110,6 +1110,13 @@ def _build_ai_context(summaries, allocation):
             "change_pct": s.get("change_pct"),
         })
     ctx = {"funds": funds}
+    _plan = db.get_setting("plan", {}) or {}
+    _cash, _bonds = _plan.get("cash", 0) or 0, _plan.get("bonds", 0) or 0
+    if _cash or _bonds:
+        ctx["other_assets"] = {
+            "cash": round(_cash), "bonds": round(_bonds),
+            "note": "投信以外の保有資産。現金・債券は値上がりを見込まない安定資産として総資産に含めている。",
+        }
     if allocation:
         ctx["allocation"] = {
             "classes": [
@@ -1126,8 +1133,9 @@ _AI_SYSTEM_PROMPT = (
     "あなたは日本の個人投資家の投資信託ポートフォリオを見て、保有者向けのコメントを書くアシスタントです。"
     "入力はテクニカル指標（スコアや判定）・損益・資産配分・リバランス計算の結果です。"
     "これらを横断的に解釈し、次の3種類の日本語コメントをJSONで返してください。\n"
-    "- overall: ポートフォリオ全体の総合コメント（3文以内・150字以内）。偏り・過熱/割安・損益の傾向に触れる。\n"
-    "- rebalance: リバランスや資産配分の観点での提案（2文以内・120字以内）。\n"
+    "- overall: ポートフォリオ全体の総合コメント（3文以内・150字以内）。偏り・過熱/割安・損益の傾向に触れる。"
+    "other_assets（現金・債券）がある場合は、投信とのバランス（現金比率が高すぎ/低すぎ等）にも触れる。\n"
+    "- rebalance: リバランスや資産配分の観点での提案（2文以内・120字以内）。現金・債券を含めた安全資産と投信の比率も考慮する。\n"
     "- funds: 各商品の短いコメント（1商品につき1文・50字以内）。watch_id で必ず対応づける。\n"
     "重要: 全体で簡潔にまとめること。冗長な前置きや繰り返しは避ける。\n"
     "制約: 断定を避け『〜を検討できる水準』等の表現にする。売買を強制しない。"
@@ -1219,7 +1227,8 @@ def api_plan():
         plan = db.get_setting("plan", {}) or {}
         for k in ("goal", "monthly", "return_rate",
                   "current_age", "retire_age", "pension_age",
-                  "pension_monthly", "spend_monthly", "inflation"):
+                  "pension_monthly", "spend_monthly", "inflation",
+                  "cash", "bonds"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
@@ -1256,6 +1265,9 @@ _AI_PLAN_PROMPT = (
     "- comment_growth: 資産形成・目標達成の見通しコメント（日本語2〜3文）。\n"
     "- comment_drawdown: リタイア後の取り崩し戦略のコメント（資産寿命・年金とのバランス・インフレ・注意点や工夫）を日本語2〜3文。"
     "前提が未設定なら、設定を促す一言でよい。\n"
+    "現金(cash)・債券(bonds)がある場合は、それらを含めた総資産(current_total)で見立て、"
+    "退職〜年金開始までの取り崩しに現金・債券のクッションをどう使うか等にも触れてください。"
+    "現金・債券は値上がりを見込まない安定資産である点に留意する。\n"
     "これは機械的な参考情報であり、将来を保証する投資助言ではありません。"
 )
 
@@ -1291,8 +1303,13 @@ def api_ai_plan():
     summaries = _build_summaries(request.args.get("range", "1y"), force=False)
     allocation = _build_allocation(summaries)
     plan = db.get_setting("plan", {}) or {}
+    _fund_total = round(sum((s.get("value") or 0) for s in summaries if s.get("ok")))
+    _cash, _bonds = round(plan.get("cash", 0) or 0), round(plan.get("bonds", 0) or 0)
     ctx = {
-        "current_total": round(sum((s.get("value") or 0) for s in summaries if s.get("ok"))),
+        "current_fund_value": _fund_total,
+        "cash": _cash,
+        "bonds": _bonds,
+        "current_total": _fund_total + _cash + _bonds,   # 投信＋現金＋債券
         "goal": plan.get("goal", 0),
         "monthly_contribution": plan.get("monthly", 0),
         "life_plan": {
