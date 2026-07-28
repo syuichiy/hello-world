@@ -1671,10 +1671,11 @@ function renderAiAdvice(advice, model) {
     if (f && f.watch_id != null) aiAdviceByWatch[f.watch_id] = f.advice;
   });
   const label = modelLabel(model);
-  let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>AIアドバイス</b><span class="ai-model">${label}</span></div>`;
-  if (advice.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(advice.overall)}</div></div>`;
-  if (advice.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(advice.rebalance)}</div></div>`;
-  html += '<div class="ai-foot">※ 機械的な参考情報であり投資助言ではありません。</div>';
+  // 銘柄一覧では「売買」に関するコメントのみ表示（リバランス・資産配分はポートフォリオ画面へ）
+  const tradeHead = advice.trade_overall || advice.overall || "";
+  let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>売買アドバイス</b><span class="ai-model">${label}</span></div>`;
+  if (tradeHead) html += `<div class="ai-block"><div class="ai-block-t">売買の見立て</div><div class="ai-block-b">${escapeHtml(tradeHead)}</div></div>`;
+  html += '<div class="ai-foot">※ 各商品の売買コメントは表の銘柄名の下に表示しています。機械的な参考情報であり投資助言ではありません。</div>';
   banner.innerHTML = html;
   banner.hidden = false;
   renderWatchTable();   // 銘柄別コメントを表に反映
