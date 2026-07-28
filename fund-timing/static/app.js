@@ -593,9 +593,22 @@ function renderPriceTable(holdings, dates, totals) {
     const pl = Math.round((r - 100) * 10) / 10;
     return `<td class="num pt-plcol ${pl >= 0 ? "up" : "down"}">${pl >= 0 ? "+" : ""}${pl}%</td>`;
   };
-  // ヘッダ：商品名（固定）＋ 損益率（固定）＋ 各日付
+  // 前日比セル（直近2日の評価額の差）。金額＋%を表示
+  const dodCell = (dts, amts) => {
+    const vals = [];
+    for (let i = (dts ? dts.length : 0) - 1; i >= 0 && vals.length < 2; i--) {
+      const v = amts[i];
+      if (v != null) vals.push(v);
+    }
+    if (vals.length < 2 || !vals[1]) return `<td class="num pt-dodcol">—</td>`;
+    const diff = vals[0] - vals[1], pct = diff / vals[1] * 100;
+    const cls = diff >= 0 ? "up" : "down", sg = diff >= 0 ? "+" : "";
+    return `<td class="num pt-dodcol ${cls}"><div>${sg}${Math.round(diff).toLocaleString()}</div>`
+      + `<div class="pt-dod-pct">${sg}${pct.toFixed(2)}%</div></td>`;
+  };
+  // ヘッダ：商品名（固定）＋ 損益率（固定）＋ 前日比（固定）＋ 各日付
   $("price-table-head").innerHTML =
-    `<th class="pt-namecol">商品名</th><th class="num pt-plcol">損益率</th>` +
+    `<th class="pt-namecol">商品名</th><th class="num pt-plcol">損益率</th><th class="num pt-dodcol">前日比</th>` +
     cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
   // 証券会社順（SBI→三菱UFJ→楽天→その他）に並べ替え。色はグラフと合わせて元の並び順で固定
   const withColor = holdings.map((h, i) => ({ h, color: PRICE_COLORS[i % PRICE_COLORS.length] }));
@@ -610,7 +623,7 @@ function renderPriceTable(holdings, dates, totals) {
     if (bk !== curBroker) {   // 証券会社の区切り見出し行
       curBroker = bk;
       html += `<tr class="pt-broker-row"><td class="pt-namecol">🏦 ${escapeHtml(bk)}</td>` +
-        `<td class="pt-plcol"></td><td class="num" colspan="${ndates}"></td></tr>`;
+        `<td class="pt-plcol"></td><td class="pt-dodcol"></td><td class="num" colspan="${ndates}"></td></tr>`;
     }
     const m = {}; h.dates.forEach((d, k) => { m[d] = h.amount[k]; });
     const cells = cols.map((d) => {
@@ -619,14 +632,15 @@ function renderPriceTable(holdings, dates, totals) {
     }).join("");
     const acct = (h.account && h.account !== h.name)
       ? `<div class="pt-acct">${escapeHtml(h.account)}</div>` : "";
-    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio)}${cells}</tr>`;
+    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio)}${dodCell(h.dates, h.amount)}${cells}</tr>`;
   });
   const totRatio = totals.length ? totals[totals.length - 1].ratio : null;
   const totalCells = cols.map((d) => {
     const v = totalMap[d];
     return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
   }).join("");
-  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio)}${totalCells}</tr>`;
+  const totDod = dodCell(totals.map((t) => t.date), totals.map((t) => t.amount));
+  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio)}${totDod}${totalCells}</tr>`;
   $("price-table-body").innerHTML = html;
 }
 

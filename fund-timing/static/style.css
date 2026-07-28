@@ -687,6 +687,17 @@ tr:hover .row-del { opacity: 1; }
 .price-table tbody tr:nth-child(even) .pt-plcol { background: var(--bg); }
 .price-table .pt-broker-row .pt-plcol { background: rgba(91,91,214,.12); }
 .price-table .pt-total-row .pt-plcol { background: var(--bg); }
+/* 前日比の列も固定（損益率の右隣） */
+.price-table .pt-dodcol {
+  position: sticky; left: 296px; z-index: 2; background: var(--card);
+  min-width: 92px; max-width: 92px; text-align: right; font-weight: 800;
+  box-shadow: 1px 0 0 var(--line);
+}
+.price-table thead th.pt-dodcol { z-index: 3; background: var(--bg); }
+.price-table tbody tr:nth-child(even) .pt-dodcol { background: var(--bg); }
+.price-table .pt-broker-row .pt-dodcol { background: rgba(91,91,214,.12); }
+.price-table .pt-total-row .pt-dodcol { background: var(--bg); }
+.price-table .pt-dod-pct { font-size: 10.5px; font-weight: 700; opacity: .82; }
 .price-table .pt-total-row td { font-weight: 800; border-top: 2px solid var(--line); background: var(--bg); }
 .price-table .pt-total-row .pt-namecol { color: var(--ink); }
 .price-table .pt-broker-row td { background: rgba(91,91,214,.08); font-weight: 800; font-size: 12px; color: var(--accent); padding: 6px 10px; }
