@@ -884,12 +884,18 @@ def api_actual_history():
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:
                         merged[d] = round(p * factor)
-                # 当日（記録期間より後）の評価額をDBへ反映
-                if dts and prs and prs[-1] is not None:
-                    today_val = round(prs[-1] * factor)
-                    _persist_today_value(it["watch_id"], dts[-1], today_val)
-                    merged[dts[-1]] = today_val
-                    excel_dates.add(dts[-1])
+                # 記録期間より後の営業日はすべて表・合計に反映＆保存する。
+                # （単に最新日だけでなく、昨日など直近の営業日や、アプリを起動しなかった
+                #   日も基準価額の履歴からさかのぼって補完する）
+                for d, p in zip(dts, prs):
+                    if p is None:
+                        continue
+                    if _RECORDED_MAX_DATE and d <= _RECORDED_MAX_DATE:
+                        continue
+                    val = round(p * factor)
+                    _persist_today_value(it["watch_id"], d, val)
+                    merged[d] = val
+                    excel_dates.add(d)
             except Exception:
                 pass
         dates = sorted(merged.keys())
