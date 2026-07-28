@@ -14,6 +14,9 @@
   --buy: #16a34a;
   --sell: #e11d48;
   --neutral: #ca8a04;
+  /* 増減の文字色（背景と混ざらない見やすい配色）。表全体で共通 */
+  --up-text: #12833b;
+  --down-text: #c8102e;
   --shadow-sm: 0 1px 2px rgba(30, 33, 48, 0.05), 0 4px 16px rgba(30, 33, 48, 0.05);
   --shadow-md: 0 4px 10px rgba(30, 33, 48, 0.07), 0 12px 32px rgba(91, 91, 214, 0.10);
   --radius: 18px;
@@ -283,8 +286,8 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 .fund-nm { font-weight: 650; }
 .fund-sub { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
 .err-msg { color: var(--sell); font-size: 12.5px; }
-.up { color: var(--buy); font-weight: 700; }
-.down { color: var(--sell); font-weight: 700; }
+.up { color: var(--up-text); font-weight: 700; }
+.down { color: var(--down-text); font-weight: 700; }
 .row-del {
   border: none; background: transparent; color: var(--ink-soft);
   cursor: pointer; font-size: 15px; padding: 5px 7px; border-radius: 8px;
@@ -304,8 +307,8 @@ tr:hover .row-del { opacity: 1; }
 .units-input::placeholder, .invested-input::placeholder { color: var(--ink-soft); opacity: .55; }
 .value-cell { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pl-sub { font-size: 10.5px; font-weight: 700; margin-top: 2px; }
-.pl-sub.up { color: var(--buy); }
-.pl-sub.down { color: var(--sell); }
+.pl-sub.up { color: var(--up-text); }
+.pl-sub.down { color: var(--down-text); }
 
 /* 判定バッジ */
 .vbadge {
@@ -425,6 +428,8 @@ tr:hover .row-del { opacity: 1; }
     --ink: #e7e8ef;
     --ink-soft: #9a9fb4;
     --line: #30323f;
+    --up-text: #4ade80;
+    --down-text: #ff6b81;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.2);
     --shadow-md: 0 4px 10px rgba(0,0,0,.3), 0 12px 32px rgba(91,91,214,.15);
   }
@@ -697,13 +702,6 @@ tr:hover .row-del { opacity: 1; }
 .price-table tbody tr:nth-child(even) .pt-dodcol { background: var(--bg); }
 .price-table .pt-broker-row .pt-dodcol { background: rgba(91,91,214,.12); }
 .price-table .pt-total-row .pt-dodcol { background: var(--bg); }
-/* 前日比は背景と混ざらない見やすい配色（増＝緑／減＝赤） */
-.price-table .pt-dodcol.up { color: #12833b; }
-.price-table .pt-dodcol.down { color: #c8102e; }
-@media (prefers-color-scheme: dark) {
-  .price-table .pt-dodcol.up { color: #4ade80; }
-  .price-table .pt-dodcol.down { color: #ff6b81; }
-}
 .price-table .pt-total-row td { font-weight: 800; border-top: 2px solid var(--line); background: var(--bg); }
 .price-table .pt-total-row .pt-namecol { color: var(--ink); }
 .price-table .pt-broker-row td { background: rgba(91,91,214,.08); font-weight: 800; font-size: 12px; color: var(--accent); padding: 6px 10px; }
@@ -715,8 +713,8 @@ tr:hover .row-del { opacity: 1; }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.pf-sum-val.up { color: var(--buy); }
-.pf-sum-val.down { color: var(--sell); }
+.pf-sum-val.up { color: var(--up-text); }
+.pf-sum-val.down { color: var(--down-text); }
 @media (max-width: 680px) { .pf-sum-grid { grid-template-columns: 1fr 1fr; } }
 
 /* ------------------------------------------------ タブレット・タッチ操作向け */
