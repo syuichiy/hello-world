@@ -593,7 +593,7 @@ function renderPriceTable(holdings, dates, totals) {
     const pl = Math.round((r - 100) * 10) / 10;
     return `<td class="num pt-plcol ${pl >= 0 ? "up" : "down"}">${pl >= 0 ? "+" : ""}${pl}%</td>`;
   };
-  // 前日比セル（直近2日の評価額の差）。金額＋%を表示
+  // 前日比セル（直近2日の評価額の差）。%のみ表示
   const dodCell = (dts, amts) => {
     const vals = [];
     for (let i = (dts ? dts.length : 0) - 1; i >= 0 && vals.length < 2; i--) {
@@ -603,8 +603,7 @@ function renderPriceTable(holdings, dates, totals) {
     if (vals.length < 2 || !vals[1]) return `<td class="num pt-dodcol">—</td>`;
     const diff = vals[0] - vals[1], pct = diff / vals[1] * 100;
     const cls = diff >= 0 ? "up" : "down", sg = diff >= 0 ? "+" : "";
-    return `<td class="num pt-dodcol ${cls}"><div>${sg}${Math.round(diff).toLocaleString()}</div>`
-      + `<div class="pt-dod-pct">${sg}${pct.toFixed(2)}%</div></td>`;
+    return `<td class="num pt-dodcol ${cls}">${sg}${pct.toFixed(2)}%</td>`;
   };
   // ヘッダ：商品名（固定）＋ 損益率（固定）＋ 前日比（固定）＋ 各日付
   $("price-table-head").innerHTML =
