@@ -1546,6 +1546,8 @@ $("back-btn").addEventListener("click", showDashboard);
 
 // ============================================================ 設定 / AIアドバイス
 let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false };
+const AI_MODEL_LABELS = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
+function modelLabel(m) { return AI_MODEL_LABELS[m] || "AI"; }
 let aiAdviceByWatch = {};   // watch_id -> コメント
 let lastAiAdvice = null;    // 直近のAIアドバイス全体 {overall, rebalance, funds}
 let lastAiModel = null;
@@ -1603,7 +1605,7 @@ async function saveAiModel(model) {
     renderPortfolioAi();
     toast("AIアドバイスをオフにしました");
   } else {
-    toast(`AIアドバイス: ${model === "sonnet" ? "Sonnet" : "Haiku"} に設定しました`);
+    toast(`AIアドバイス: ${modelLabel(model)} に設定しました`);
     aiLoadedOnce = false;
     loadAiAdvice();
   }
@@ -1653,7 +1655,7 @@ function renderAiAdvice(advice, model) {
   (advice.funds || []).forEach((f) => {
     if (f && f.watch_id != null) aiAdviceByWatch[f.watch_id] = f.advice;
   });
-  const label = model === "sonnet" ? "Sonnet" : "Haiku";
+  const label = modelLabel(model);
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>AIアドバイス</b><span class="ai-model">${label}</span></div>`;
   if (advice.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(advice.overall)}</div></div>`;
   if (advice.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(advice.rebalance)}</div></div>`;
@@ -1670,7 +1672,7 @@ function renderPortfolioAi() {
   if (!card) return;
   if (aiSettings.ai_model === "off" || !lastAiAdvice) { card.hidden = true; return; }
   const a = lastAiAdvice;
-  const label = lastAiModel === "sonnet" ? "Sonnet" : "Haiku";
+  const label = modelLabel(lastAiModel);
   let html = "";
   if (a.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(a.overall)}</div></div>`;
   if (a.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(a.rebalance)}</div></div>`;

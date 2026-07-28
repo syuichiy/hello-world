@@ -1038,7 +1038,9 @@ except Exception:
 _AI_MODELS = {
     "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-5",
+    "opus": "claude-opus-5",
 }
+_AI_MODEL_KEYS = ("off",) + tuple(_AI_MODELS.keys())   # 設定で許可するキー
 
 
 def _ai_api_key():
@@ -1048,7 +1050,7 @@ def _ai_api_key():
 
 def _settings_state():
     model = db.get_setting("ai_model", "off") or "off"
-    if model not in ("off", "haiku", "sonnet"):
+    if model not in _AI_MODEL_KEYS:
         model = "off"
     return {
         "ai_model": model,
@@ -1064,7 +1066,7 @@ def api_settings():
         data = request.get_json(force=True, silent=True) or {}
         if "ai_model" in data:
             m = str(data.get("ai_model") or "off")
-            db.set_setting("ai_model", m if m in ("off", "haiku", "sonnet") else "off")
+            db.set_setting("ai_model", m if m in _AI_MODEL_KEYS else "off")
         # APIキーは「値が来たときだけ」更新。空文字クリアも受け付ける。
         if "ai_api_key" in data:
             key = str(data.get("ai_api_key") or "").strip()
