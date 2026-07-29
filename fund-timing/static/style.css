@@ -710,6 +710,8 @@ tr:hover .row-del { opacity: 1; }
 /* 合計サマリ */
 .pf-sum-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .pf-sum-val.pf-sum-dod { font-size: 15px; }
+.pf-sum-title { font-size: 13px; font-weight: 800; color: var(--ink-soft); margin-bottom: 8px; letter-spacing: .02em; }
+.pf-sum-title-2 { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }

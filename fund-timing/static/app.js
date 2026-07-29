@@ -517,6 +517,42 @@ function renderPriceSummary(data) {
   } else {
     dod.textContent = "—"; dod.className = "pf-sum-val pf-sum-dod";
   }
+
+  // ── 投資信託のみのサマリー（個別株を含む場合に追加表示）──
+  const hasStock = holds.some((h) => (h.kind || "fund") === "stock");
+  const funds = holds.filter((h) => (h.kind || "fund") !== "stock");
+  $("sum-all-title").textContent = hasStock ? "全体（投資信託＋個別株）" : "全体";
+  $("sum-fund-title").hidden = !hasStock;
+  $("sum-fund-grid").hidden = !hasStock;
+  if (hasStock) {
+    let finv = 0, fcur = 0, fprev = 0, haveCur = false, havePrev = false;
+    funds.forEach((h) => {
+      finv += Number(h.invested || 0);
+      const amts = h.amount || [];
+      const vals = [];
+      for (let i = amts.length - 1; i >= 0 && vals.length < 2; i--) {
+        if (amts[i] != null) vals.push(amts[i]);
+      }
+      if (vals[0] != null) { fcur += vals[0]; haveCur = true; }
+      if (vals[1] != null) { fprev += vals[1]; havePrev = true; }
+    });
+    const fpl = fcur - finv, fplr = finv > 0 ? (fpl / finv * 100) : 0;
+    $("sum-fund-invested").textContent = Number(finv).toLocaleString() + " 円";
+    $("sum-fund-current").textContent = Number(Math.round(fcur)).toLocaleString() + " 円";
+    $("sum-fund-pl").textContent = (fpl >= 0 ? "+" : "") + Number(Math.round(fpl)).toLocaleString() + " 円";
+    $("sum-fund-pl").className = "pf-sum-val " + (fpl >= 0 ? "up" : "down");
+    $("sum-fund-plr").textContent = (fplr >= 0 ? "+" : "") + fplr.toFixed(1) + "%";
+    $("sum-fund-plr").className = "pf-sum-val " + (fplr >= 0 ? "up" : "down");
+    const fdod = $("sum-fund-dod");
+    if (haveCur && havePrev && fprev > 0) {
+      const fdiff = fcur - fprev, fdp = fdiff / fprev * 100;
+      fdod.textContent = `${fdiff >= 0 ? "+" : ""}${Number(Math.round(fdiff)).toLocaleString()} 円`
+        + `（${fdp >= 0 ? "+" : ""}${fdp.toFixed(2)}%）`;
+      fdod.className = "pf-sum-val pf-sum-dod " + (fdiff >= 0 ? "up" : "down");
+    } else {
+      fdod.textContent = "—"; fdod.className = "pf-sum-val pf-sum-dod";
+    }
+  }
 }
 
 function renderPriceChart(holdings, totals) {
