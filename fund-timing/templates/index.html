@@ -380,7 +380,8 @@
           <strong>積立は退職時点で停止</strong>します。退職後は期間が長いので横軸を圧縮して表示し、
           <span style="color:#6f7488">退職</span>・<span style="color:#2f6fed">年金開始</span>のタイミングに縦線を入れています。
           <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
-          <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です（あくまで試算・保証ではありません）。
+          <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です。
+          <br>※予測グラフは、利益（評価額−取得原価）に設定の<strong>税率</strong>をかけた<strong>税引後</strong>の資産で表示します（あくまで試算・保証ではありません）。
         </p>
         <p class="plan-note" id="plan-ai-comment" hidden></p>
         <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
@@ -475,6 +476,10 @@
           <div class="plan-field">
             <label class="plan-label" for="set-inflation">想定インフレ率（%）</label>
             <input id="set-inflation" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）2">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-tax">利益への税率（%）</label>
+            <input id="set-tax" type="number" step="0.001" class="plan-input plan-input-sm" placeholder="例）20.315">
           </div>
         </div>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>

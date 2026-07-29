@@ -1622,6 +1622,7 @@ async function loadSettings() {
       $("set-pension-monthly").value = fmtInt(pl.pension_monthly || 0);
       $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
       $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
+      $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
     }
   } catch (_) {}
 }
@@ -1759,6 +1760,7 @@ bindPremise("set-pension-age", "pension_age", false);
 bindPremise("set-pension-monthly", "pension_monthly", true);
 bindPremise("set-spend-monthly", "spend_monthly", true);
 bindPremise("set-inflation", "inflation", false);
+bindPremise("set-tax", "tax", false);
 
 // ============================================================ 資産プラン
 let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
@@ -1894,21 +1896,27 @@ function planLifePlan() {
 }
 // 生涯の資産推移（積立期→退職→取り崩し期）を月次で構築
 // 返り値: 月次の {age,date,v} 系列 pts と、退職・年金開始・枯渇の情報
-function buildLifePath(cur, lastDate, monthly, annual, lp, reserve) {
+// 税率(tax)が指定された場合、pts の v は「利益に課税した後（売却して手にする）」の額。
+//   運用資産の含み益 = 評価額 − 取得原価。取得原価は積立で増え、取り崩しで按分して減る。
+//   現金・債券(reserve)には課税しない。
+function buildLifePath(cur, lastDate, monthly, annual, lp, reserve, basis0, tax) {
   const rm = projMonthlyRate(annual);
-  let fund = cur;              // 運用資産（投信）：想定年利で成長
-  let res = reserve || 0;      // 現金＋債券：値上がりを見込まない安定資産（据え置き）
-  const pts = [{ age: lp.age0, date: lastDate, v: Math.round(fund + res) }];
+  const t = tax || 0;
+  let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
+  let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
+  let res = reserve || 0;      // 現金＋債券：値上がりを見込まない安定資産（据え置き・非課税）
+  const afterTax = () => res + fund - Math.max(0, fund - basis) * t;   // 税引後の総資産
+  const pts = [{ age: lp.age0, date: lastDate, v: Math.round(afterTax()) }];
   let depletionAge = -1, penStartAge = -1, retireBal = null;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
-    fund = fund * (1 + rm);              // 運用資産のみ成長
+    fund = fund * (1 + rm);              // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     if (age < lp.retire) {
-      fund += monthly;
+      fund += monthly; basis += monthly;   // 積立は原価
     } else {
-      if (retireBal === null) retireBal = fund + res;   // 退職時点の総資産
+      if (retireBal === null) retireBal = afterTax();   // 退職時点の税引後資産
       const inflF = Math.pow(1 + lp.infl, m / 12);
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
@@ -1916,17 +1924,20 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, reserve) {
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
       if (w >= 0) {                       // まず現金・債券から、足りなければ運用資産から取り崩す
         if (res >= w) { res -= w; }
-        else { w -= res; res = 0; fund -= w; }
-      } else {                            // 年金＞生活費の余剰は運用資産へ
-        fund -= w;
+        else {
+          w -= res; res = 0;
+          if (fund > 0) { basis -= w * (basis / fund); fund -= w; }   // 原価を按分して取り崩す
+          if (fund < 0) fund = 0;
+          if (basis < 0) basis = 0;
+        }
+      } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
+        fund -= w; basis -= w;
       }
-      if (fund < 0) fund = 0;
     }
-    const total = fund + res;
-    pts.push({ age, date: dt, v: Math.round(total) });
-    if (total <= 0) { depletionAge = age; break; }
+    pts.push({ age, date: dt, v: Math.round(afterTax()) });
+    if (fund + res <= 0) { depletionAge = age; break; }
   }
-  if (retireBal === null) retireBal = fund + res;
+  if (retireBal === null) retireBal = afterTax();
   const endBal = pts[pts.length - 1].v;
   return { pts, retireBal, penStartAge, depletionAge, endBal };
 }
@@ -1977,20 +1988,40 @@ function renderPlanHistory() {
   const baseRate = (useAi ? Number(aiBand.base) : (planData.plan.return_rate || 0)) / 100;
   const lp = planLifePlan();
   const canProject = (monthly > 0 || baseRate > 0);
-  // 投信のみ成長・現金債券は据え置きで総資産系列を作るヘルパー
-  const projT = (rate, h) => projSeries(fundCur, monthly, rate, h).map((v) => v + reserve);
-  const m2g = (rate) => (goal > 0 && cur >= goal) ? 0
-    : projMonthsToGoal(fundCur, monthly, rate, Math.max(1, goal - reserve), CAP);
+  // 税率（未設定なら日本の約20.315%を既定として利益に課税）。利益＝評価額−取得原価。
+  const taxRate = (planData.plan.tax != null ? planData.plan.tax : 20.315) / 100;
+  // ポートフォリオ全体の含み益割合（投信＋日立株などの損益率）。/api/plan の評価額・投資額から算出
+  const tv = planData.total_value || 0, ti = planData.total_invested || 0;
+  const gainFrac = tv > 0 ? Math.max(0, (tv - ti) / tv) : 0;
+  const basis0 = fundCur * (1 - gainFrac);   // グラフ現在値ベースの取得原価
+  // 税引後の総資産（現金債券は非課税）
+  const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
+  // 投信のみ成長・現金債券据え置き・利益に課税した「税引後」総資産系列を作るヘルパー
+  const projT = (rate, h) => {
+    const s = projSeries(fundCur, monthly, rate, h);
+    return s.map((v, m) => Math.round(afterTax(v, basis0 + monthly * m)));
+  };
+  const curTotalAT = afterTax(fundCur, basis0);   // 税引後の現在総資産
+  const m2g = (rate) => {
+    if (goal <= 0) return -1;
+    if (curTotalAT >= goal) return 0;
+    const rm = projMonthlyRate(rate); let v = fundCur, bs = basis0;
+    for (let m = 1; m <= CAP; m++) { v = v * (1 + rm) + monthly; bs += monthly;
+      if (afterTax(v, bs) >= goal) return m; }
+    return -1;
+  };
 
   // 実績サマリー（全ケース共通）
   const first0 = pastAmt[0], diff0 = cur - first0, pctChg0 = first0 ? (diff0 / first0 * 100) : 0;
   note.textContent = `${reserve > 0 ? "総資産" : "実績"}（期間内）：${first0.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
     + `（${diff0 >= 0 ? "+" : ""}${diff0.toLocaleString()} 円 / ${pctChg0 >= 0 ? "+" : ""}${pctChg0.toFixed(1)}%）`
-    + (reserve > 0 ? `　※現金・債券 ${reserve.toLocaleString()} 円を含む` : "");
+    + (reserve > 0 ? `　※現金・債券 ${reserve.toLocaleString()} 円を含む` : "")
+    + (taxRate > 0 ? `　※予測は利益に税率${(taxRate * 100).toFixed(3).replace(/\.?0+$/, "")}%を考慮した税引後` : "");
 
   // ライフプランが確定していれば「ライフステージ別」パネルで表示
   if (lp.ok && canProject) {
-    renderLifeStages({ cur: fundCur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary, reserve });
+    renderLifeStages({ cur: fundCur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary,
+                       reserve, basis0, taxRate });
     return;
   }
 
@@ -2045,7 +2076,7 @@ function renderPlanHistory() {
     const optAch = m2g(opt);
     const pessAch = m2g(pess);
     if (goal <= 0) eta.textContent = "目標資産額を入力すると、AI予測での達成予定を表示します。";
-    else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
+    else if (curTotalAT >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
     else eta.textContent = `🤖 AI予測：標準（年率${aiBand.base}%）で ${achLabel(lastDate, baseAch)}、`
       + `楽観（${aiBand.optimistic}%）〜悲観（${aiBand.pessimistic}%）で ${achLabel(lastDate, optAch)}〜${achLabel(lastDate, pessAch)} に到達見込みです。`;
     ddSummary.textContent = "設定画面の「資産プランの前提」で退職年齢・生活費を入力すると、退職後の取り崩し（資産寿命）も表示します。";
@@ -2066,7 +2097,7 @@ function renderPlanHistory() {
       addGoalStar(ach);
     } else { maxY = Math.max(maxY, ...pastAmt); }
     if (goal <= 0) eta.textContent = "目標資産額を入力すると、達成予定を表示します。";
-    else if (cur >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
+    else if (curTotalAT >= goal) eta.textContent = "🎉 すでに目標を達成しています。";
     else if (!canProj) eta.textContent = "毎月の積立額または想定年利を入力すると、目標達成の予定時期をグラフに表示します。";
     else if (ach > 0) eta.textContent = `🎯 このペースなら 約 ${Math.floor(ach / 12)}年${ach % 12}ヶ月後（${achLabel(lastDate, ach)}）に目標 ${Math.round(goal).toLocaleString()} 円へ到達する見込みです。`;
     else eta.textContent = "🎯 現在の条件では40年以内に目標へ到達しません。積立額や想定年利を見直してみてください。";
@@ -2089,8 +2120,11 @@ function renderPlanHistory() {
 function renderLifeStages(o) {
   const { cur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary } = o;
   const reserve = o.reserve || 0;                    // 現金＋債券（据え置き）
-  const curTotal = cur + reserve;                    // 現在の総資産
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, reserve);
+  const taxRate = o.taxRate || 0;
+  const basis0 = (o.basis0 != null) ? o.basis0 : cur;
+  const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
+  const curTotal = afterTax(cur, basis0);            // 現在の税引後総資産
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, reserve, basis0, taxRate);
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -2098,9 +2132,16 @@ function renderLifeStages(o) {
   const depAge = path.depletionAge;                 // 枯渇年齢（-1なら枯渇しない）
   const endAge = depAge > 0 ? depAge : 100;
   const accMonths = Math.max(1, Math.round((retireAge - lp.age0) * 12));
-  // 目標達成：投信は成長・現金債券は据え置き → 投信が (目標−現金債券) に到達した時点
-  const ach = (goal > 0 && curTotal >= goal) ? 0
-    : projMonthsToGoal(cur, monthly, baseRate, Math.max(1, goal - reserve), accMonths);
+  // 目標達成：税引後の総資産が目標に到達する月を求める
+  let ach = -1;
+  if (goal > 0) {
+    if (curTotal >= goal) ach = 0;
+    else {
+      const rm = projMonthlyRate(baseRate); let v = cur, bs = basis0;
+      for (let m = 1; m <= accMonths; m++) { v = v * (1 + rm) + monthly; bs += monthly;
+        if (afterTax(v, bs) >= goal) { ach = m; break; } }
+    }
+  }
   const achAge = ach > 0 ? lp.age0 + ach / 12 : -1;
 
   // 横軸の区間と表示幅（画面比率）。退職後（＝取り崩し期）は長いので幅を絞って圧縮する。
