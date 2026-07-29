@@ -446,12 +446,14 @@ const PRICE_COLORS = ["#5b5bd6", "#e11d48", "#16a34a", "#f59e0b", "#0ea5e9",
   "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b", "#a855f7", "#0891b2",
   "#dc2626", "#65a30d", "#d97706", "#4f46e5", "#db2777", "#059669"];
 
-async function loadPriceHistory() {
+async function loadPriceHistory(force) {
   const st = $("price-status");
-  st.hidden = false; st.className = "status loading"; st.textContent = "集計中… ⏳";
+  st.hidden = false; st.className = "status loading";
+  st.textContent = force ? "最新の基準価額を取得中… ⏳" : "集計中… ⏳";
   let data;
   try {
-    data = await (await fetch(`/api/actual-history?range=${encodeURIComponent(priceRange)}`)).json();
+    data = await (await fetch(`/api/actual-history?range=${encodeURIComponent(priceRange)}`
+      + (force ? "&force=1" : ""))).json();
   } catch (e) {
     st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
   }
@@ -1522,6 +1524,9 @@ $("price-range").addEventListener("click", (e) => {
   document.querySelectorAll("#price-range .range-btn").forEach((x) => x.classList.remove("active"));
   b.classList.add("active"); priceRange = b.dataset.range; loadPriceHistory();
 });
+
+// 価格推移の「最新に更新」：最新の基準価額（昨日分など）を強制取得
+$("price-refresh-btn").addEventListener("click", () => loadPriceHistory(true));
 
 // 価格推移グラフの表示切替（商品別 / 合計のみ）
 $("price-line-toggle").addEventListener("click", (e) => {

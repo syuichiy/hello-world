@@ -754,18 +754,12 @@ def _persist_today_value(watch_id, date, value):
         return False
 
 
-# 起動時の価格スナップショット（このセッション中は固定）。(isin, assoc) -> series dict
-_price_snapshot: dict = {}
-
-
-def _snapshot_series(isin, assoc, name, kind):
-    """価格シリーズを取得し、セッション内で固定（起動タイミングの価格を保持）。"""
-    key = (isin, assoc)
-    if key in _price_snapshot:
-        return _price_snapshot[key]
-    series = load_series(isin, assoc, name, kind=kind)   # DBキャッシュ経由
-    _price_snapshot[key] = series
-    return series
+def _snapshot_series(isin, assoc, name, kind, force=False):
+    """価格シリーズを取得する（内部DBキャッシュ経由・約12時間）。
+    以前はセッション内で固定していたが、アプリを起動したままだと翌日公開された
+    基準価額（＝昨日分）がいつまでも反映されない不具合があったため固定をやめた。
+    「↻最新に更新」やアプリ再起動、12時間経過でキャッシュが更新されると価格推移にも反映される。"""
+    return load_series(isin, assoc, name, force=force, kind=kind)
 
 
 def _latest_valid(dates, values):
@@ -794,8 +788,7 @@ def _startup_price_refresh():
         try:
             series = load_series(isin, assoc, it.get("name", ""), force=True, kind=kind)
         except Exception:
-            continue   # 取得失敗は既存キャッシュのまま
-        _price_snapshot[(isin, assoc)] = series   # セッション固定値も最新に
+            continue   # 取得失敗は既存キャッシュのまま（force取得でDBキャッシュを更新済み）
         units = float(it.get("units") or 0)
         if units <= 0:
             continue
@@ -813,8 +806,9 @@ def _startup_price_refresh():
 def api_price_history():
     """各保有について、時系列の「評価額 ÷ 投資金額」比率(％)を返す。
     価格の水準差を吸収して比較しやすいよう、投資金額を基準(100%)に正規化する。
-    価格は起動時（初回取得時）のスナップショットを保持する。"""
+    force=1 のとき最新の基準価額を強制取得する。"""
     range_key = request.args.get("range", "1y")
+    force = request.args.get("force") in ("1", "true", "yes")
     holdings, skipped = [], []
     for it in db.list_watchlist():
         name = it["name"]
@@ -828,7 +822,7 @@ def api_price_history():
             continue
         kind = it.get("kind", "fund") or "fund"
         try:
-            series = _snapshot_series(it["isin"], it["assoc_code"], name, kind)
+            series = _snapshot_series(it["isin"], it["assoc_code"], name, kind, force)
             dates, prices, _ = _apply_range(series, range_key)
             pts = [(d, p) for d, p in zip(dates, prices) if p is not None]
             if len(pts) < 2:
@@ -860,6 +854,7 @@ def api_actual_history():
     - totals: 日付ごとの合計評価額と、合計に対する比率
     """
     range_key = request.args.get("range", "1y")
+    force = request.args.get("force") in ("1", "true", "yes")
     watch = db.list_watchlist()
     histories = db.get_all_amount_histories()
     # 取引履歴（実額）がある保有を対象にする
@@ -877,7 +872,7 @@ def api_actual_history():
         if units > 0 and (it.get("isin") or it.get("assoc_code")):
             try:
                 kind = it.get("kind", "fund") or "fund"
-                series = _snapshot_series(it["isin"], it["assoc_code"], it["name"], kind)
+                series = _snapshot_series(it["isin"], it["assoc_code"], it["name"], kind, force)
                 dts, prs, _ = _apply_range(series, range_key)
                 div = 1.0 if kind != "stock" else 10000.0  # 投信:price×units/10000, 株:price×units
                 factor = units / (10000.0 if kind != "stock" else 1.0)
