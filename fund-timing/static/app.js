@@ -1977,9 +1977,10 @@ function planLifePlan() {
 // 税率(tax)が指定された場合、pts の v は「利益に課税した後（売却して手にする）」の額。
 //   運用資産の含み益 = 評価額 − 取得原価。取得原価は積立で増え、取り崩しで按分して減る。
 //   現金・債券(reserve)には課税しない。
-function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax) {
+function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor) {
   const rm = projMonthlyRate(annual);
   const t = tax || 0;
+  const floor = emFloor || 0;   // ①生活防衛資金：緊急時用に現金として残す下限
   let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
   let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
@@ -2005,18 +2006,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
-      if (w >= 0) {                       // 現金 → 債券 → 投信 の順に取り崩す
-        if (cash >= w) { cash -= w; }
-        else {
-          w -= cash; cash = 0;
-          if (bonds >= w) { bonds -= w; }
-          else {
-            w -= bonds; bonds = 0;
-            if (fund > 0) { basis -= w * (basis / fund); fund -= w; }   // 原価を按分
-            if (fund < 0) fund = 0;
-            if (basis < 0) basis = 0;
-          }
+      if (w >= 0) {
+        // ①生活防衛資金(floor)は現金に残す。取り崩し順：現金(floor超)→債券→投信→（最後の手段）生活防衛資金
+        let take = Math.min(Math.max(0, cash - floor), w); cash -= take; w -= take;
+        if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; }
+        if (w > 0 && fund > 0) {
+          take = Math.min(fund, w);
+          basis -= take * (basis / fund); fund -= take; w -= take;   // 原価を按分
+          if (fund < 0) fund = 0;
+          if (basis < 0) basis = 0;
         }
+        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; }   // 最後の手段：生活防衛資金
       } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
         fund -= w; basis -= w;
       }
@@ -2214,7 +2214,10 @@ function renderLifeStages(o) {
   const basis0 = (o.basis0 != null) ? o.basis0 : cur;
   const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
   const curTotal = afterTax(cur, basis0);            // 現在の税引後総資産
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate);
+  // ①生活防衛資金（生活費×月数）は取り崩さず現金として残す下限。手元現金を上限にする。
+  const emMonths = (planData.plan.emergency_months != null) ? planData.plan.emergency_months : 6;
+  const emFloor = Math.min(cash0, (lp.spend || 0) * emMonths);
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate, emFloor);
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -2351,6 +2354,7 @@ function renderLifeStages(o) {
   let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
+  if (emFloor > 0) msg += `なお①生活防衛資金 約 ${Math.round(emFloor).toLocaleString()} 円は緊急時用に現金で残す前提です（年金受給後も維持）。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;
