@@ -2005,10 +2005,11 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
+      const floorNow = floor * inflF;    // ①生活防衛資金：インフレ調整後（実質額を維持）
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
       if (w >= 0) {
-        // ①生活防衛資金(floor)は現金に残す。取り崩し順：現金(floor超)→債券→投信→（最後の手段）生活防衛資金
-        let take = Math.min(Math.max(0, cash - floor), w); cash -= take; w -= take;
+        // 生活防衛資金(floorNow)は現金に残す。取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
+        let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
         if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; }
         if (w > 0 && fund > 0) {
           take = Math.min(fund, w);
@@ -2019,6 +2020,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; }   // 最後の手段：生活防衛資金
       } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
         fund -= w; basis -= w;
+      }
+      // 生活防衛資金をインフレ後の水準まで現金で維持（不足分を債券→投信から少しずつ補充）
+      if (cash < floorNow) {
+        let need = floorNow - cash;
+        let take = Math.min(bonds, need); bonds -= take; cash += take; need -= take;
+        if (need > 0 && fund > 0) {
+          take = Math.min(fund, need);
+          basis -= take * (basis / fund); fund -= take; cash += take;
+          if (fund < 0) fund = 0;
+          if (basis < 0) basis = 0;
+        }
       }
     }
     const pt = snap(age, dt);
@@ -2354,7 +2366,7 @@ function renderLifeStages(o) {
   let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
-  if (emFloor > 0) msg += `なお①生活防衛資金 約 ${Math.round(emFloor).toLocaleString()} 円は緊急時用に現金で残す前提です（年金受給後も維持）。`;
+  if (emFloor > 0) msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;
