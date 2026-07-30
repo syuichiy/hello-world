@@ -1896,14 +1896,35 @@ function renderCashAdvice() {
   }
   html += '</div>';
 
-  // 現状との比較（まずは「今すぐ（①＋②）」に対して判定）
+  // 現状との比較。退職までの年数を踏まえ、退職が近い場合は③の不足も判定に反映する
+  const age0 = +p.current_age || 0;
+  const yearsToRetire = (retire && age0 && retire > age0) ? Math.round((retire - age0) * 10) / 10 : null;
+  const retireTotal = nowTotal + gapCushion;
   let judge, cls;
-  if (cash >= nowTotal) { cls = "up"; judge = `現在の保有現金 ${yen(cash)} は「今すぐの目安」を満たしています。余剰（約 ${yen(cash - nowTotal)}）は投資に回す余地があります。`; }
-  else if (reserve >= nowTotal) { cls = "up"; judge = `現金だけでは ${yen(nowTotal - cash)} 足りませんが、現金＋債券 ${yen(reserve)} で「今すぐの目安」は確保できています。`; }
-  else { cls = "down"; judge = `「今すぐの目安」に対して 約 ${yen(nowTotal - reserve)} 不足しています（現在：現金 ${yen(cash)}＋債券 ${yen(bonds)}＝${yen(reserve)}）。積立を一時的に抑える等で現金比率を高めることを検討できます。`; }
+  if (gapMonths <= 0) {
+    // ③なし（退職・年金の前提が未設定 等）：今すぐの目安のみで判定
+    if (reserve >= nowTotal) { cls = "up"; judge = `現金＋債券 ${yen(reserve)}（うち現金 ${yen(cash)}）は「今すぐの目安」を満たしています。余剰（約 ${yen(reserve - nowTotal)}）は投資に回す余地があります。`; }
+    else { cls = "down"; judge = `「今すぐの目安」に対して 約 ${yen(nowTotal - reserve)} 不足しています（現在：現金 ${yen(cash)}＋債券 ${yen(bonds)}＝${yen(reserve)}）。`; }
+  } else if (reserve >= retireTotal) {
+    cls = "up";
+    judge = `現金＋債券 ${yen(reserve)} は、退職時までの目安（①＋②＋③＝${yen(retireTotal)}）も満たしています。余剰（約 ${yen(reserve - retireTotal)}）は投資に回す余地があります。`;
+  } else if (reserve >= nowTotal) {
+    // 今すぐ（①＋②）は満たすが、③を含む退職時目安には不足
+    const shortR = retireTotal - reserve;
+    const perYear = (yearsToRetire && yearsToRetire > 0) ? shortR / yearsToRetire : shortR;
+    const soon = (yearsToRetire != null && yearsToRetire <= 5);   // 退職まで5年以内は要注意
+    cls = soon ? "down" : "warn";
+    judge = `「今すぐの目安（①＋②）」は満たしていますが、退職時の目安（①＋②＋③＝${yen(retireTotal)}）には 約 ${yen(shortR)} 不足しています`
+      + (yearsToRetire != null ? `（退職まであと約${yearsToRetire}年${yearsToRetire > 0 ? ` → 年 約 ${yen(perYear)} を上乗せで準備`: ""}）` : "")
+      + (soon ? "。退職が近いので、下落局面で投資を売らずに済むよう、今から現金・債券を優先して厚くすることを検討してください。"
+              : "。無年金期間に備え、退職までに計画的に用意していきましょう。");
+  } else {
+    cls = "down";
+    judge = `「今すぐの目安（①＋②）」に対して 約 ${yen(nowTotal - reserve)} 不足しています（現在：現金 ${yen(cash)}＋債券 ${yen(bonds)}＝${yen(reserve)}）。まずはここを優先して確保しましょう。`;
+  }
   html += `<p class="cash-adv-judge ${cls}">${judge}</p>`;
   if (gapMonths > 0) {
-    html += `<p class="cash-adv-note">③は<strong>退職（${retire}歳）までに</strong>、現金・債券で用意しておくと下落局面でも投資を売らずに生活費をまかなえます（退職が先の場合は今から少しずつでOK）。</p>`;
+    html += `<p class="cash-adv-note">③は<strong>退職（${retire}歳）までに</strong>現金・債券で用意しておくと、下落局面でも投資を売らずに生活費をまかなえます。退職が先なら今から少しずつ、近いなら優先的に確保するのが安心です。</p>`;
   }
   body.innerHTML = html;
 }

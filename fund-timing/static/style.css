@@ -724,6 +724,7 @@ tr:hover .row-del { opacity: 1; }
 .cash-adv-total-2 .cash-adv-k, .cash-adv-total-2 .cash-adv-v { color: var(--ink-soft); }
 .cash-adv-tag { display: inline-block; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--accent); background: rgba(91,91,214,.10); border-radius: 999px; padding: 1px 8px; vertical-align: middle; }
 .cash-adv-judge { margin: 12px 0 0; font-size: 13px; font-weight: 700; line-height: 1.6; }
+.cash-adv-judge.warn { color: var(--neutral); }
 .cash-adv-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
