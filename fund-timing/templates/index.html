@@ -352,6 +352,18 @@
         <p class="plan-note" id="plan-goal-note"></p>
       </div>
 
+      <!-- 手元に置きたい現金の目安 -->
+      <div class="card plan-card" id="cash-advice-card">
+        <h2>💰 手元に置きたい現金の目安</h2>
+        <p class="hint">
+          設定の「資産プランの前提」（生活費・退職・年金）から、現金（＋一部は債券）で確保しておくと安心な金額の目安を計算します。
+          現金は増えないため、これを大きく超える現金は投資に回すのが一般的です。
+          <button class="linklike" id="cash-goto-settings" type="button">設定を開く</button>
+        </p>
+        <div id="cash-advice-body"></div>
+        <p class="hint">※一般的な目安であり、投資助言ではありません。生活費は「退職後の生活費」の設定値を使用します。</p>
+      </div>
+
       <!-- 資産の推移と目標達成予測 -->
       <div class="card plan-card">
         <h2>📈 資産の推移と目標達成予測</h2>
@@ -481,6 +493,14 @@
           <div class="plan-field">
             <label class="plan-label" for="set-tax">利益への税率（%）</label>
             <input id="set-tax" type="number" step="0.001" class="plan-input plan-input-sm" placeholder="例）20.315">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-emergency-months">生活防衛資金（月数）</label>
+            <input id="set-emergency-months" type="number" step="1" class="plan-input plan-input-sm" placeholder="例）6">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-near-term">数年内に使う予定額（円）</label>
+            <input id="set-near-term" type="text" inputmode="numeric" class="plan-input" placeholder="例）2,000,000">
           </div>
         </div>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>

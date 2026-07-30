@@ -712,6 +712,19 @@ tr:hover .row-del { opacity: 1; }
 .pf-sum-val.pf-sum-dod { font-size: 15px; }
 .pf-sum-title { font-size: 13px; font-weight: 800; color: var(--ink-soft); margin-bottom: 8px; letter-spacing: .02em; }
 .pf-sum-title-2 { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+
+/* 手元に置きたい現金の目安 */
+.cash-adv-rows { margin: 8px 0 2px; }
+.cash-adv-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.cash-adv-k { font-size: 13.5px; font-weight: 700; }
+.cash-adv-sub { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-soft); margin-top: 2px; }
+.cash-adv-v { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cash-adv-total { border-bottom: none; border-top: 2px solid var(--line); margin-top: 4px; padding-top: 11px; }
+.cash-adv-total .cash-adv-k, .cash-adv-total .cash-adv-v { font-size: 15.5px; color: var(--accent); }
+.cash-adv-total-2 .cash-adv-k, .cash-adv-total-2 .cash-adv-v { color: var(--ink-soft); }
+.cash-adv-tag { display: inline-block; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--accent); background: rgba(91,91,214,.10); border-radius: 999px; padding: 1px 8px; vertical-align: middle; }
+.cash-adv-judge { margin: 12px 0 0; font-size: 13px; font-weight: 700; line-height: 1.6; }
+.cash-adv-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }

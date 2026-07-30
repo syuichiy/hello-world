@@ -1628,6 +1628,8 @@ async function loadSettings() {
       $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
       $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
       $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
+      $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
+      $("set-near-term").value = fmtInt(pl.near_term || 0);
     }
   } catch (_) {}
 }
@@ -1766,6 +1768,8 @@ bindPremise("set-pension-monthly", "pension_monthly", true);
 bindPremise("set-spend-monthly", "spend_monthly", true);
 bindPremise("set-inflation", "inflation", false);
 bindPremise("set-tax", "tax", false);
+bindPremise("set-emergency-months", "emergency_months", false);
+bindPremise("set-near-term", "near_term", true);
 
 // ============================================================ 資産プラン
 let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
@@ -1785,6 +1789,7 @@ async function loadPlan() {
       $("plan-monthly").value = fmtInt(planData.plan.monthly || 0);
       $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
       renderPlanGoal();
+      renderCashAdvice();
     }
   } catch (_) {}
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
@@ -1856,6 +1861,53 @@ function renderPlanGoal() {
   }
   $("plan-goal-note").textContent = note;
 }
+
+// --- 手元に置きたい現金の目安（①生活防衛資金＋②数年内の予定支出＋③退職後の無年金クッション）---
+function renderCashAdvice() {
+  const body = $("cash-advice-body");
+  if (!body) return;
+  const p = planData.plan || {};
+  const spend = p.spend_monthly || 0;                       // 月間生活費（退職後の生活費を流用）
+  if (spend <= 0) {
+    body.innerHTML = `<p class="empty-watch">設定の「資産プランの前提」で<strong>退職後の生活費</strong>を入力すると、手元に置きたい現金の目安を計算します。</p>`;
+    return;
+  }
+  const emMonths = p.emergency_months != null ? p.emergency_months : 6;
+  const nearTerm = p.near_term || 0;
+  const retire = +p.retire_age || 0, pen = +p.pension_age || 0;
+  const gapMonths = (retire && pen > retire) ? Math.round((pen - retire) * 12) : 0;
+  const emergency = spend * emMonths;                        // ①
+  const gapCushion = spend * gapMonths;                      // ③
+  const nowTotal = emergency + nearTerm;                     // 今すぐ手元に置きたい（①＋②）
+  const cash = p.cash || 0, bonds = p.bonds || 0, reserve = cash + bonds;
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  const row = (k, sub, v, extra) => `<div class="cash-adv-row ${extra || ""}">`
+    + `<div class="cash-adv-k">${k}${sub ? `<span class="cash-adv-sub">${sub}</span>` : ""}</div>`
+    + `<div class="cash-adv-v">${yen(v)}</div></div>`;
+
+  let html = '<div class="cash-adv-rows">';
+  html += row("① 生活防衛資金", `生活費 ${yen(spend)} × ${emMonths}ヶ月`, emergency);
+  if (nearTerm > 0) html += row("② 数年内に使う予定額", "設定値", nearTerm);
+  html += row("今すぐ手元に置きたい目安（①＋②）", "", nowTotal, "cash-adv-total");
+  if (gapMonths > 0) {
+    html += row("③ 退職〜年金の無年金クッション<span class=\"cash-adv-tag\">退職時までに</span>",
+      `生活費 ${yen(spend)} × ${gapMonths}ヶ月（${retire}→${pen}歳・年金なしの生活費）`, gapCushion);
+    html += row("退職時までに用意したい目安（①＋②＋③）", "", nowTotal + gapCushion, "cash-adv-total cash-adv-total-2");
+  }
+  html += '</div>';
+
+  // 現状との比較（まずは「今すぐ（①＋②）」に対して判定）
+  let judge, cls;
+  if (cash >= nowTotal) { cls = "up"; judge = `現在の保有現金 ${yen(cash)} は「今すぐの目安」を満たしています。余剰（約 ${yen(cash - nowTotal)}）は投資に回す余地があります。`; }
+  else if (reserve >= nowTotal) { cls = "up"; judge = `現金だけでは ${yen(nowTotal - cash)} 足りませんが、現金＋債券 ${yen(reserve)} で「今すぐの目安」は確保できています。`; }
+  else { cls = "down"; judge = `「今すぐの目安」に対して 約 ${yen(nowTotal - reserve)} 不足しています（現在：現金 ${yen(cash)}＋債券 ${yen(bonds)}＝${yen(reserve)}）。積立を一時的に抑える等で現金比率を高めることを検討できます。`; }
+  html += `<p class="cash-adv-judge ${cls}">${judge}</p>`;
+  if (gapMonths > 0) {
+    html += `<p class="cash-adv-note">③は<strong>退職（${retire}歳）までに</strong>、現金・債券で用意しておくと下落局面でも投資を売らずに生活費をまかなえます（退職が先の場合は今から少しずつでOK）。</p>`;
+  }
+  body.innerHTML = html;
+}
+$("cash-goto-settings").addEventListener("click", () => switchView("settings"));
 
 // --- 資産の推移＋将来予測と目標達成予定 ---
 function addMonths(dateStr, n) {

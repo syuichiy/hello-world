@@ -1235,7 +1235,7 @@ def api_plan():
         for k in ("goal", "monthly", "return_rate",
                   "current_age", "retire_age", "pension_age",
                   "pension_monthly", "spend_monthly", "inflation",
-                  "cash", "bonds", "tax"):
+                  "cash", "bonds", "tax", "emergency_months", "near_term"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
