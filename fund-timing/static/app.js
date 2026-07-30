@@ -1977,14 +1977,19 @@ function planLifePlan() {
 // 税率(tax)が指定された場合、pts の v は「利益に課税した後（売却して手にする）」の額。
 //   運用資産の含み益 = 評価額 − 取得原価。取得原価は積立で増え、取り崩しで按分して減る。
 //   現金・債券(reserve)には課税しない。
-function buildLifePath(cur, lastDate, monthly, annual, lp, reserve, basis0, tax) {
+function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax) {
   const rm = projMonthlyRate(annual);
   const t = tax || 0;
   let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
   let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
-  let res = reserve || 0;      // 現金＋債券：値上がりを見込まない安定資産（据え置き・非課税）
-  const afterTax = () => res + fund - Math.max(0, fund - basis) * t;   // 税引後の総資産
-  const pts = [{ age: lp.age0, date: lastDate, v: Math.round(afterTax()) }];
+  let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
+  const fundAT = () => fund - Math.max(0, fund - basis) * t;   // 投信の税引後評価額
+  const snap = (age, dt) => {
+    const fa = fundAT();
+    return { age, date: dt, cash: Math.round(cash), bonds: Math.round(bonds),
+             fund: Math.round(fa), v: Math.round(fa + cash + bonds) };
+  };
+  const pts = [snap(lp.age0, lastDate)];
   let depletionAge = -1, penStartAge = -1, retireBal = null;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
@@ -1994,28 +1999,33 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, reserve, basis0, tax)
     if (age < lp.retire) {
       fund += monthly; basis += monthly;   // 積立は原価
     } else {
-      if (retireBal === null) retireBal = afterTax();   // 退職時点の税引後資産
+      if (retireBal === null) retireBal = fundAT() + cash + bonds;   // 退職時点の税引後資産
       const inflF = Math.pow(1 + lp.infl, m / 12);
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
-      if (w >= 0) {                       // まず現金・債券から、足りなければ運用資産から取り崩す
-        if (res >= w) { res -= w; }
+      if (w >= 0) {                       // 現金 → 債券 → 投信 の順に取り崩す
+        if (cash >= w) { cash -= w; }
         else {
-          w -= res; res = 0;
-          if (fund > 0) { basis -= w * (basis / fund); fund -= w; }   // 原価を按分して取り崩す
-          if (fund < 0) fund = 0;
-          if (basis < 0) basis = 0;
+          w -= cash; cash = 0;
+          if (bonds >= w) { bonds -= w; }
+          else {
+            w -= bonds; bonds = 0;
+            if (fund > 0) { basis -= w * (basis / fund); fund -= w; }   // 原価を按分
+            if (fund < 0) fund = 0;
+            if (basis < 0) basis = 0;
+          }
         }
       } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
         fund -= w; basis -= w;
       }
     }
-    pts.push({ age, date: dt, v: Math.round(afterTax()) });
-    if (fund + res <= 0) { depletionAge = age; break; }
+    const pt = snap(age, dt);
+    pts.push(pt);
+    if (pt.v <= 0) { depletionAge = age; break; }
   }
-  if (retireBal === null) retireBal = afterTax();
+  if (retireBal === null) retireBal = fundAT() + cash + bonds;
   const endBal = pts[pts.length - 1].v;
   return { pts, retireBal, penStartAge, depletionAge, endBal };
 }
@@ -2099,7 +2109,8 @@ function renderPlanHistory() {
   // ライフプランが確定していれば「ライフステージ別」パネルで表示
   if (lp.ok && canProject) {
     renderLifeStages({ cur: fundCur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary,
-                       reserve, basis0, taxRate });
+                       reserve, cash0: (planData.plan.cash || 0), bonds0: (planData.plan.bonds || 0),
+                       basis0, taxRate });
     return;
   }
 
@@ -2198,11 +2209,12 @@ function renderPlanHistory() {
 function renderLifeStages(o) {
   const { cur, lastDate, monthly, baseRate, goal, useAi, lp, eta, ddSummary } = o;
   const reserve = o.reserve || 0;                    // 現金＋債券（据え置き）
+  const cash0 = o.cash0 || 0, bonds0 = o.bonds0 || 0;
   const taxRate = o.taxRate || 0;
   const basis0 = (o.basis0 != null) ? o.basis0 : cur;
   const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
   const curTotal = afterTax(cur, basis0);            // 現在の税引後総資産
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, reserve, basis0, taxRate);
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate);
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -2245,9 +2257,10 @@ function renderLifeStages(o) {
 
   const traces = [];
   const layout = (typeof baseLayout === "function") ? baseLayout() : {};
-  layout.height = 360;
-  layout.margin = { l: 60, r: 24, t: 30, b: 38 };
-  layout.showlegend = false;
+  layout.height = 380;
+  layout.margin = { l: 60, r: 24, t: 30, b: 54 };
+  layout.showlegend = true;
+  layout.legend = { orientation: "h", y: -0.16, x: 0, font: { size: 10.5 } };
   layout.hovermode = "closest";
   layout.shapes = []; layout.annotations = [];
 
@@ -2255,21 +2268,17 @@ function renderLifeStages(o) {
   const gTicks = niceTicks(gMax, 5);
   const gTop = gMax * 1.12;
 
-  // 資産推移ライン（積立＝青点線 / 取り崩し＝オレンジ実線）。退職の点を共有して連続させる。
-  const accPts = pts.filter((p) => p.age <= retireAge + 1e-6);
-  const ddPts = pts.filter((p) => p.age >= retireAge - 1e-6);
-  traces.push({
-    x: accPts.map((p) => X(p.age)), y: accPts.map((p) => p.v), customdata: accPts.map((p) => p.age),
-    mode: "lines", line: { width: 2.4, color: "#5b8def", dash: "dot" },
-    fill: "tozeroy", fillcolor: "rgba(91,141,239,0.09)",
-    hovertemplate: "%{customdata:.0f}歳<br>積立 %{y:,.0f} 円<extra></extra>",
+  // 資産構成の積み上げ（下から 現金 → 債券 → 投信）。退職後は現金・債券から取り崩されて漸減する。
+  const XS = pts.map((p) => X(p.age));
+  const area = (key, name, color, fillc) => ({
+    x: XS, y: pts.map((p) => p[key]),
+    customdata: pts.map((p) => [p.age, p.v > 0 ? Math.round(p[key] / p.v * 100) : 0]),
+    name, mode: "lines", line: { width: 0.6, color }, stackgroup: "assets", fillcolor: fillc,
+    hovertemplate: `%{customdata[0]:.0f}歳<br>${name} %{y:,.0f} 円（%{customdata[1]}%）<extra></extra>`,
   });
-  if (ddPts.length > 1) traces.push({
-    x: ddPts.map((p) => X(p.age)), y: ddPts.map((p) => p.v), customdata: ddPts.map((p) => p.age),
-    mode: "lines", line: { width: 2.4, color: "#f59e0b" },
-    fill: "tozeroy", fillcolor: "rgba(245,158,11,0.10)",
-    hovertemplate: "%{customdata:.0f}歳<br>取り崩し %{y:,.0f} 円<extra></extra>",
-  });
+  if (cash0 > 0) traces.push(area("cash", "現金", "#0e9488", "rgba(14,148,136,0.60)"));
+  if (bonds0 > 0) traces.push(area("bonds", "債券", "#22c55e", "rgba(34,197,94,0.45)"));
+  traces.push(area("fund", "投信（税引後）", "#5b8def", "rgba(91,141,239,0.38)"));
 
   // 横軸：年齢の目盛り（区間境界＋10年刻み）。退職後は圧縮されて表示される。
   const bnd = [lp.age0, retireAge, endAge];
@@ -2306,7 +2315,7 @@ function renderLifeStages(o) {
       text: `目標 ${jpYenShort(goal)}`, showarrow: false, font: { size: 10, color: "#16a34a" } });
     if (achAge > 0 && achAge <= retireAge + 0.01) {
       traces.push({ x: [X(achAge)], y: [goal], mode: "markers", marker: { size: 13, color: "#16a34a", symbol: "star" },
-        hovertemplate: `目標達成 ${fa(achAge)}歳<extra></extra>` });
+        showlegend: false, hovertemplate: `目標達成 ${fa(achAge)}歳<extra></extra>` });
       layout.annotations.push({ xref: "x", x: X(achAge), yref: "y", y: goal, yanchor: "bottom", yshift: 8,
         xanchor: "center", text: `達成 ${fa(achAge)}歳`, showarrow: false, font: { size: 9.5, color: "#16a34a" } });
     }
@@ -2317,7 +2326,7 @@ function renderLifeStages(o) {
     const px = X(age);
     const xanchor = px > 0.93 ? "right" : px < 0.06 ? "left" : "center";
     const xshift = xanchor === "right" ? -6 : xanchor === "left" ? 6 : 0;
-    traces.push({ x: [px], y: [val], mode: "markers",
+    traces.push({ x: [px], y: [val], mode: "markers", showlegend: false,
       marker: { size: star ? 13 : 8, color, symbol: star ? "star" : "circle" },
       hovertemplate: `${text}${val > 0 ? " %{y:,.0f} 円" : ""}<extra></extra>` });
     layout.annotations.push({ xref: "x", x: px, yref: "y", y: val,
@@ -2341,7 +2350,7 @@ function renderLifeStages(o) {
   // 取り崩しサマリー
   let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
-  if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金・債券から取り崩す前提です。`;
+  if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;
