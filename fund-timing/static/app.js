@@ -461,9 +461,25 @@ async function loadPriceHistory(force) {
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
   st.hidden = true;
   lastActualData = data;
+  renderPriceSkipped(data.skipped || []);
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
   renderPriceTable(data.holdings || [], data.excel_dates || data.dates || [], data.totals || []);
+}
+
+// グラフ・表に出せない保有を理由つきで知らせる（黙って除外すると原因が分からないため）
+function renderPriceSkipped(skipped) {
+  const card = $("price-skipped-card");
+  if (!card) return;
+  if (!skipped.length) { card.hidden = true; return; }
+  card.hidden = false;
+  $("price-skipped-list").innerHTML = skipped.map((s) => {
+    const bk = s.broker ? `<span class="skipped-broker">${escapeHtml(s.broker)}</span>` : "";
+    const why = (s.reasons || []).map((r) =>
+      `<span class="${s.need_units || s.need_invested ? "skipped-need" : ""}">${escapeHtml(r)}</span>`
+    ).join("・");
+    return `<li>${escapeHtml(s.name)}${bk}<span class="skipped-why">${why}</span></li>`;
+  }).join("");
 }
 
 let lastActualData = null;
@@ -951,6 +967,11 @@ function renderWatchTable() {
     const value = s.value == null ? "—" : Number(s.value).toLocaleString() + " 円";
     const plSub = (s.pl_pct == null) ? ""
       : `<div class="pl-sub ${s.pl_pct >= 0 ? "up" : "down"}">損益 ${s.pl_pct >= 0 ? "+" : ""}${s.pl_pct}%</div>`;
+    // 売買を記録している銘柄は、平均取得単価と実現損益を添える
+    const avgSub = s.avg_price
+      ? `<div class="avg-sub" title="売買の記録から移動平均法で計算した平均取得単価">平均 ${Number(s.avg_price).toLocaleString()}</div>` : "";
+    const realSub = (s.realized)
+      ? `<div class="pl-sub ${s.realized >= 0 ? "up" : "down"}" title="売却済みの実現損益（累計）">実現 ${s.realized >= 0 ? "+" : ""}${Math.round(s.realized).toLocaleString()}</div>` : "";
     const aiAdv = aiAdviceByWatch[s.watch_id]
       ? `<div class="ai-fund-advice">🤖 ${escapeHtml(aiAdviceByWatch[s.watch_id])}</div>` : "";
     return `<tr class="${rowCls}" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
@@ -961,11 +982,11 @@ function renderWatchTable() {
       </td>
       <td>${badge}</td>
       <td>${scoreChip(s.score)}</td>
-      <td class="num">${price}</td>
+      <td class="num">${price}${avgSub}</td>
       <td class="num"><input class="units-input num-comma" type="text" inputmode="numeric"
             data-watch="${s.watch_id}" value="${fmtInt(s.units)}" placeholder="口数"
             title="保有口数（評価額 = 基準価額 × 口数 ÷ 10,000）"></td>
-      <td class="num value-cell">${value}${plSub}</td>
+      <td class="num value-cell">${value}${plSub}${realSub}</td>
       <td class="num"><input class="invested-input num-comma" type="text" inputmode="numeric"
             data-watch="${s.watch_id}" value="${fmtInt(s.invested)}" placeholder="投資金額"
             title="投資金額（元本）。価格推移タブの比率計算に使います"></td>
@@ -974,7 +995,10 @@ function renderWatchTable() {
       <td>${policySelect(s)}</td>
       <td class="num">${chg}</td>
       <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
-      <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td>
+      <td class="row-ops">
+        <button class="row-trade" data-watch="${s.watch_id}" title="売買を記録（平均取得単価・実現損益）">📝</button>
+        <button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button>
+      </td>
     </tr>`;
   }).join("");
 }
@@ -1360,6 +1384,13 @@ function parseIntComma(s) {
   const d = String(s == null ? "" : s).replace(/[^\d]/g, "");
   return d ? parseInt(d, 10) : 0;
 }
+// 小数を含む数値の入力を解析する（"3,961.5" → 3961.5）。株価や口数は小数がありうるため、
+// 整数しか扱えない parseIntComma とは別に用意する。
+function parseNumComma(s) {
+  const t = String(s == null ? "" : s).replace(/[,\s]/g, "");
+  const v = parseFloat(t);
+  return Number.isFinite(v) ? v : 0;
+}
 // 入力中に3桁カンマへ整形しつつ、カーソル位置を保つ
 function reformatCommaInput(el) {
   const digits = el.value.replace(/[^\d]/g, "");
@@ -1447,12 +1478,145 @@ $("watch-body").addEventListener("click", (e) => {
     removeFromWatch(del.dataset.watch, nm);
     return;
   }
+  const tr = e.target.closest(".row-trade");
+  if (tr) {
+    e.stopPropagation();
+    openTradeModal(Number(tr.dataset.watch));
+    return;
+  }
   // 入力・設定中は詳細を開かない
   if (e.target.closest(".units-input") || e.target.closest(".invested-input")
       || e.target.closest(".policy-select") || e.target.closest(".row-broker")
       || e.target.closest(".account-select")) return;
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
+});
+
+// ============================================================ 売買の記録（モーダル）
+let tradeWatchId = null;
+let tradeKind = "fund";
+
+async function openTradeModal(watchId) {
+  tradeWatchId = watchId;
+  const s = lastSummaries.find((x) => x.watch_id === watchId) || {};
+  tradeKind = s.kind === "stock" ? "stock" : "fund";
+  $("trade-fund-name").textContent = (s.name || "") + (s.broker ? `（${s.broker}）` : "");
+  // 投信は「口数・基準価額」、株は「株数・株価」と呼び分ける
+  $("trade-units-label").childNodes[0].nodeValue = tradeKind === "stock" ? "株数" : "口数";
+  $("trade-price-label").childNodes[0].nodeValue = tradeKind === "stock" ? "株価（円）" : "基準価額（円）";
+  $("trade-units").placeholder = tradeKind === "stock" ? "例）100" : "例）10,000";
+  $("trade-price").placeholder = tradeKind === "stock" ? "例）3,000" : "例）15,000";
+  $("trade-date").value = new Date().toISOString().slice(0, 10);
+  ["trade-units", "trade-price", "trade-fee", "trade-note"].forEach((id) => { $(id).value = ""; });
+  $("trade-side").value = "buy";
+  $("trade-amount-preview").textContent = "";
+  $("trade-modal").hidden = false;
+  await loadTrades();
+}
+
+function closeTradeModal() {
+  $("trade-modal").hidden = true;
+  tradeWatchId = null;
+}
+
+// 口数×単価から受渡金額の目安を出す（投信は1万口あたりなので10000で割る）
+function tradeAmount(units, price) {
+  return units * price / (tradeKind === "stock" ? 1 : 10000);
+}
+
+async function loadTrades() {
+  if (tradeWatchId == null) return;
+  let d;
+  try {
+    d = await (await fetch(`/api/trades?watch_id=${tradeWatchId}`)).json();
+  } catch (_) { return; }
+  if (!d.ok) return;
+  const p = d.position || {};
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  const unitLabel = tradeKind === "stock" ? "株" : "口";
+  const priceLabel = tradeKind === "stock" ? "1株あたり" : "1万口あたり";
+  $("trade-position").innerHTML = p.count
+    ? `<div class="trade-pos">
+        <div class="trade-pos-item"><span>保有${unitLabel}数</span><b>${Number(p.units).toLocaleString()}</b></div>
+        <div class="trade-pos-item"><span>平均取得単価<small>（${priceLabel}）</small></span><b>${Number(p.avg_price).toLocaleString()} 円</b></div>
+        <div class="trade-pos-item"><span>取得原価（投資金額）</span><b>${yen(p.cost)}</b></div>
+        <div class="trade-pos-item"><span>実現損益<small>（売却済み・累計）</small></span>
+          <b class="${p.realized >= 0 ? "up" : "down"}">${p.realized >= 0 ? "+" : ""}${yen(p.realized)}</b></div>
+      </div>
+      <p class="hint">この保有${unitLabel}数と取得原価は、銘柄一覧の「${unitLabel}数」「投資金額」に自動で反映されています。</p>`
+    : `<p class="empty-watch">まだ売買の記録がありません。下のフォームから購入・売却を記録すると、平均取得単価と実現損益を計算します。</p>`;
+
+  const rows = (d.trades || []).slice().reverse();   // 新しい順
+  $("trade-list").innerHTML = rows.length ? `
+    <table class="trade-table">
+      <thead><tr><th>日付</th><th>売買</th><th class="num">${unitLabel}数</th>
+        <th class="num">単価</th><th class="num">金額</th><th class="num">手数料</th><th>メモ</th><th></th></tr></thead>
+      <tbody>${rows.map((t) => `
+        <tr>
+          <td>${escapeHtml(t.date)}</td>
+          <td><span class="trade-side trade-side-${t.side}">${t.side === "buy" ? "購入" : "売却"}</span></td>
+          <td class="num">${Number(t.units).toLocaleString()}</td>
+          <td class="num">${Number(t.price).toLocaleString()}</td>
+          <td class="num">${Math.round(tradeAmount(t.units, t.price)).toLocaleString()}</td>
+          <td class="num">${t.fee ? Number(t.fee).toLocaleString() : "—"}</td>
+          <td class="trade-note">${escapeHtml(t.note || "")}</td>
+          <td><button class="row-del trade-del" data-trade="${t.id}" title="この記録を削除">✕</button></td>
+        </tr>`).join("")}</tbody>
+    </table>` : "";
+}
+
+// 金額の目安をその場で表示する（小数も入力できるよう、カンマ整形はしない）
+["trade-units", "trade-price"].forEach((id) => {
+  $(id).addEventListener("input", () => {
+    const u = parseNumComma($("trade-units").value), p = parseNumComma($("trade-price").value);
+    $("trade-amount-preview").textContent = (u > 0 && p > 0)
+      ? `受渡金額の目安：約 ${Math.round(tradeAmount(u, p)).toLocaleString()} 円` : "";
+  });
+});
+
+$("trade-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (tradeWatchId == null) return;
+  const body = {
+    watch_id: tradeWatchId, date: $("trade-date").value, side: $("trade-side").value,
+    units: parseNumComma($("trade-units").value), price: parseNumComma($("trade-price").value),
+    fee: parseNumComma($("trade-fee").value), note: $("trade-note").value,
+  };
+  try {
+    const d = await (await fetch("/api/trades", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    })).json();
+    if (!d.ok) { toast(d.error || "記録に失敗しました", "error"); return; }
+    toast("売買を記録しました");
+    ["trade-units", "trade-price", "trade-fee", "trade-note"].forEach((id) => { $(id).value = ""; });
+    $("trade-amount-preview").textContent = "";
+    await loadTrades();
+    await loadWatchlist();      // 口数・投資金額・損益を更新
+  } catch (_) { toast("記録に失敗しました", "error"); }
+});
+
+$("trade-list").addEventListener("click", async (e) => {
+  const b = e.target.closest(".trade-del");
+  if (!b) return;
+  if (!confirm("この売買の記録を削除しますか？\n保有口数と投資金額が再計算されます。")) return;
+  try {
+    const d = await (await fetch("/api/trades", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trade_id: Number(b.dataset.trade), watch_id: tradeWatchId }),
+    })).json();
+    if (!d.ok) { toast(d.error || "削除に失敗しました", "error"); return; }
+    toast("記録を削除しました");
+    await loadTrades();
+    await loadWatchlist();
+  } catch (_) { toast("削除に失敗しました", "error"); }
+});
+
+$("trade-close").addEventListener("click", closeTradeModal);
+$("trade-modal").addEventListener("click", (e) => {
+  if (e.target === $("trade-modal")) closeTradeModal();   // 背景クリックで閉じる
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("trade-modal").hidden) closeTradeModal();
 });
 
 // 入力中の未確定保存を1件だけ保持（離脱時にも確実に流し込む）

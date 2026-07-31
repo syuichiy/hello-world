@@ -101,6 +101,45 @@
         <p id="empty-watch" class="empty-watch" hidden>
           ウォッチリストが空です。上の検索から投信を追加してください。
         </p>
+        <p class="hint">💡 各行の <strong>📝</strong> から売買（購入・売却）を記録すると、
+          平均取得単価・実現損益が計算され、口数と投資金額に自動で反映されます。</p>
+      </div>
+
+      <!-- 売買の記録（モーダル） -->
+      <div class="modal-backdrop" id="trade-modal" hidden>
+        <div class="modal-panel" role="dialog" aria-labelledby="trade-title">
+          <div class="modal-head">
+            <h2 id="trade-title">📝 売買の記録</h2>
+            <button class="modal-close" id="trade-close" type="button" title="閉じる">✕</button>
+          </div>
+          <p class="modal-sub" id="trade-fund-name"></p>
+          <div id="trade-position"></div>
+          <form class="trade-form" id="trade-form">
+            <div class="trade-fields">
+              <label class="plan-label">日付
+                <input id="trade-date" type="date" class="plan-input" required></label>
+              <label class="plan-label">売買
+                <select id="trade-side" class="plan-input">
+                  <option value="buy">購入</option>
+                  <option value="sell">売却</option>
+                </select></label>
+              <label class="plan-label" id="trade-units-label">口数
+                <input id="trade-units" type="text" inputmode="numeric" class="plan-input" placeholder="例）10,000" required></label>
+              <label class="plan-label" id="trade-price-label">基準価額（円）
+                <input id="trade-price" type="text" inputmode="numeric" class="plan-input" placeholder="例）15,000" required></label>
+              <label class="plan-label">手数料（円）
+                <input id="trade-fee" type="text" inputmode="numeric" class="plan-input plan-input-sm" placeholder="0"></label>
+              <label class="plan-label">メモ
+                <input id="trade-note" type="text" class="plan-input" placeholder="任意"></label>
+            </div>
+            <div class="trade-actions">
+              <button type="submit" id="trade-add">この内容で記録する</button>
+              <span class="hint" id="trade-amount-preview"></span>
+            </div>
+          </form>
+          <div id="trade-list"></div>
+          <p class="hint">※ 平均取得単価は<strong>移動平均法</strong>（特定口座の取得価額の計算に準じる方法）で計算し、手数料は購入時は取得原価に含め、売却時は受取額から差し引きます。</p>
+        </div>
       </div>
 
       <!-- 注目の投信ランキング（テクニカル） -->
@@ -264,6 +303,13 @@
     <!-- ========================= 価格推移ビュー（取引履歴・実額ベース） ========================= -->
     <section id="price-view" hidden>
       <div id="price-status" class="status" hidden></div>
+
+      <!-- グラフ・表に出せない保有のお知らせ（黙って除外しないため） -->
+      <div class="card skipped-card" id="price-skipped-card" hidden>
+        <div class="skipped-head">⚠️ グラフ・表に表示していない銘柄があります</div>
+        <ul class="skipped-list" id="price-skipped-list"></ul>
+        <p class="hint">銘柄一覧で<strong>口数</strong>と<strong>投資金額</strong>を入力すると、翌営業日以降の評価額から自動で記録され、この画面にも表示されるようになります。</p>
+      </div>
 
       <!-- 合計サマリ -->
       <div class="card price-summary-card" id="price-summary-card" hidden>

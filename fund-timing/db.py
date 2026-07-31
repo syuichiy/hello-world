@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import datetime as dt
 from typing import Optional
@@ -116,6 +117,19 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                 amount   REAL,
                 PRIMARY KEY(watch_id, date)
             );
+            -- 売買の記録。平均取得単価・実現損益の計算に使う（任意入力）。
+            -- price は 投信=基準価額(1万口あたり) / 株=1株の株価。
+            CREATE TABLE IF NOT EXISTS trades (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                watch_id INTEGER NOT NULL,
+                date     TEXT NOT NULL,
+                side     TEXT NOT NULL,
+                units    REAL NOT NULL,
+                price    REAL NOT NULL,
+                fee      REAL DEFAULT 0,
+                note     TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_trades_watch ON trades(watch_id, date);
             """
         )
         # マイグレーション: 保有口数カラム（旧バージョンのDBに追加）
@@ -504,6 +518,17 @@ def list_watchlist(db_path: Optional[str] = None):
         return [dict(r) for r in rows]
 
 
+def get_watch(watch_id: int, db_path: Optional[str] = None):
+    """保有を1件返す（商品情報つき）。見つからなければ None。"""
+    with _conn(db_path) as c:
+        r = c.execute(
+            "SELECT w.id AS watch_id, w.units, w.sell_policy, w.broker, w.invested, "
+            "w.label, w.account_type, w.dividend_mode, c.* "
+            "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id WHERE w.id=?",
+            (watch_id,)).fetchone()
+        return dict(r) if r else None
+
+
 def list_catalog(db_path: Optional[str] = None):
     """カタログ（内蔵＋登録済み）の全商品を返す。プリセット商品の追加UI用。"""
     with _conn(db_path) as c:
@@ -597,10 +622,97 @@ def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
 
 
 def remove_watch(watch_id: int, db_path: Optional[str] = None):
-    """保有を1件削除する（watch_id は watchlist.id）。評価額履歴も一緒に削除。"""
+    """保有を1件削除する（watch_id は watchlist.id）。評価額履歴・売買の記録も一緒に削除。"""
     with _conn(db_path) as c:
         c.execute("DELETE FROM watchlist WHERE id=?", (watch_id,))
         c.execute("DELETE FROM amount_history WHERE watch_id=?", (watch_id,))
+        c.execute("DELETE FROM trades WHERE watch_id=?", (watch_id,))
+
+
+# ------------------------------------------------------------------ 売買の記録
+TRADE_SIDES = ("buy", "sell")
+
+
+def list_trades(watch_id: Optional[int] = None, db_path: Optional[str] = None):
+    """売買の記録を日付順で返す。watch_id 指定でその保有のみ。"""
+    with _conn(db_path) as c:
+        if watch_id is None:
+            rows = c.execute("SELECT * FROM trades ORDER BY watch_id, date, id").fetchall()
+        else:
+            rows = c.execute("SELECT * FROM trades WHERE watch_id=? ORDER BY date, id",
+                             (watch_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_trade(watch_id: int, date: str, side: str, units: float, price: float,
+              fee: float = 0, note: str = "", db_path: Optional[str] = None):
+    """売買を1件記録する。"""
+    if side not in TRADE_SIDES:
+        raise ValueError("side は buy / sell のいずれかです。")
+    date = (date or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise ValueError("日付は YYYY-MM-DD の形式で入力してください。")
+    units, price = float(units or 0), float(price or 0)
+    if units <= 0:
+        raise ValueError("口数（株数）は0より大きい値を入力してください。")
+    if price <= 0:
+        raise ValueError("単価は0より大きい値を入力してください。")
+    with _conn(db_path) as c:
+        cur = c.execute(
+            "INSERT INTO trades(watch_id, date, side, units, price, fee, note) VALUES (?,?,?,?,?,?,?)",
+            (watch_id, date, side, units, price, max(0.0, float(fee or 0)), (note or "").strip()))
+        return cur.lastrowid
+
+
+def delete_trade(trade_id: int, db_path: Optional[str] = None):
+    with _conn(db_path) as c:
+        c.execute("DELETE FROM trades WHERE id=?", (trade_id,))
+
+
+def trade_position(trades, kind: str = "fund") -> dict:
+    """売買の記録から、保有口数・平均取得単価・取得原価・実現損益を求める。
+
+    計算方法は移動平均法（特定口座の取得価額の計算に準じる）。売却のたびに
+    その時点の平均取得単価で原価を按分し、差額を実現損益として積み上げる。
+    金額 = 口数 × 単価 ÷ 10000（投信）／ 株数 × 株価（株）。手数料は買いは原価に加え、
+    売りは受取額から差し引く。
+    """
+    div = 1.0 if kind == "stock" else 10000.0
+    units = cost = realized = 0.0
+    buy_amount = sell_amount = fees = 0.0
+    for t in sorted(trades, key=lambda x: (x.get("date") or "", x.get("id") or 0)):
+        u = float(t.get("units") or 0)
+        p = float(t.get("price") or 0)
+        fee = float(t.get("fee") or 0)
+        amount = u * p / div
+        fees += fee
+        if t.get("side") == "buy":
+            units += u
+            cost += amount + fee          # 手数料は取得原価に含める
+            buy_amount += amount
+        else:
+            if units <= 0:
+                continue                  # 保有していない売却は無視（入力ミス対策）
+            u = min(u, units)             # 保有を超える売却は保有分までに丸める
+            amount = u * p / div
+            avg_cost = cost / units       # 売却時点の平均取得単価（金額ベース）
+            cost_out = avg_cost * u
+            realized += amount - fee - cost_out
+            units -= u
+            cost -= cost_out
+            sell_amount += amount
+        if units <= 1e-9:                 # 全部売り切ったら原価もゼロに戻す
+            units = 0.0
+            cost = 0.0
+    unit_price = (cost / units * div) if units > 0 else 0.0   # 1万口/1株あたりの平均取得単価
+    return {
+        "units": round(units, 4),
+        "cost": round(cost),                    # 現在の保有分の取得原価（＝投資金額）
+        "avg_price": round(unit_price, 2),      # 平均取得単価
+        "realized": round(realized),            # 実現損益（累計・手数料込み）
+        "buy_amount": round(buy_amount), "sell_amount": round(sell_amount),
+        "fees": round(fees), "count": len(trades),
+    }
 
 
 # ------------------------------------------------------------------ cache
@@ -661,6 +773,8 @@ def export_data(db_path: Optional[str] = None) -> dict:
         hist = {}
         for r in c.execute("SELECT watch_id, date, amount FROM amount_history ORDER BY watch_id, date"):
             hist.setdefault(str(r["watch_id"]), {})[r["date"]] = r["amount"]
+        trades = [dict(r) for r in c.execute(
+            "SELECT watch_id, date, side, units, price, fee, note FROM trades ORDER BY watch_id, date, id")]
         settings = {}
         for r in c.execute("SELECT key, value FROM settings"):
             try:
@@ -674,6 +788,7 @@ def export_data(db_path: Optional[str] = None) -> dict:
         "catalog": catalog,
         "watchlist": watch,
         "amount_history": hist,
+        "trades": trades,
         "settings": settings,
     }
 
@@ -689,14 +804,16 @@ def import_data(data: dict, db_path: Optional[str] = None) -> dict:
     catalog = data.get("catalog") or []
     watch = data.get("watchlist") or []
     hist = data.get("amount_history") or {}
+    trades = data.get("trades") or []
     settings = data.get("settings") or {}
     if not isinstance(catalog, list) or not isinstance(watch, list):
         raise ValueError("バックアップの内容が壊れています。")
 
-    n_cat = n_watch = n_hist = 0
+    n_cat = n_watch = n_hist = n_trade = 0
     with _conn(db_path) as c:
-        # 保有・履歴は総入れ替え。catalog は既存を残しつつ不足分を追加する
+        # 保有・履歴・売買は総入れ替え。catalog は既存を残しつつ不足分を追加する
         c.execute("DELETE FROM amount_history")
+        c.execute("DELETE FROM trades")
         c.execute("DELETE FROM watchlist")
         for f in catalog:
             isin = (f.get("isin") or "").strip().upper()
@@ -740,8 +857,18 @@ def import_data(data: dict, db_path: Optional[str] = None) -> dict:
                 c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) "
                           "VALUES (?,?,?)", (new_id, d, amt))
                 n_hist += 1
+        for t in trades:
+            new_id = id_map.get(str(t.get("watch_id")))
+            if new_id is None:
+                continue
+            c.execute("INSERT INTO trades(watch_id, date, side, units, price, fee, note) "
+                      "VALUES (?,?,?,?,?,?,?)",
+                      (new_id, t.get("date") or "", t.get("side") or "buy",
+                       float(t.get("units") or 0), float(t.get("price") or 0),
+                       float(t.get("fee") or 0), t.get("note") or ""))
+            n_trade += 1
         for k, v in (settings or {}).items():
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)",
                       (k, json.dumps(v)))
     return {"catalog": n_cat, "watchlist": n_watch, "amount_history": n_hist,
-            "settings": len(settings)}
+            "trades": n_trade, "settings": len(settings)}

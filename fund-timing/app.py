@@ -334,6 +334,9 @@ def _summarize_fund(row, range_key, force=False):
 def _build_summaries(range_key, force=False):
     """ウォッチリスト各投信の判定サマリ一覧を作る（評価額・損益つき）。"""
     histories = db.get_all_amount_histories()
+    trades_by_watch = {}
+    for t in db.list_trades():
+        trades_by_watch.setdefault(t["watch_id"], []).append(t)
     summaries = []
     for it in db.list_watchlist():
         s = _summarize_fund(it, range_key, force)
@@ -347,6 +350,17 @@ def _build_summaries(range_key, force=False):
         s["broker"] = it.get("broker") or ""
         s["account_type"] = it.get("account_type") or "taxable"   # nisa=非課税 / taxable=特定
         s["dividend_mode"] = it.get("dividend_mode") or ""         # ''=自動 / receive / reinvest
+        # 売買の記録があれば、平均取得単価と実現損益を添える（無ければ手入力のまま）
+        _tr = trades_by_watch.get(wid)
+        if _tr:
+            _pos = db.trade_position(_tr, it.get("kind", "fund") or "fund")
+            s["avg_price"] = _pos["avg_price"]
+            s["realized"] = _pos["realized"]
+            s["trade_count"] = _pos["count"]
+        else:
+            s["avg_price"] = None
+            s["realized"] = 0
+            s["trade_count"] = 0
         hist = histories.get(wid, {})
 
         stock = s.get("kind") == "stock"
@@ -770,6 +784,66 @@ def api_watchlist_account():
     return jsonify({"ok": True, "account_type": saved})
 
 
+# ------------------------------------------------------------------ 売買の記録
+def _watch_kind(watch_id):
+    """保有が投信か株かを返す（金額換算の分母が違うため）。"""
+    it = db.get_watch(int(watch_id))
+    return (it.get("kind") or "fund") if it else "fund"
+
+
+def _sync_position_from_trades(watch_id, kind=None):
+    """売買の記録から保有口数と投資金額（取得原価）を計算し、保有へ反映する。
+    記録が1件も無い保有は手入力のままにする（自動で0にしない）。"""
+    trades = db.list_trades(int(watch_id))
+    if not trades:
+        return None
+    pos = db.trade_position(trades, kind or _watch_kind(watch_id))
+    db.set_units(int(watch_id), pos["units"])
+    db.set_invested(int(watch_id), pos["cost"])
+    return pos
+
+
+@app.route("/api/trades")
+def api_trades():
+    """ある保有の売買の記録と、そこから計算した平均取得単価・実現損益を返す。"""
+    watch_id = request.args.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    kind = _watch_kind(watch_id)
+    trades = db.list_trades(int(watch_id))
+    return jsonify({"ok": True, "watch_id": int(watch_id), "kind": kind,
+                    "trades": trades, "position": db.trade_position(trades, kind)})
+
+
+@app.route("/api/trades", methods=["POST"])
+def api_trades_add():
+    """売買を1件記録し、保有の口数・投資金額へ反映する。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    try:
+        db.add_trade(int(watch_id), data.get("date") or "", data.get("side") or "buy",
+                     data.get("units"), data.get("price"),
+                     data.get("fee") or 0, data.get("note") or "")
+    except (ValueError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    pos = _sync_position_from_trades(watch_id)
+    return jsonify({"ok": True, "position": pos})
+
+
+@app.route("/api/trades", methods=["DELETE"])
+def api_trades_delete():
+    """売買の記録を1件削除し、保有の口数・投資金額へ反映する。"""
+    data = request.get_json(silent=True) or {}
+    trade_id, watch_id = data.get("trade_id"), data.get("watch_id")
+    if trade_id is None or watch_id is None:
+        return jsonify({"ok": False, "error": "trade_id と watch_id が必要です。"}), 400
+    db.delete_trade(int(trade_id))
+    pos = _sync_position_from_trades(watch_id)
+    return jsonify({"ok": True, "position": pos})
+
+
 # 取引履歴（Excel実額）の最終日。これより後の日付だけ当日更新で追記する
 _RECORDED_MAX_DATE = db.recorded_max_date()
 
@@ -828,49 +902,6 @@ def _startup_price_refresh():
         print(f"起動時の価格更新: {updated} 件の当日評価額を反映しました。")
 
 
-@app.route("/api/price-history")
-def api_price_history():
-    """各保有について、時系列の「評価額 ÷ 投資金額」比率(％)を返す。
-    価格の水準差を吸収して比較しやすいよう、投資金額を基準(100%)に正規化する。
-    force=1 のとき最新の基準価額を強制取得する。"""
-    range_key = request.args.get("range", "1y")
-    force = request.args.get("force") in ("1", "true", "yes")
-    holdings, skipped = [], []
-    for it in db.list_watchlist():
-        name = it["name"]
-        units = float(it.get("units") or 0)
-        invested = float(it.get("invested") or 0)
-        broker = it.get("broker") or ""
-        label = name + (f"（{broker}）" if broker else "")
-        if units <= 0 or invested <= 0:
-            skipped.append({"name": name, "broker": broker,
-                            "need_units": units <= 0, "need_invested": invested <= 0})
-            continue
-        kind = it.get("kind", "fund") or "fund"
-        try:
-            series = load_series(it["isin"], it["assoc_code"], name, force=force, kind=kind)
-            dates, prices, _ = _apply_range(series, range_key)
-            pts = [(d, p) for d, p in zip(dates, prices) if p is not None]
-            if len(pts) < 2:
-                raise fund_data.FundDataError("データが不足しています")
-            # 評価額(t) = 投信: 基準価額×口数÷10000 / 株: 株価×株数
-            div = 10000.0 if kind != "stock" else 1.0
-            out_dates = [d for d, _ in pts]
-            ratio = [round((p * units / div) / invested * 100, 2) for _, p in pts]
-            value_now = round(pts[-1][1] * units / div)
-            holdings.append({
-                "watch_id": it["watch_id"], "name": name, "label": label,
-                "broker": broker, "asset_class": it.get("asset_class", "") or "",
-                "kind": kind, "invested": invested, "units": units,
-                "value_now": value_now, "ratio_now": ratio[-1],
-                "dates": out_dates, "ratio": ratio,
-            })
-        except Exception as e:
-            skipped.append({"name": name, "broker": broker, "error": str(e)})
-    return jsonify({"ok": True, "range": range_key,
-                    "holdings": holdings, "skipped": skipped})
-
-
 @app.route("/api/actual-history")
 def api_actual_history():
     """取引履歴（実額）ポートフォリオの日次推移を返す。
@@ -878,13 +909,31 @@ def api_actual_history():
       ratio = 評価額 ÷ 投資金額 ×100（投資金額0の保有は ratio=null）
     - dates: 全保有の日付の和集合（古い順）
     - totals: 日付ごとの合計評価額と、合計に対する比率
+    - skipped: 評価額の履歴が無くグラフ・表に出せない保有と、その理由
     """
     range_key = request.args.get("range", "1y")
     force = request.args.get("force") in ("1", "true", "yes")
     watch = db.list_watchlist()
     histories = db.get_all_amount_histories()
-    # 取引履歴（実額）がある保有を対象にする
+    # 評価額の履歴がある保有を対象にする
     holdings = [it for it in watch if histories.get(it["watch_id"])]
+    # 履歴が無く表示できない保有は、理由を添えて画面に知らせる（黙って消さない）
+    skipped = []
+    for it in watch:
+        if histories.get(it["watch_id"]):
+            continue
+        units = float(it.get("units") or 0)
+        invested = float(it.get("invested") or 0)
+        reasons = []
+        if units <= 0:
+            reasons.append("口数が未入力")
+        if invested <= 0:
+            reasons.append("投資金額が未入力")
+        if not reasons:
+            reasons.append("評価額の履歴がまだありません")
+        skipped.append({"watch_id": it["watch_id"], "name": it.get("name") or "",
+                        "broker": it.get("broker") or "", "reasons": reasons,
+                        "need_units": units <= 0, "need_invested": invested <= 0})
 
     excel_dates = set()          # 実額の記録がある日付（表・合計に使う）
     result = []
@@ -970,7 +1019,7 @@ def api_actual_history():
                             "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
                     "excel_dates": excel_dates, "range": range_key,
-                    "total_invested": round(total_inv),
+                    "total_invested": round(total_inv), "skipped": skipped,
                     "totals": totals, "totals_full": totals_full})
 
 

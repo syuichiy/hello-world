@@ -231,7 +231,7 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 
 /* 銘柄一覧テーブル：列幅を固定してレイアウト崩れ（列の潰れ・折返し）を防ぐ。
    ランキング表(.ranking-card内)は列構成が違うため対象外。 */
-.table-card .watch-table { table-layout: fixed; min-width: 1360px; }
+.table-card .watch-table { table-layout: fixed; min-width: 1392px; }
 .table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 200px; } /* ファンド名 */
 .table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 116px; } /* 判定 */
 .table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 130px; } /* シグナル強度 */
@@ -244,7 +244,7 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 .table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 100px; } /* 売却 */
 .table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 68px; }  /* 騰落 */
 .table-card .watch-table th:nth-child(12), .table-card .watch-table td:nth-child(12) { width: 108px; } /* 値動き */
-.table-card .watch-table th:nth-child(13), .table-card .watch-table td:nth-child(13) { width: 42px; }  /* 削除 */
+.table-card .watch-table th:nth-child(13), .table-card .watch-table td:nth-child(13) { width: 74px; }  /* 📝売買・削除 */
 .table-card .watch-table .fund-nm { white-space: normal; word-break: break-word; line-height: 1.35; }
 .table-card .watch-table .units-input,
 .table-card .watch-table .invested-input,
@@ -746,6 +746,75 @@ tr:hover .row-del { opacity: 1; }
 .plan-help ul { padding-left: 18px; }
 .plan-help li { margin-bottom: 4px; }
 .plan-help-note { opacity: .9; }
+
+/* ------------------------------------------------ 売買の記録（モーダル） */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100; background: rgba(20, 22, 34, .45);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; overflow-y: auto;
+}
+.modal-panel {
+  background: var(--card); border-radius: var(--radius); border: 1px solid var(--line);
+  box-shadow: var(--shadow-md); padding: 22px; width: 100%; max-width: 780px;
+  animation: drop-in .16s ease;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.modal-head h2 { margin: 0; }
+.modal-close {
+  border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
+  width: 32px; height: 32px; border-radius: 9px; cursor: pointer; font-size: 14px;
+}
+.modal-close:hover { border-color: var(--down-text); color: var(--down-text); }
+.modal-sub { margin: 4px 0 12px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+
+.trade-pos { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.trade-pos-item { display: flex; flex-direction: column; gap: 2px; }
+.trade-pos-item span { font-size: 11px; color: var(--ink-soft); font-weight: 600; }
+.trade-pos-item small { font-weight: 400; }
+.trade-pos-item b { font-size: 15px; font-variant-numeric: tabular-nums; }
+
+.trade-form { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.trade-fields { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px 14px; }
+.trade-fields .plan-label { display: flex; flex-direction: column; gap: 4px; }
+.trade-fields .plan-input { width: 100%; }
+.trade-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.trade-actions button {
+  border: none; background: var(--accent-grad); color: #fff; padding: 10px 18px;
+  border-radius: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(91,91,214,.35);
+}
+.trade-actions .hint { margin: 0; }
+
+.trade-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; }
+.trade-table th, .trade-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.trade-table th { font-size: 11px; color: var(--ink-soft); font-weight: 700; white-space: nowrap; }
+.trade-table td.num, .trade-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.trade-note { color: var(--ink-soft); font-size: 11.5px; }
+.trade-side { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
+.trade-side-buy { background: rgba(18,131,59,.10); color: var(--up-text); border: 1px solid rgba(18,131,59,.3); }
+.trade-side-sell { background: rgba(225,29,72,.10); color: var(--down-text); border: 1px solid rgba(225,29,72,.3); }
+
+.row-ops { white-space: nowrap; }
+.row-trade {
+  border: none; background: none; cursor: pointer; font-size: 13px; padding: 2px 4px;
+  border-radius: 7px; opacity: .65;
+}
+.row-trade:hover { background: rgba(91,91,214,.12); opacity: 1; }
+.avg-sub { font-size: 10.5px; color: var(--ink-soft); font-weight: 600; }
+
+@media (max-width: 680px) {
+  .trade-pos { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .trade-fields { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------------------ 表示できない保有のお知らせ */
+.skipped-card { border-style: dashed; }
+.skipped-head { font-size: 13.5px; font-weight: 700; color: var(--neutral); }
+.skipped-list { margin: 8px 0 4px; padding-left: 20px; font-size: 12.5px; line-height: 1.8; }
+.skipped-list li { color: var(--ink); }
+.skipped-broker { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+.skipped-why { font-size: 11.5px; color: var(--ink-soft); margin-left: 8px; }
+.skipped-need { color: var(--down-text); font-weight: 700; }
 
 /* ------------------------------------------------ バックアップ */
 .backup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 10px; }
