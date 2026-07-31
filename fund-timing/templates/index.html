@@ -89,6 +89,7 @@
               <th class="sortable num" data-key="value">評価額</th>
               <th class="sortable num" data-key="invested" title="元本（買った合計金額）。価格推移の比率計算に使います">投資金額</th>
               <th class="sortable" data-key="broker" title="保有先の証券会社（SBI→UFJ→楽天の順）">証券会社</th>
+              <th class="sortable" data-key="account_type" title="口座種別。NISA=非課税（資産プランの税引後予測で非課税として計算）">口座</th>
               <th class="sortable" data-key="sell_policy" title="リバランスで売却してよいかの設定">売却</th>
               <th class="sortable num" data-key="change_pct">騰落</th>
               <th>値動き</th>
@@ -350,6 +351,7 @@
           <div class="fire-gauge-labels"><span id="fire-pct">—</span><span id="fire-remain"></span></div>
         </div>
         <p class="plan-note" id="plan-goal-note"></p>
+        <p class="plan-note plan-nisa-note" id="plan-nisa-note" hidden></p>
       </div>
 
       <!-- 手元に置きたい現金の目安 -->

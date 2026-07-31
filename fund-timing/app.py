@@ -321,6 +321,7 @@ def _build_summaries(range_key, force=False):
         s["invested"] = float(it.get("invested") or 0)
         s["sell_policy"] = it.get("sell_policy") or "full"
         s["broker"] = it.get("broker") or ""
+        s["account_type"] = it.get("account_type") or "taxable"   # nisa=非課税 / taxable=特定
         hist = histories.get(wid, {})
 
         stock = s.get("kind") == "stock"
@@ -734,6 +735,17 @@ def api_watchlist_invested():
         return jsonify({"ok": False, "error": "投資金額は0以上で入力してください。"}), 400
     saved = db.set_invested(int(watch_id), invested)
     return jsonify({"ok": True, "invested": saved})
+
+
+@app.route("/api/watchlist/account", methods=["POST"])
+def api_watchlist_account():
+    """口座種別を設定する（nisa=非課税 / taxable=特定・課税）。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    saved = db.set_account_type(int(watch_id), data.get("account_type") or "taxable")
+    return jsonify({"ok": True, "account_type": saved})
 
 
 # 取引履歴（Excel実額）の最終日。これより後の日付だけ当日更新で追記する
@@ -1246,20 +1258,29 @@ def api_plan():
 
     summaries = _build_summaries(request.args.get("range", "1y"), force=False)
     holdings, total_value, total_invested = [], 0, 0
+    nisa_value, nisa_invested, taxable_value, taxable_invested = 0, 0, 0, 0
     for s in summaries:
         if not s.get("ok"):
             continue
         val = s.get("value") or 0
+        inv = s.get("invested") or 0
+        is_nisa = (s.get("account_type") == "nisa")
         holdings.append({
             "watch_id": s["watch_id"], "name": s.get("name"),
             "account": s.get("account") or "", "broker": s.get("broker") or "",
-            "value": round(val),
+            "value": round(val), "account_type": s.get("account_type") or "taxable",
         })
         total_value += val
-        total_invested += s.get("invested") or 0
+        total_invested += inv
+        if is_nisa:
+            nisa_value += val; nisa_invested += inv
+        else:
+            taxable_value += val; taxable_invested += inv
     plan = db.get_setting("plan", {}) or {}
     return jsonify({"ok": True, "total_value": round(total_value),
                     "total_invested": round(total_invested),
+                    "nisa_value": round(nisa_value), "nisa_invested": round(nisa_invested),
+                    "taxable_value": round(taxable_value), "taxable_invested": round(taxable_invested),
                     "holdings": holdings, "plan": plan})
 
 

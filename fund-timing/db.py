@@ -161,6 +161,10 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
                 ALTER TABLE watchlist_new RENAME TO watchlist;
                 """
             )
+        # マイグレーション: 口座種別（NISA=非課税 / taxable=特定・課税）
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(watchlist)")]
+        if "account_type" not in cols:
+            c.execute("ALTER TABLE watchlist ADD COLUMN account_type TEXT DEFAULT 'taxable'")
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -490,7 +494,7 @@ def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
             "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, "
-            "w.invested, w.label, c.* "
+            "w.invested, w.label, w.account_type, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -527,6 +531,14 @@ def set_asset_class(catalog_id: int, asset_class: str, db_path: Optional[str] = 
     with _conn(db_path) as c:
         c.execute("UPDATE catalog SET asset_class=? WHERE id=?", (asset_class, catalog_id))
     return asset_class
+
+
+def set_account_type(watch_id: int, account_type: str, db_path: Optional[str] = None):
+    """口座種別を設定する。nisa=非課税 / taxable=特定(課税)。"""
+    t = "nisa" if account_type == "nisa" else "taxable"
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET account_type=? WHERE id=?", (t, watch_id))
+    return t
 
 
 def set_broker(watch_id: int, broker: str, db_path: Optional[str] = None):

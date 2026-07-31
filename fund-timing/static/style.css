@@ -249,6 +249,7 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 .table-card .watch-table .units-input,
 .table-card .watch-table .invested-input,
 .table-card .watch-table .policy-select,
+.table-card .watch-table .account-select,
 .table-card .watch-table .row-broker { width: 100%; max-width: 100%; box-sizing: border-box; }
 .table-card .watch-table .num-comma { text-align: right; }
 /* 先頭（ファンド名）と末尾（削除）の列を固定して、横スクロールでも見えるように */
@@ -556,6 +557,14 @@ tr:hover .row-del { opacity: 1; }
 .policy-select:focus { outline: none; border-color: var(--accent); }
 .policy-select.policy-partial { color: #a16207; border-color: rgba(202,138,4,.45); }
 .policy-select.policy-locked { color: var(--down-text); border-color: rgba(225,29,72,.45); }
+/* 口座種別（NISA/特定） */
+.account-select {
+  padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 12px; font-weight: 700; background: var(--bg); color: var(--ink); cursor: pointer;
+}
+.account-select:focus { outline: none; border-color: var(--accent); }
+.account-select.account-nisa { color: var(--up-text); border-color: rgba(18,131,59,.45); background: rgba(18,131,59,.07); }
+.plan-nisa-note { color: var(--up-text); }
 .excl-head { background: rgba(111,116,136,.10); color: var(--ink-soft); }
 
 /* ------------------------------------------------ メニュー（タブ） */

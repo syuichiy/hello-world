@@ -739,6 +739,22 @@ async function savePolicy(watchId, policy) {
   }
 }
 
+// 口座種別（NISA/特定）の保存 ※保有行(watch_id)単位。資産プランの税引後予測に反映
+async function saveAccountType(watchId, accountType) {
+  try {
+    const resp = await fetch("/api/watchlist/account", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: Number(watchId), account_type: accountType }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    toast(`✓ 口座を${accountType === "nisa" ? "NISA（非課税）" : "特定"}に設定しました`);
+    loadWatchlist();
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
+}
+
 // 保有口数の保存 ※保有行(watch_id)単位
 async function saveUnits(watchId, units) {
   try {
@@ -898,6 +914,11 @@ function renderWatchTable() {
       vb = POLICY_ORDER[b.sell_policy] ?? 9;
       return sortDir * (va - vb);
     }
+    if (sortKey === "account_type") {
+      va = a.account_type === "nisa" ? 0 : 1;
+      vb = b.account_type === "nisa" ? 0 : 1;
+      return sortDir * (va - vb);
+    }
     if (sortKey === "verdict") { va = VERDICT_ORDER[a.verdict] || 0; vb = VERDICT_ORDER[b.verdict] || 0; }
     else if (sortKey === "name") { va = a.name || ""; vb = b.name || ""; return sortDir * va.localeCompare(vb, "ja"); }
     else { va = a[sortKey]; vb = b[sortKey]; }
@@ -911,7 +932,7 @@ function renderWatchTable() {
       return `<tr class="err-row" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
         <td class="fund-cell"><div class="fund-nm">${escapeHtml(s.name)}</div>
           <div class="fund-sub">${classChip(s.asset_class)}${brokerChip(s.broker)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.isin)}</div></td>
-        <td colspan="10" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
+        <td colspan="11" class="err-msg">⚠️ ${escapeHtml(s.error || "取得に失敗")}</td>
         <td><button class="row-del" data-watch="${s.watch_id}" title="削除">✕</button></td></tr>`;
     }
     const badge = verdictBadge(s.verdict, s.verdict_label);
@@ -948,6 +969,7 @@ function renderWatchTable() {
             data-watch="${s.watch_id}" value="${fmtInt(s.invested)}" placeholder="投資金額"
             title="投資金額（元本）。価格推移タブの比率計算に使います"></td>
       <td>${brokerSelect(s.watch_id, s.broker, "broker-select row-broker")}</td>
+      <td>${accountSelect(s)}</td>
       <td>${policySelect(s)}</td>
       <td class="num">${chg}</td>
       <td class="spark-cell">${sparkline(s.spark, s.verdict)}</td>
@@ -956,6 +978,14 @@ function renderWatchTable() {
   }).join("");
 }
 
+function accountSelect(s) {
+  const a = s.account_type === "nisa" ? "nisa" : "taxable";
+  const opt = (v, label) => `<option value="${v}"${a === v ? " selected" : ""}>${label}</option>`;
+  return `<select class="account-select account-${a}" data-watch="${s.watch_id}"
+      title="口座種別。NISA＝非課税。資産プランの税引後予測でNISA分は非課税として計算します">
+    ${opt("taxable", "特定")}${opt("nisa", "NISA")}
+  </select>`;
+}
 function policySelect(s) {
   const p = s.sell_policy || "full";
   const opt = (v, label) => `<option value="${v}"${p === v ? " selected" : ""}>${label}</option>`;
@@ -1418,7 +1448,8 @@ $("watch-body").addEventListener("click", (e) => {
   }
   // 入力・設定中は詳細を開かない
   if (e.target.closest(".units-input") || e.target.closest(".invested-input")
-      || e.target.closest(".policy-select") || e.target.closest(".row-broker")) return;
+      || e.target.closest(".policy-select") || e.target.closest(".row-broker")
+      || e.target.closest(".account-select")) return;
   const row = e.target.closest("tr[data-id]");
   if (row && !row.classList.contains("err-row")) openDetail(Number(row.dataset.id));
 });
@@ -1473,7 +1504,9 @@ $("watch-body").addEventListener("change", (e) => {
   const pol = e.target.closest(".policy-select");
   if (pol) { savePolicy(pol.dataset.watch, pol.value); return; }
   const brk = e.target.closest(".row-broker");
-  if (brk) saveBroker(brk.dataset.watch, brk.value);
+  if (brk) { saveBroker(brk.dataset.watch, brk.value); return; }
+  const acc = e.target.closest(".account-select");
+  if (acc) saveAccountType(acc.dataset.watch, acc.value);
 });
 $("watch-body").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.closest(".num-comma")) e.target.blur();
@@ -1483,7 +1516,7 @@ document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
   th.addEventListener("click", () => {
     const key = th.dataset.key;
     if (sortKey === key) sortDir = -sortDir;
-    else { sortKey = key; sortDir = (key === "name" || key === "broker" || key === "sell_policy") ? 1 : -1; }
+    else { sortKey = key; sortDir = (key === "name" || key === "broker" || key === "sell_policy" || key === "account_type") ? 1 : -1; }
     updateSortHeaders();
     renderWatchTable();
   });
@@ -1860,6 +1893,22 @@ function renderPlanGoal() {
       + `＋債券 ${Math.round(planData.plan.bonds || 0).toLocaleString()} 円）`;
   }
   $("plan-goal-note").textContent = note;
+
+  // NISA（非課税枠）の使用状況。銘柄一覧で口座種別をNISAにすると集計されます
+  const nisaEl = $("plan-nisa-note");
+  if (nisaEl) {
+    const nInv = planData.nisa_invested || 0, nVal = planData.nisa_value || 0;
+    const CAP = 18000000;   // 生涯非課税保有限度額 1,800万円
+    if (nInv > 0) {
+      const man = (n) => Math.round(n / 10000).toLocaleString() + "万円";
+      nisaEl.textContent = `🅽 NISA（非課税）：投資額 ${man(nInv)}（評価額 ${man(nVal)}）`
+        + ` ／ 生涯枠1,800万円の残り 約 ${man(Math.max(0, CAP - nInv))}。NISA分の利益は税引後予測で非課税として計算します。`;
+      nisaEl.hidden = false;
+    } else {
+      nisaEl.textContent = "🅽 NISA：銘柄一覧の「口座」列でNISAを選ぶと、非課税として税引後予測に反映し、枠の使用状況を表示します。";
+      nisaEl.hidden = false;
+    }
+  }
 }
 
 // --- 手元に置きたい現金の目安（①生活防衛資金＋②数年内の予定支出＋③退職後の無年金クッション）---
@@ -2089,9 +2138,12 @@ function renderPlanHistory() {
   const lp = planLifePlan();
   const canProject = (monthly > 0 || baseRate > 0);
   // 税率（未設定なら日本の約20.315%を既定として利益に課税）。利益＝評価額−取得原価。
-  const taxRate = (planData.plan.tax != null ? planData.plan.tax : 20.315) / 100;
+  const baseTax = (planData.plan.tax != null ? planData.plan.tax : 20.315) / 100;
   // ポートフォリオ全体の含み益割合（投信＋日立株などの損益率）。/api/plan の評価額・投資額から算出
   const tv = planData.total_value || 0, ti = planData.total_invested || 0;
+  // NISA（非課税）分を除いた「課税対象の割合」で実効税率を出す（NISAの利益は非課税）
+  const taxableFrac = tv > 0 ? Math.min(1, Math.max(0, (planData.taxable_value || 0) / tv)) : 1;
+  const taxRate = baseTax * taxableFrac;       // 実効税率（NISA分は非課税）
   const gainFrac = tv > 0 ? Math.max(0, (tv - ti) / tv) : 0;
   const basis0 = fundCur * (1 - gainFrac);   // グラフ現在値ベースの取得原価
   // 税引後の総資産（現金債券は非課税）
@@ -2116,7 +2168,11 @@ function renderPlanHistory() {
   note.textContent = `${reserve > 0 ? "総資産" : "実績"}（期間内）：${first0.toLocaleString()} 円 → ${cur.toLocaleString()} 円`
     + `（${diff0 >= 0 ? "+" : ""}${diff0.toLocaleString()} 円 / ${pctChg0 >= 0 ? "+" : ""}${pctChg0.toFixed(1)}%）`
     + (reserve > 0 ? `　※現金・債券 ${reserve.toLocaleString()} 円を含む` : "")
-    + (taxRate > 0 ? `　※予測は利益に税率${(taxRate * 100).toFixed(3).replace(/\.?0+$/, "")}%を考慮した税引後` : "");
+    + (baseTax > 0
+        ? `　※予測は利益に課税（税引後）。${(planData.nisa_value || 0) > 0
+            ? `NISA分は非課税とし実効税率${(taxRate * 100).toFixed(2)}%（うちNISA ${Math.round((planData.nisa_value || 0) / 10000).toLocaleString()}万円）`
+            : `税率${(baseTax * 100).toFixed(3).replace(/\.?0+$/, "")}%`}で計算`
+        : "");
 
   // ライフプランが確定していれば「ライフステージ別」パネルで表示
   if (lp.ok && canProject) {
