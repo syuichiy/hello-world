@@ -2127,21 +2127,21 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
   let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
-  let divCash = 0;             // 現金のうち「受け取った分配金の累計」（グラフで分けて表示）
-  // 現金から取り崩すときは、まず分配金（インカム）から使い、元の保有現金は極力残す。
-  // ①生活防衛資金は保有現金で維持する、という前提と見た目を一致させるため。
-  const spendCash = (amt) => {
-    if (!(amt > 0) || !(cash > 0)) return;
-    divCash = Math.max(0, divCash - Math.min(divCash, amt));
-    cash = Math.max(0, cash - amt);
+  // 「その年に受け取った分配金」を出すための月次記録（直近12ヶ月ぶんを合計する）。
+  // 起点では現時点の受取ペースを表示したいので、12ヶ月ぶんを先に埋めておく。
+  const netHist = [];
+  for (let i = 0; i < 12; i++) netHist.push(cur * dNetM);
+  const divYear = () => {
+    const last12 = netHist.slice(-12);
+    const sum = last12.reduce((s, v) => s + v, 0);
+    return last12.length === 12 ? sum : sum * 12 / last12.length;
   };
   const fundAT = () => fund - Math.max(0, fund - basis) * t;   // 投信の税引後評価額
   const snap = (age, dt) => {
     const fa = fundAT();
-    const dc = Math.min(cash, divCash);   // 分配金（累計）
-    return { age, date: dt, cash: Math.round(cash - dc), divcash: Math.round(dc),
-             bonds: Math.round(bonds),
-             fund: Math.round(fa), v: Math.round(fa + cash + bonds) };
+    return { age, date: dt, cash: Math.round(cash), bonds: Math.round(bonds),
+             fund: Math.round(fa), divyear: Math.round(divYear()),
+             v: Math.round(fa + cash + bonds) };
   };
   const pts = [snap(lp.age0, lastDate)];
   let depletionAge = -1, penStartAge = -1, retireBal = null;
@@ -2151,14 +2151,16 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     const dt = addMonths(lastDate, m);
     fund = fund * (1 + rm);              // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     // 受取分配金：運用資産から出て、税引後は現金へ（グラフの現金の帯に反映）。
+    let netDiv = 0;
     if (dGrossM > 0 && fund > 0) {
       const gross = Math.min(fund, fund * dGrossM);   // 当月の受取分配（税引前）
-      const net = fund * dNetM;                       // 税引後（現金へ）
+      netDiv = fund * dNetM;                          // 税引後（現金へ）
       basis -= gross * (basis / fund); fund -= gross; // 原価も按分して減らす
-      cash += net; divCash += net;
+      cash += netDiv;
       if (fund < 0) fund = 0;
       if (basis < 0) basis = 0;
     }
+    netHist.push(netDiv);
     if (age < lp.retire) {
       fund += monthly; basis += monthly;   // 積立は原価
     } else {
@@ -2171,7 +2173,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
-        let take = Math.min(Math.max(0, cash - floorNow), w); spendCash(take); w -= take;
+        let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
         if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; }
         if (w > 0 && fund > 0) {
           take = Math.min(fund, w);
@@ -2179,7 +2181,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
           if (fund < 0) fund = 0;
           if (basis < 0) basis = 0;
         }
-        if (w > 0) { take = Math.min(cash, w); spendCash(take); w -= take; }   // 最後の手段：生活防衛資金
+        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; }   // 最後の手段：生活防衛資金
       } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
         fund -= w; basis -= w;
       }
@@ -2463,12 +2465,29 @@ function renderLifeStages(o) {
     name, mode: "lines", line: { width: 0.6, color }, stackgroup: "assets", fillcolor: fillc,
     hovertemplate: `%{customdata[0]:.0f}歳<br>${name} %{y:,.0f} 円（%{customdata[1]}%）<extra></extra>`,
   });
-  if (cash0 > 0) traces.push(area("cash", "保有現金", "#0e9488", "rgba(14,148,136,0.60)"));
-  // 受け取った分配金の累計は、保有現金と分けて表示する（どれだけインカムが貯まったか分かるように）
-  if (pts.some((p) => (p.divcash || 0) > 0))
-    traces.push(area("divcash", "分配金（累計）", "#f59e0b", "rgba(245,158,11,0.55)"));
+  if (cash0 > 0) traces.push(area("cash", "現金", "#0e9488", "rgba(14,148,136,0.60)"));
   if (bonds0 > 0) traces.push(area("bonds", "債券", "#22c55e", "rgba(34,197,94,0.45)"));
   traces.push(area("fund", "投信（税引後）", "#5b8def", "rgba(91,141,239,0.38)"));
+
+  // その年に受け取る分配金（税引後・直近12ヶ月）。金額の桁が資産と違うため右軸に別途表示する。
+  // 積み上げ（資産の内訳）とは性質が違う「毎年入ってくる収入」なので、線で重ねる。
+  const divYs = pts.map((p) => p.divyear || 0);
+  const divMax = Math.max(0, ...divYs);
+  if (divMax > 0) {
+    traces.push({
+      x: XS, y: divYs, name: "分配金（その年の受取・税引後）", mode: "lines", yaxis: "y2",
+      line: { width: 2, color: "#f59e0b", dash: "dot" },
+      customdata: pts.map((p) => p.age),
+      hovertemplate: "%{customdata:.0f}歳<br>分配金（その年）%{y:,.0f} 円<extra></extra>",
+    });
+    const dTicks = niceTicks(divMax, 3);
+    layout.yaxis2 = {
+      overlaying: "y", side: "right", range: [0, divMax * 3],   // 下段に収めて積み上げと重ねない
+      tickvals: dTicks, ticktext: dTicks.map(jpYenShort),
+      tickfont: { size: 9, color: "#c2820a" }, showgrid: false, zeroline: false,
+    };
+    layout.margin.r = 58;   // 右軸の目盛りぶん余白を広げる
+  }
 
   // 横軸：年齢の目盛り（区間境界＋10年刻み）。退職後は圧縮されて表示される。
   const bnd = [lp.age0, retireAge, endAge];
