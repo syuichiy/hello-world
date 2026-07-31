@@ -1302,17 +1302,15 @@ def _build_dividends(summaries, base_tax):
             "mode_raw": s.get("dividend_mode") or "",
             "mode": eff, "taxable": is_taxable,
         })
-    # 資産推移グラフ用。分配金あり（受取）の商品は取り崩さずに維持する前提のため、
-    # 利回りは「維持する商品の評価額(recv_value)」に対する年率で返す。
-    gy = (recv_gross / recv_value) if recv_value > 0 else 0.0
-    ny = (recv_net / recv_value) if recv_value > 0 else 0.0
+    # 資産推移グラフ用の利回り（運用資産全体に対する年率）。分配金あり/なしを区別せず
+    # 全体を取り崩し対象とするため、全体の評価額に対する率で返す。
+    gy = (recv_gross / total_value) if total_value > 0 else 0.0
+    ny = (recv_net / total_value) if total_value > 0 else 0.0
     return {
         "items": items,
         "receive_gross": round(recv_gross), "receive_net": round(recv_net),
         "reinvest_total": round(reinvest_total), "tax": round(tax_total),
-        "receive_value": round(recv_value),
-        # 維持する商品が運用資産全体に占める割合（残りが取り崩し対象）
-        "keep_frac": round((recv_value / total_value) if total_value > 0 else 0.0, 6),
+        "receive_value": round(recv_value),   # 分配金を生む商品の評価額（参考）
         "receive_gross_yield": round(gy, 6), "receive_net_yield": round(ny, 6),
         "base_tax": round(base_tax, 5),
     }
