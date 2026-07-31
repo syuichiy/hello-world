@@ -2001,6 +2001,99 @@ $("ai-model-toggle").addEventListener("click", (e) => {
 $("ai-key-save").addEventListener("click", saveAiKey);
 $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
 
+// ============================================================ 取引履歴CSVの取り込み
+let csvPreview = null;   // { rows, groups, holdings, broker }
+
+function setCsvStatus(msg, kind) {
+  const el = $("csv-status");
+  if (el) { el.textContent = msg || ""; el.className = "ai-test-status " + (kind || ""); }
+}
+
+$("csv-btn").addEventListener("click", () => $("csv-file").click());
+$("csv-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  setCsvStatus("読み取り中… ⏳");
+  $("csv-preview").hidden = true;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const d = await (await fetch("/api/trades/import-preview", { method: "POST", body: fd })).json();
+    if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "読み取りに失敗しました"), "error"); return; }
+    csvPreview = d;
+    renderCsvPreview();
+    setCsvStatus(`${d.broker || "証券会社"}のCSVを読み取りました（売買 ${d.rows.length} 件）`);
+  } catch (err) {
+    setCsvStatus("⚠️ 読み取りに失敗しました: " + err.message, "error");
+  }
+});
+
+function renderCsvPreview() {
+  const box = $("csv-preview");
+  if (!csvPreview) { box.hidden = true; return; }
+  box.hidden = false;
+  const hs = csvPreview.holdings || [];
+  const opt = (g) => `<option value="">（取り込まない）</option>` + hs.map((h) => {
+    const label = `${h.name}${h.label && h.label !== h.name ? `／${h.label}` : ""}${h.broker ? `（${h.broker}）` : ""}`;
+    return `<option value="${h.watch_id}"${g.watch_id === h.watch_id ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+  const rows = (csvPreview.groups || []).map((g) => `
+    <tr class="${g.watch_id ? "" : "csv-unmatched"}">
+      <td class="csv-name">${escapeHtml(g.name)}
+        <span class="csv-meta">${g.first} 〜 ${g.last}</span></td>
+      <td class="num">${g.count}<span class="csv-meta">買${g.buy}／売${g.sell}</span></td>
+      <td>${g.watch_id
+          ? `<span class="csv-badge csv-auto">${g.how === "partial" ? "自動（部分一致）" : "自動一致"}</span>`
+          : `<span class="csv-badge csv-need">要確認</span>`}</td>
+      <td><select class="csv-map" data-key="${escapeHtml(g.key)}">${opt(g)}</select></td>
+      <td class="num csv-meta">${g.duplicates ? `${g.duplicates}件は取込済み` : ""}</td>
+    </tr>`).join("");
+  const skipped = (csvPreview.skipped || []).length;
+  box.innerHTML = `
+    <div class="csv-table-wrap">
+      <table class="csv-table">
+        <thead><tr><th>CSVの商品名</th><th class="num">件数</th><th>判定</th>
+          <th>取り込み先の保有</th><th class="num">重複</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="backup-row">
+      <button id="csv-import" type="button">この内容で取り込む</button>
+      <span class="hint">${skipped ? `※ 売買でない ${skipped} 行（コース変更など）は取り込みません。` : ""}</span>
+    </div>`;
+  $("csv-import").addEventListener("click", runCsvImport);
+}
+
+async function runCsvImport() {
+  if (!csvPreview) return;
+  const mapping = {};
+  document.querySelectorAll("#csv-preview .csv-map").forEach((s) => {
+    if (s.value) mapping[s.dataset.key] = Number(s.value);
+  });
+  if (!Object.keys(mapping).length) {
+    setCsvStatus("⚠️ 取り込み先の保有が1つも選ばれていません。", "error"); return;
+  }
+  setCsvStatus("取り込み中… ⏳");
+  try {
+    const d = await (await fetch("/api/trades/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: csvPreview.rows, mapping }),
+    })).json();
+    if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "取り込みに失敗しました"), "error"); return; }
+    setCsvStatus(`✅ ${d.added} 件を取り込みました`
+      + (d.duplicates ? `（重複 ${d.duplicates} 件は登録済みのため除外）` : "")
+      + (d.skipped ? `（対応づけ未選択 ${d.skipped} 件は取り込まず）` : "")
+      + `。${d.holdings} 銘柄の口数・投資金額を更新しました。`);
+    toast("取引履歴を取り込みました");
+    $("csv-preview").hidden = true;
+    csvPreview = null;
+    await loadWatchlist();
+  } catch (err) {
+    setCsvStatus("⚠️ 取り込みに失敗しました: " + err.message, "error");
+  }
+}
+
 // ============================================================ バックアップ・復元
 function setBackupStatus(msg, kind) {
   const el = $("backup-status");

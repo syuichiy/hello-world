@@ -594,6 +594,33 @@
         </details>
       </div>
 
+      <!-- 証券会社の取引履歴の取り込み -->
+      <div class="card settings-card">
+        <h2>📥 取引履歴の取り込み（証券会社のCSV）</h2>
+        <p class="hint">
+          <strong>SBI証券</strong>（約定履歴照会）と<strong>楽天証券</strong>（取引履歴）のCSVから、
+          売買を一括で取り込めます。実際の<strong>約定日・数量・単価・手数料</strong>がそのまま入るので、
+          平均取得単価と実現損益が正確になり、1件ずつ手入力する必要がなくなります。
+        </p>
+        <div class="backup-row">
+          <button id="csv-btn" type="button">📄 CSVを選ぶ</button>
+          <input id="csv-file" type="file" accept=".csv,text/csv" hidden>
+          <span id="csv-status" class="ai-test-status"></span>
+        </div>
+        <div id="csv-preview" hidden></div>
+        <details class="plan-help">
+          <summary>CSVの入手方法・注意点</summary>
+          <ul>
+            <li><strong>SBI証券</strong>：口座管理 →「取引履歴」→ 約定履歴照会 → CSVダウンロード</li>
+            <li><strong>楽天証券</strong>：マイメニュー →「取引履歴」→ 投資信託 → CSVダウンロード</li>
+            <li>商品名から保有を自動で対応づけます。同じ商品を複数の口座で持っている場合など、
+              絞り込めないものは<strong>取り込む前に選べます</strong>（選ばなければ取り込みません）。</li>
+            <li><strong>同じ内容の記録は重複して登録しません</strong>ので、期間が重なるCSVを続けて取り込んでも安全です。</li>
+            <li>コース変更（出庫・入庫）など売買でない行は取り込みません。</li>
+          </ul>
+        </details>
+      </div>
+
       <!-- バックアップ / データ移行 -->
       <div class="card settings-card">
         <h2>💾 バックアップ・データ移行</h2>

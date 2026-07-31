@@ -28,6 +28,7 @@ import fund_data
 import signals as signal_mod
 import db
 import seed_funds
+import broker_import
 
 app = Flask(__name__)
 # 静的ファイル(app.js/style.css)を毎回検証させ、更新後に古いJS/CSSが使われないようにする
@@ -849,6 +850,92 @@ def api_trades_add():
         return jsonify({"ok": False, "error": str(e)}), 400
     pos = _sync_position_from_trades(watch_id)
     return jsonify({"ok": True, "position": pos})
+
+
+@app.route("/api/trades/import-preview", methods=["POST"])
+def api_trades_import_preview():
+    """証券会社の取引履歴CSVを解析し、取り込む内容を確認用に返す。
+    どの保有に結び付けるかは商品名で自動判定し、絞れないものは画面で選んでもらう。"""
+    f = request.files.get("file")
+    if f is None:
+        return jsonify({"ok": False, "error": "CSVファイルを選択してください。"}), 400
+    parsed = broker_import.parse(f.read())
+    if not parsed.get("ok"):
+        return jsonify(parsed), 400
+
+    holdings = db.list_watchlist()
+    matches = broker_import.match_holdings(parsed["rows"], holdings, parsed.get("broker", ""))
+    existing = {(t["watch_id"], t["date"], t["side"], round(float(t["units"]), 4),
+                 round(float(t["price"]), 4)) for t in db.list_trades()}
+
+    # 商品ごとにまとめて返す（画面では商品単位で対応づけを確認・変更する）
+    groups = {}
+    for r in parsed["rows"]:
+        key = broker_import.normalize_name(r["name"])
+        g = groups.setdefault(key, {
+            "key": key, "name": r["name"], "count": 0, "buy": 0, "sell": 0,
+            "first": r["date"], "last": r["date"], "duplicates": 0,
+            "watch_id": matches.get(key, {}).get("watch_id"),
+            "how": matches.get(key, {}).get("how"),
+            "account_type": r["account_type"], "dividend_mode": r["dividend_mode"],
+        })
+        g["count"] += 1
+        g[r["side"]] += 1
+        g["first"] = min(g["first"], r["date"])
+        g["last"] = max(g["last"], r["date"])
+        if g["watch_id"] and (g["watch_id"], r["date"], r["side"],
+                              round(r["units"], 4), round(r["price"], 4)) in existing:
+            g["duplicates"] += 1
+
+    return jsonify({
+        "ok": True, "broker": parsed.get("broker", ""),
+        "groups": sorted(groups.values(), key=lambda g: -g["count"]),
+        "rows": parsed["rows"], "skipped": parsed.get("skipped", []),
+        "holdings": [{"watch_id": h["watch_id"], "name": h.get("name") or "",
+                      "label": h.get("label") or "", "broker": h.get("broker") or "",
+                      "kind": h.get("kind") or "fund"} for h in holdings],
+    })
+
+
+@app.route("/api/trades/import", methods=["POST"])
+def api_trades_import():
+    """確認済みの対応づけで取引履歴を取り込む。同じ内容の記録は重複登録しない。"""
+    data = request.get_json(force=True, silent=True) or {}
+    rows = data.get("rows") or []
+    mapping = data.get("mapping") or {}     # {正規化名: watch_id}
+    if not rows:
+        return jsonify({"ok": False, "error": "取り込む取引がありません。"}), 400
+
+    existing = {(t["watch_id"], t["date"], t["side"], round(float(t["units"]), 4),
+                 round(float(t["price"]), 4)) for t in db.list_trades()}
+    added = skipped = dup = 0
+    touched = set()
+    for r in rows:
+        key = broker_import.normalize_name(r.get("name") or "")
+        wid = mapping.get(key)
+        if not wid:
+            skipped += 1
+            continue
+        wid = int(wid)
+        sig = (wid, r.get("date"), r.get("side"),
+               round(float(r.get("units") or 0), 4), round(float(r.get("price") or 0), 4))
+        if sig in existing:
+            dup += 1
+            continue
+        try:
+            db.add_trade(wid, r.get("date"), r.get("side"), r.get("units"), r.get("price"),
+                         r.get("fee") or 0, r.get("note") or "")
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+        existing.add(sig)
+        touched.add(wid)
+        added += 1
+    # 取り込んだ保有の口数・投資金額を売買の記録から計算し直す
+    for wid in touched:
+        _sync_position_from_trades(wid)
+    return jsonify({"ok": True, "added": added, "duplicates": dup, "skipped": skipped,
+                    "holdings": len(touched)})
 
 
 @app.route("/api/trades", methods=["DELETE"])
