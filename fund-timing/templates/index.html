@@ -354,43 +354,24 @@
         <p class="plan-note plan-nisa-note" id="plan-nisa-note" hidden></p>
       </div>
 
-      <!-- 手元に置きたい現金の目安 -->
-      <div class="card plan-card" id="cash-advice-card">
-        <h2>💰 手元に置きたい現金の目安</h2>
-        <p class="hint">
-          設定の「資産プランの前提」（生活費・退職・年金）から、現金（＋一部は債券）で確保しておくと安心な金額の目安を計算します。
-          現金は増えないため、これを大きく超える現金は投資に回すのが一般的です。
-          <button class="linklike" id="cash-goto-settings" type="button">設定を開く</button>
-        </p>
-        <div id="cash-advice-body"></div>
-        <p class="hint">※一般的な目安であり、投資助言ではありません。生活費は「退職後の生活費」の設定値を使用します。</p>
-      </div>
-
-      <!-- 分配金・配当（インカム） -->
-      <div class="card plan-card" id="dividend-card">
-        <h2>💴 分配金・配当（インカム）</h2>
-        <p class="hint">
-          各商品の<strong>直近1年の分配金・配当の実績</strong>から、現在の保有額ベースの年間インカムを計算します。
-          <br>※ 投資信託は<strong>投信協会CSVの分配金</strong>（1万口あたり）÷ 現在の基準価額、
-          個別株は<strong>配当実績</strong>（1株あたり）÷ 現在の株価を根拠にしています（無分配のインデックス投信は0になります）。
-          <br>※ 「受取」にした商品の分配金は<strong>税引後のキャッシュ収入</strong>として
-          <strong>資産の推移グラフ（現金の帯）に反映</strong>し、取り崩し時の売却額を軽減します。
-          特定口座の受取分は利益への税率で課税、NISAは非課税で計算します。
-        </p>
-        <div id="dividend-body"></div>
-      </div>
-
       <!-- 資産の推移と目標達成予測 -->
       <div class="card plan-card">
         <h2>📈 資産の推移と目標達成予測</h2>
-        <div class="plan-fields">
-          <div class="plan-field">
-            <label class="plan-label" for="plan-monthly">毎月の積立（円）</label>
-            <input id="plan-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）100,000">
+        <div class="plan-toolbar">
+          <div class="plan-fields">
+            <div class="plan-field">
+              <label class="plan-label" for="plan-monthly">毎月の積立（円）</label>
+              <input id="plan-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）100,000">
+            </div>
+            <div class="plan-field">
+              <label class="plan-label" for="plan-return">想定年利（%）</label>
+              <input id="plan-return" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）5">
+            </div>
           </div>
-          <div class="plan-field">
-            <label class="plan-label" for="plan-return">想定年利（%）</label>
-            <input id="plan-return" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）5">
+          <div class="range-group" id="plan-range">
+            <button class="range-btn" data-range="6m">実績6ヶ月</button>
+            <button class="range-btn active" data-range="1y">実績1年</button>
+            <button class="range-btn" data-range="3y">実績3年</button>
           </div>
         </div>
         <div class="plan-ai-row" id="plan-ai-row" hidden>
@@ -398,32 +379,47 @@
           <button id="plan-ai-clear" type="button" class="ghost-btn" hidden>手動に戻す</button>
           <span id="plan-ai-status" class="ai-test-status"></span>
         </div>
-        <div class="range-group" id="plan-range">
-          <button class="range-btn" data-range="6m">実績6ヶ月</button>
-          <button class="range-btn active" data-range="1y">実績1年</button>
-          <button class="range-btn" data-range="3y">実績3年</button>
-        </div>
-        <p class="hint">
-          設定画面の「資産プランの前提」を設定すると、現在から寿命までの資産推移を
-          <strong>資産の内訳（下から <span style="color:#0e9488">現金</span>・<span style="color:#22c55e">債券</span>・<span style="color:#5b8def">投信（税引後）</span>）の積み上げ</strong>で表示します。
-          <strong>積立は退職時点で停止</strong>し、退職後は<strong>現金→債券→投信の順に取り崩す</strong>ため、
-          特に<span style="color:#6f7488">退職</span>〜<span style="color:#2f6fed">年金開始</span>の無年金期間に現金・債券の帯が減っていく様子が分かります。
-          ただし<strong>①生活防衛資金（生活費×月数）は緊急時用に現金として残し、インフレに合わせて実質額を維持</strong>する前提のため、年金受給後も現金の帯が下限として残り、緩やかに増えていきます。
-          受け取った分配金は税引後で<span style="color:#0e9488">現金</span>に入り、取り崩し時の売却額を軽減します（分配金の有無にかかわらず、投信・株はすべて取り崩し対象として計算します）。
-          退職後は期間が長いので横軸を圧縮しています。
-          <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
-          <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です。
-          <br>※予測グラフは、利益（評価額−取得原価）に設定の<strong>税率</strong>をかけた<strong>税引後</strong>の資産で表示します（あくまで試算・保証ではありません）。
-        </p>
-        <p class="plan-note" id="plan-ai-comment" hidden></p>
-        <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
         <div id="plan-history-chart"></div>
         <p id="plan-history-empty" class="empty-watch" hidden>
           推移を表示するには、銘柄一覧で各商品の口数を入力してください。
         </p>
         <p class="plan-eta" id="plan-eta"></p>
         <p class="plan-eta" id="plan-dd-summary"></p>
+        <p class="plan-note" id="plan-ai-comment" hidden></p>
+        <p class="plan-note" id="plan-dd-ai-comment" hidden></p>
         <p class="plan-note" id="plan-history-note"></p>
+        <details class="plan-help">
+          <summary>グラフの見方・計算の前提</summary>
+          <p>
+            資産の内訳を、下から <span style="color:#0e9488">現金</span>・<span style="color:#22c55e">債券</span>・<span style="color:#5b8def">投信（税引後）</span> の順に積み上げて表示します。
+            退職後は期間が長いため、横軸を圧縮して線の連続性を保っています。
+          </p>
+          <ul>
+            <li><strong>積立は退職時点で停止</strong>し、退職後は<strong>現金→債券→投信</strong>の順に取り崩します。<span style="color:#6f7488">退職</span>〜<span style="color:#2f6fed">年金開始</span>の無年金期間に現金・債券が減る様子が分かります。</li>
+            <li><strong>①生活防衛資金</strong>（生活費×月数）は緊急時用に現金で残し、インフレに合わせて実質額を維持します。年金受給後も現金が下限として残ります。</li>
+            <li>受け取った<strong>分配金・配当</strong>は税引後で現金に入り、取り崩し時の売却額を軽減します（分配金の有無にかかわらず、投信・株はすべて取り崩し対象です）。</li>
+            <li>利益（評価額−取得原価）に設定の<strong>税率</strong>をかけた<strong>税引後</strong>の資産で表示します。NISA分は非課税として計算します。</li>
+            <li>退職から年金受給開始までは、年金なしで純粋に資産を取り崩す前提です。</li>
+          </ul>
+          <p class="plan-help-note">※ 試算であり、将来を保証するものではありません。前提は
+            <button class="linklike" id="plan-goto-settings" type="button">設定</button> で変更できます。</p>
+        </details>
+      </div>
+
+      <!-- 手元に置きたい現金の目安 -->
+      <div class="card plan-card" id="cash-advice-card">
+        <h2>💰 手元に置きたい現金の目安</h2>
+        <div id="cash-advice-body"></div>
+        <details class="plan-help">
+          <summary>この目安について</summary>
+          <p>
+            設定の「資産プランの前提」（生活費・退職・年金）から、現金（＋一部は債券）で確保しておくと安心な金額を計算します。
+            現金は増えないため、これを大きく超える現金は投資に回すのが一般的です。
+            生活費は「退職後の生活費」の設定値を使用します。
+          </p>
+          <p class="plan-help-note">※ 一般的な目安であり、投資助言ではありません。
+            <button class="linklike" id="cash-goto-settings" type="button">設定を開く</button></p>
+        </details>
       </div>
     </section>
 
@@ -523,6 +519,46 @@
           </div>
         </div>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>
+      </div>
+
+      <!-- 分配金・配当（インカム） -->
+      <div class="card settings-card" id="dividend-card">
+        <h2>💴 分配金・配当（インカム）</h2>
+        <p class="hint">
+          各商品の<strong>直近1年の実績</strong>から、現在の保有額ベースの年間インカムを計算します。
+          「受取」にした分は税引後のキャッシュ収入として<strong>資産プランのグラフ（現金）に反映</strong>されます。
+        </p>
+        <div id="dividend-body"></div>
+        <details class="plan-help">
+          <summary>計算の根拠</summary>
+          <ul>
+            <li><strong>投資信託</strong>：投信協会CSVの「分配金」（1万口あたり）の直近1年合計 ÷ 現在の基準価額</li>
+            <li><strong>個別株</strong>：配当実績（1株あたり）の直近1年合計 ÷ 現在の株価</li>
+            <li>無分配のインデックス投信は0になります。</li>
+            <li>特定口座の受取分は「利益への税率」で課税、<strong>NISAは非課税</strong>で計算します。</li>
+            <li>受取／再投資は商品ごとに切り替えられます。既定は「特定口座で分配実績あり＝受取」です。</li>
+          </ul>
+        </details>
+      </div>
+
+      <!-- バックアップ / データ移行 -->
+      <div class="card settings-card">
+        <h2>💾 バックアップ・データ移行</h2>
+        <p class="hint">
+          登録した商品・保有（口数・投資金額・口座・売却設定）・評価額の履歴・各種設定を
+          1つのJSONファイルに保存できます。Macを買い替えたときや、設定をやり直す前の保険にどうぞ。
+        </p>
+        <div class="backup-row">
+          <button id="export-btn" type="button">⬇️ バックアップを保存</button>
+          <button id="import-btn" type="button" class="ghost-btn">⬆️ バックアップから復元</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden>
+          <span id="backup-status" class="ai-test-status"></span>
+        </div>
+        <div class="settings-note">
+          <p>⚠️ <strong>復元すると現在の保有・評価額の履歴・設定は置き換わります。</strong>復元前に、いまの状態をバックアップしておくことをおすすめします。</p>
+          <p>🔑 <strong>APIキーもバックアップに含まれます</strong>（そのまま復元できるようにするため）。ファイル内に平文で保存されるので、<strong>他人に渡したり、クラウドやGitHubに置いたりしないでください</strong>。</p>
+          <p>※ 価格キャッシュは含まれません（起動時に自動で再取得されます）。</p>
+        </div>
       </div>
     </section>
 

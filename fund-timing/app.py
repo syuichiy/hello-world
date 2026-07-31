@@ -1469,6 +1469,33 @@ def api_ai_plan():
     return jsonify({"ok": True, "model": state["ai_model"], "prediction": data})
 
 
+# ================================================================== バックアップ
+@app.route("/api/export")
+def api_export():
+    """登録内容（商品・保有・評価額履歴・設定）をJSONファイルとしてダウンロードさせる。
+    価格キャッシュは再取得できるので含めない。設定はAPIキーも含めてそのまま復元できる
+    ようにしているため、書き出したファイルの取り扱いには注意が必要（画面にも明記）。"""
+    data = db.export_data()
+    body = json.dumps(data, ensure_ascii=False, indent=1)
+    fname = "fund-timing-backup-" + dt.date.today().strftime("%Y%m%d") + ".json"
+    return Response(body, mimetype="application/json; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.route("/api/import", methods=["POST"])
+def api_import():
+    """バックアップJSONから復元する（保有・評価額履歴は全置き換え）。"""
+    data = request.get_json(force=True, silent=True)
+    if data is None:
+        return jsonify({"ok": False, "error": "JSONを読み取れませんでした。"}), 400
+    try:
+        counts = db.import_data(data)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "counts": counts,
+                    "exported_at": data.get("exported_at", "")})
+
+
 # ------------------------------------------------------------------ 起動
 def _port_is_free(port, host="127.0.0.1"):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

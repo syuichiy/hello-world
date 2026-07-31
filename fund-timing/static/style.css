@@ -737,6 +737,25 @@ tr:hover .row-del { opacity: 1; }
 .cash-adv-judge.warn { color: var(--neutral); }
 .cash-adv-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
 
+/* ------------------------------------------------ 資産プラン：折りたたみ説明・ツールバー */
+.plan-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.plan-help { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.plan-help > summary {
+  cursor: pointer; font-size: 12px; font-weight: 700; color: var(--ink-soft);
+  list-style: none; padding: 2px 0; user-select: none;
+}
+.plan-help > summary::-webkit-details-marker { display: none; }
+.plan-help > summary::before { content: "▶ "; font-size: 9px; vertical-align: middle; }
+.plan-help[open] > summary::before { content: "▼ "; }
+.plan-help > summary:hover { color: var(--accent); }
+.plan-help p, .plan-help ul { font-size: 12px; color: var(--ink-soft); line-height: 1.7; margin: 8px 0 0; }
+.plan-help ul { padding-left: 18px; }
+.plan-help li { margin-bottom: 4px; }
+.plan-help-note { opacity: .9; }
+
+/* ------------------------------------------------ バックアップ */
+.backup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 10px; }
+
 /* ------------------------------------------------ 分配金・配当（インカム） */
 .div-table-wrap { overflow-x: auto; margin-top: 6px; }
 .div-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
@@ -838,6 +857,8 @@ main > section { display: block; }
 .plan-input:focus { outline: none; border-color: var(--accent); }
 .plan-note, .plan-eta, .plan-div-summary { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
 .plan-eta { font-weight: 700; color: var(--ink); }
+/* 取り崩しサマリーは説明文なので、達成予定(#plan-eta)より軽い見た目にする */
+#plan-dd-summary { font-weight: 400; color: var(--ink-soft); font-size: 12.5px; line-height: 1.75; }
 .plan-div-summary { font-weight: 600; color: var(--ink); }
 
 /* FIREゲージ */

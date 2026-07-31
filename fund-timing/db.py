@@ -636,3 +636,112 @@ def set_cached_series(isin: str, assoc_code: str, name: str, series: dict,
 def clear_cache(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         c.execute("DELETE FROM cache")
+
+
+# ------------------------------------------------------------------ バックアップ
+# 価格キャッシュ(cache)は再取得できるので含めない。
+# 設定はAPIキーも含めて出力する（そのまま復元できるようにするため）。
+# → バックアップファイルにはAPIキーが平文で入るので、取り扱いに注意すること。
+EXPORT_VERSION = 1
+
+
+def export_data(db_path: Optional[str] = None) -> dict:
+    """登録内容（商品・保有・評価額履歴・設定）をJSONにできるdictで返す。
+
+    保有は catalog の id ではなく isin/協会コードで参照する（取り込み先で
+    IDが違っても正しく紐づけられるようにするため）。
+    設定にはAPIキーも含まれるため、ファイルの共有・公開には注意が必要。"""
+    with _conn(db_path) as c:
+        catalog = [dict(r) for r in c.execute(
+            "SELECT name, isin, assoc_code, category, asset_class, kind FROM catalog ORDER BY id")]
+        watch = [dict(r) for r in c.execute(
+            "SELECT w.id AS watch_id, c.isin, c.assoc_code, w.sort_order, w.added_at, "
+            "w.units, w.sell_policy, w.broker, w.invested, w.label, w.account_type, w.dividend_mode "
+            "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id ORDER BY w.sort_order, w.id")]
+        hist = {}
+        for r in c.execute("SELECT watch_id, date, amount FROM amount_history ORDER BY watch_id, date"):
+            hist.setdefault(str(r["watch_id"]), {})[r["date"]] = r["amount"]
+        settings = {}
+        for r in c.execute("SELECT key, value FROM settings"):
+            try:
+                settings[r["key"]] = json.loads(r["value"])
+            except Exception:
+                settings[r["key"]] = r["value"]
+    return {
+        "app": "fund-timing",
+        "version": EXPORT_VERSION,
+        "exported_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "catalog": catalog,
+        "watchlist": watch,
+        "amount_history": hist,
+        "settings": settings,
+    }
+
+
+def import_data(data: dict, db_path: Optional[str] = None) -> dict:
+    """export_data のJSONから、商品・保有・評価額履歴・設定を復元する（全置き換え）。
+    取り込んだ件数を返す。設定はAPIキーも含めて復元する。"""
+    if not isinstance(data, dict) or data.get("app") != "fund-timing":
+        raise ValueError("このアプリのバックアップファイルではありません。")
+    ver = data.get("version")
+    if not isinstance(ver, int) or ver > EXPORT_VERSION:
+        raise ValueError(f"対応していないバックアップ形式です（version={ver}）。")
+    catalog = data.get("catalog") or []
+    watch = data.get("watchlist") or []
+    hist = data.get("amount_history") or {}
+    settings = data.get("settings") or {}
+    if not isinstance(catalog, list) or not isinstance(watch, list):
+        raise ValueError("バックアップの内容が壊れています。")
+
+    n_cat = n_watch = n_hist = 0
+    with _conn(db_path) as c:
+        # 保有・履歴は総入れ替え。catalog は既存を残しつつ不足分を追加する
+        c.execute("DELETE FROM amount_history")
+        c.execute("DELETE FROM watchlist")
+        for f in catalog:
+            isin = (f.get("isin") or "").strip().upper()
+            assoc = (f.get("assoc_code") or "").strip()
+            if not isin and not assoc:
+                continue
+            c.execute(
+                "INSERT OR IGNORE INTO catalog(name, isin, assoc_code, category, asset_class, kind) "
+                "VALUES (?,?,?,?,?,?)",
+                (f.get("name") or isin or assoc, isin, assoc, f.get("category") or "",
+                 f.get("asset_class") or "", f.get("kind") or "fund"))
+            n_cat += 1
+        id_map = {}          # 旧watch_id → 新watch_id（評価額履歴の付け替え用）
+        for w in watch:
+            isin = (w.get("isin") or "").strip().upper()
+            assoc = (w.get("assoc_code") or "").strip()
+            row = c.execute("SELECT id FROM catalog WHERE isin=? AND assoc_code=?",
+                            (isin, assoc)).fetchone()
+            if not row:
+                continue     # 対応する商品が無い保有はスキップ
+            cur = c.execute(
+                "INSERT INTO watchlist(catalog_id, sort_order, added_at, units, sell_policy, "
+                "broker, invested, label, account_type, dividend_mode) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (row["id"], int(w.get("sort_order") or 0),
+                 w.get("added_at") or dt.datetime.now().isoformat(timespec="seconds"),
+                 float(w.get("units") or 0), w.get("sell_policy") or "full",
+                 w.get("broker") or "", float(w.get("invested") or 0),
+                 w.get("label") or "", w.get("account_type") or "taxable",
+                 w.get("dividend_mode") or ""))
+            id_map[str(w.get("watch_id"))] = cur.lastrowid
+            n_watch += 1
+        for old_id, series in (hist or {}).items():
+            new_id = id_map.get(str(old_id))
+            if new_id is None or not isinstance(series, dict):
+                continue
+            for d, a in series.items():
+                try:
+                    amt = float(a)
+                except (TypeError, ValueError):
+                    continue
+                c.execute("INSERT OR REPLACE INTO amount_history(watch_id, date, amount) "
+                          "VALUES (?,?,?)", (new_id, d, amt))
+                n_hist += 1
+        for k, v in (settings or {}).items():
+            c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?,?)",
+                      (k, json.dumps(v)))
+    return {"catalog": n_cat, "watchlist": n_watch, "amount_history": n_hist,
+            "settings": len(settings)}

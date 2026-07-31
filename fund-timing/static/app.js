@@ -1642,16 +1642,20 @@ let lastAiModel = null;
 let aiLoadedOnce = false;
 
 async function loadSettings() {
+  await flushPlanSave();   // 入力中の前提変更を確定してから読み直す（上書き防止）
   try {
     const r = await fetch("/api/settings");
     const d = await r.json();
     if (d && d.ok) { aiSettings = d; renderSettingsUI(); }
   } catch (_) { /* 設定取得失敗時は既定(off)のまま */ }
-  // 資産プランの前提（取り崩し戦略）の値を設定画面へ反映
+  // 資産プランの前提（取り崩し戦略）の値と、分配金カードを設定画面へ反映
   try {
     const pr = await fetch("/api/plan");
     const pd = await pr.json();
     if (pd && pd.ok) {
+      planData = pd;
+      planData.plan = planData.plan || {};
+      renderDividends();          // 分配金・配当カード（設定画面内）
       const pl = pd.plan || {};
       $("set-cash").value = fmtInt(pl.cash || 0);
       $("set-bonds").value = fmtInt(pl.bonds || 0);
@@ -1782,6 +1786,67 @@ $("ai-model-toggle").addEventListener("click", (e) => {
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
 $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
+
+// ============================================================ バックアップ・復元
+function setBackupStatus(msg, kind) {
+  const el = $("backup-status");
+  if (el) { el.textContent = msg || ""; el.className = "ai-test-status " + (kind || ""); }
+}
+
+// バックアップの保存（サーバーが生成したJSONをそのままダウンロード）
+$("export-btn").addEventListener("click", async () => {
+  setBackupStatus("書き出し中… ⏳");
+  try {
+    const r = await fetch("/api/export");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    // Content-Disposition のファイル名を使う（無ければ日付から作る）
+    const cd = r.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename="([^"]+)"/);
+    const name = m ? m[1]
+      : "fund-timing-backup-" + new Date().toISOString().slice(0, 10).replace(/-/g, "") + ".json";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setBackupStatus(`✅ ${name} を保存しました`);
+  } catch (e) {
+    setBackupStatus("⚠️ 保存に失敗しました: " + e.message, "error");
+  }
+});
+
+// バックアップからの復元（ファイル選択 → 確認 → 取り込み）
+$("import-btn").addEventListener("click", () => $("import-file").click());
+$("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";                       // 同じファイルを続けて選べるようにする
+  if (!file) return;
+  if (!confirm("バックアップから復元します。\n\n現在の保有・評価額の履歴・設定は置き換わります。\nよろしいですか？")) {
+    setBackupStatus("復元をキャンセルしました");
+    return;
+  }
+  setBackupStatus("復元中… ⏳");
+  try {
+    const text = await file.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (_) { throw new Error("JSONとして読み取れませんでした。ファイルを確認してください。"); }
+    const r = await fetch("/api/import", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "取り込みに失敗しました");
+    const c = d.counts || {};
+    setBackupStatus(`✅ 復元しました（商品 ${c.catalog || 0} / 保有 ${c.watchlist || 0} / 履歴 ${c.amount_history || 0} 件）`);
+    toast("バックアップから復元しました");
+    // 画面全体を作り直す（一覧・設定・資産プラン）
+    await loadSettings();
+    await loadWatchlist();
+  } catch (err) {
+    setBackupStatus("⚠️ " + err.message, "error");
+  }
+});
 
 // 資産プランの前提（設定画面）— 入力を /api/plan に保存
 function bindPremise(id, key, comma) {
@@ -2064,8 +2129,20 @@ async function saveDividendMode(watchId, mode) {
     const d = await r.json();
     if (!d.ok) { toast(d.error || "保存に失敗しました", "error"); return; }
     toast("分配金の設定を更新しました");
-    await loadPlan();   // 合計・グラフを再計算
+    await refreshPlanData();   // 合計と資産プランのグラフを再計算
   } catch (_) { toast("保存に失敗しました", "error"); }
+}
+
+// /api/plan を取り直して、分配金カードと（表示中なら）資産プラン画面を描き直す
+async function refreshPlanData() {
+  try {
+    const d = await (await fetch("/api/plan")).json();
+    if (!d || !d.ok) return;
+    planData = d;
+    planData.plan = planData.plan || {};
+    renderDividends();
+    if (currentView === "plan") { renderPlanGoal(); renderCashAdvice(); renderPlanHistory(); }
+  } catch (_) {}
 }
 
 // --- 資産の推移＋将来予測と目標達成予定 ---
