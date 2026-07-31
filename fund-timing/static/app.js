@@ -2127,10 +2127,20 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
   let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
+  let divCash = 0;             // 現金のうち「受け取った分配金の累計」（グラフで分けて表示）
+  // 現金から取り崩すときは、まず分配金（インカム）から使い、元の保有現金は極力残す。
+  // ①生活防衛資金は保有現金で維持する、という前提と見た目を一致させるため。
+  const spendCash = (amt) => {
+    if (!(amt > 0) || !(cash > 0)) return;
+    divCash = Math.max(0, divCash - Math.min(divCash, amt));
+    cash = Math.max(0, cash - amt);
+  };
   const fundAT = () => fund - Math.max(0, fund - basis) * t;   // 投信の税引後評価額
   const snap = (age, dt) => {
     const fa = fundAT();
-    return { age, date: dt, cash: Math.round(cash), bonds: Math.round(bonds),
+    const dc = Math.min(cash, divCash);   // 分配金（累計）
+    return { age, date: dt, cash: Math.round(cash - dc), divcash: Math.round(dc),
+             bonds: Math.round(bonds),
              fund: Math.round(fa), v: Math.round(fa + cash + bonds) };
   };
   const pts = [snap(lp.age0, lastDate)];
@@ -2145,7 +2155,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       const gross = Math.min(fund, fund * dGrossM);   // 当月の受取分配（税引前）
       const net = fund * dNetM;                       // 税引後（現金へ）
       basis -= gross * (basis / fund); fund -= gross; // 原価も按分して減らす
-      cash += net;
+      cash += net; divCash += net;
       if (fund < 0) fund = 0;
       if (basis < 0) basis = 0;
     }
@@ -2161,7 +2171,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
-        let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
+        let take = Math.min(Math.max(0, cash - floorNow), w); spendCash(take); w -= take;
         if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; }
         if (w > 0 && fund > 0) {
           take = Math.min(fund, w);
@@ -2169,7 +2179,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
           if (fund < 0) fund = 0;
           if (basis < 0) basis = 0;
         }
-        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; }   // 最後の手段：生活防衛資金
+        if (w > 0) { take = Math.min(cash, w); spendCash(take); w -= take; }   // 最後の手段：生活防衛資金
       } else {                            // 年金＞生活費の余剰は運用資産へ（原価扱い）
         fund -= w; basis -= w;
       }
@@ -2453,7 +2463,10 @@ function renderLifeStages(o) {
     name, mode: "lines", line: { width: 0.6, color }, stackgroup: "assets", fillcolor: fillc,
     hovertemplate: `%{customdata[0]:.0f}歳<br>${name} %{y:,.0f} 円（%{customdata[1]}%）<extra></extra>`,
   });
-  if (cash0 > 0) traces.push(area("cash", "現金", "#0e9488", "rgba(14,148,136,0.60)"));
+  if (cash0 > 0) traces.push(area("cash", "保有現金", "#0e9488", "rgba(14,148,136,0.60)"));
+  // 受け取った分配金の累計は、保有現金と分けて表示する（どれだけインカムが貯まったか分かるように）
+  if (pts.some((p) => (p.divcash || 0) > 0))
+    traces.push(area("divcash", "分配金（累計）", "#f59e0b", "rgba(245,158,11,0.55)"));
   if (bonds0 > 0) traces.push(area("bonds", "債券", "#22c55e", "rgba(34,197,94,0.45)"));
   traces.push(area("fund", "投信（税引後）", "#5b8def", "rgba(91,141,239,0.38)"));
 
