@@ -405,11 +405,11 @@
         </div>
         <p class="hint">
           設定画面の「資産プランの前提」を設定すると、現在から寿命までの資産推移を
-          <strong>資産の内訳（下から <span style="color:#0e9488">現金</span>・<span style="color:#22c55e">債券</span>・<span style="color:#5b8def">投信（税引後）</span>）の積み上げ</strong>で表示します。
+          <strong>資産の内訳（下から <span style="color:#0e9488">保有現金</span>・<span style="color:#f59e0b">分配金（累計）</span>・<span style="color:#22c55e">債券</span>・<span style="color:#5b8def">投信（税引後）</span>）の積み上げ</strong>で表示します。
           <strong>積立は退職時点で停止</strong>し、退職後は<strong>現金→債券→投信の順に取り崩す</strong>ため、
           特に<span style="color:#6f7488">退職</span>〜<span style="color:#2f6fed">年金開始</span>の無年金期間に現金・債券の帯が減っていく様子が分かります。
           ただし<strong>①生活防衛資金（生活費×月数）は緊急時用に現金として残し、インフレに合わせて実質額を維持</strong>する前提のため、年金受給後も現金の帯が下限として残り、緩やかに増えていきます。
-          <span style="color:#f59e0b">分配金（その年の受取・税引後）</span>の点線は<strong>右側の軸</strong>で読みます。資産の残高（積み上げ）ではなく<strong>その年に受け取る収入</strong>を表すため、桁を合わせて別軸にしています。受け取った分配金は現金に入り、取り崩し時の売却額を軽減します。
+          <span style="color:#f59e0b">分配金（累計）</span>は「受取」に設定した商品の分配金・配当を税引後で積み上げたものです。取り崩す際は保有現金と分配金を同じ割合で減らします（按分）。
           退職後は期間が長いので横軸を圧縮しています。
           <button class="linklike" id="plan-goto-settings" type="button">設定を開く</button>
           <br>※退職から年金受給開始までの間は、年金なしで純粋に資産を取り崩す前提です。
