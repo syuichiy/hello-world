@@ -368,7 +368,6 @@ def api_watchlist_analyze():
 
 def _build_allocation(summaries):
     """資産クラスごとの配分と、理想ポートフォリオとのリバランス指標を返す。"""
-    import seed_funds
     ok_items = [s for s in summaries if s.get("ok")]
     if not ok_items:
         return None
@@ -482,7 +481,6 @@ def _build_rebalance_plan(summaries, classes, total, any_units):
     売りはテクニカルで高値圏の銘柄を優先し、安値圏の銘柄は損失回避のため除外。
     売却候補が全て安値圏のクラスは「見送り」にする（無理にリバランスしない）。
     """
-    import seed_funds
     if not any_units:
         return {"status": "no_units",
                 "summary": "保有口数を入力すると、具体的な売買アドバイスを表示します。"}
@@ -620,7 +618,6 @@ def _buy_candidate_for_class(summaries, cls_name):
 @app.route("/api/targets", methods=["GET", "POST"])
 def api_targets():
     """理想ポートフォリオ（クラス別目標%）の取得・保存。"""
-    import seed_funds
     if request.method == "GET":
         t = db.get_setting("targets", None) or dict(seed_funds.DEFAULT_TARGETS)
         return jsonify({"ok": True, "targets": t,
@@ -886,7 +883,7 @@ def api_actual_history():
                 kind = it.get("kind", "fund") or "fund"
                 series = _snapshot_series(it["isin"], it["assoc_code"], it["name"], kind, force)
                 dts, prs, _ = _apply_range(series, range_key)
-                div = 1.0 if kind != "stock" else 10000.0  # 投信:price×units/10000, 株:price×units
+                # 評価額 = 投信:基準価額×口数÷10000 / 株:株価×株数
                 factor = units / (10000.0 if kind != "stock" else 1.0)
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:

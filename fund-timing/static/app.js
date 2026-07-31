@@ -79,8 +79,9 @@ function showSkeleton() {
   const body = $("watch-body");
   if (!body.children.length) {
     const cell = (w) => `<td><span class="skel" style="width:${w}px"></span></td>`;
+    // 列: ファンド名/判定/強度/価格/口数/評価額/投資額/証券会社/口座/売却/騰落/値動き(+削除)
     body.innerHTML = Array.from({ length: 4 }, () =>
-      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(80)}${cell(100)}${cell(80)}${cell(60)}${cell(110)}<td></td></tr>`
+      `<tr>${cell(180)}${cell(90)}${cell(110)}${cell(80)}${cell(70)}${cell(80)}${cell(80)}${cell(100)}${cell(70)}${cell(80)}${cell(60)}${cell(90)}<td></td></tr>`
     ).join("");
   }
 }
