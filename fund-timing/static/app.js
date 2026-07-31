@@ -1589,7 +1589,7 @@ async function loadTrades() {
           <td class="num">${Number(t.units).toLocaleString()}</td>
           <td class="num">${Number(t.price).toLocaleString()}</td>
           <td class="num">${Math.round(tradeAmount(t.units, t.price)).toLocaleString()}</td>
-          <td class="num">${t.fee ? Number(t.fee).toLocaleString() : "—"}</td>
+          <td class="num${t.fee ? "" : " trade-fee-zero"}">${Number(t.fee || 0).toLocaleString()}</td>
           <td class="trade-note">${escapeHtml(t.note || "")}</td>
           <td><button class="row-del trade-del" data-trade="${t.id}" title="この記録を削除">✕</button></td>
         </tr>`).join("")}</tbody>
