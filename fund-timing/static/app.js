@@ -1642,34 +1642,26 @@ let lastAiModel = null;
 let aiLoadedOnce = false;
 
 async function loadSettings() {
-  await flushPlanSave();   // 入力中の前提変更を確定してから読み直す（上書き防止）
   try {
     const r = await fetch("/api/settings");
     const d = await r.json();
     if (d && d.ok) { aiSettings = d; renderSettingsUI(); }
   } catch (_) { /* 設定取得失敗時は既定(off)のまま */ }
   // 資産プランの前提（取り崩し戦略）の値と、分配金カードを設定画面へ反映
-  try {
-    const pr = await fetch("/api/plan");
-    const pd = await pr.json();
-    if (pd && pd.ok) {
-      planData = pd;
-      planData.plan = planData.plan || {};
-      renderDividends();          // 分配金・配当カード（設定画面内）
-      const pl = pd.plan || {};
-      $("set-cash").value = fmtInt(pl.cash || 0);
-      $("set-bonds").value = fmtInt(pl.bonds || 0);
-      $("set-current-age").value = pl.current_age || "";
-      $("set-retire-age").value = pl.retire_age || "";
-      $("set-pension-age").value = pl.pension_age || "";
-      $("set-pension-monthly").value = fmtInt(pl.pension_monthly || 0);
-      $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
-      $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
-      $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
-      $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
-      $("set-near-term").value = fmtInt(pl.near_term || 0);
-    }
-  } catch (_) {}
+  if (!(await fetchPlanData())) return;
+  renderDividends();             // 分配金・配当カード（設定画面内）
+  const pl = planData.plan;
+  $("set-cash").value = fmtInt(pl.cash || 0);
+  $("set-bonds").value = fmtInt(pl.bonds || 0);
+  $("set-current-age").value = pl.current_age || "";
+  $("set-retire-age").value = pl.retire_age || "";
+  $("set-pension-age").value = pl.pension_age || "";
+  $("set-pension-monthly").value = fmtInt(pl.pension_monthly || 0);
+  $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
+  $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
+  $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
+  $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
+  $("set-near-term").value = fmtInt(pl.near_term || 0);
 }
 
 function renderSettingsUI() {
@@ -1876,22 +1868,28 @@ let planRange = "1y";
 let lastPlanTotals = [];   // 直近取得した資産推移 [{date, amount}]
 let aiBand = null;         // AI予測の年率 {base, optimistic, pessimistic}（無ければ手動）
 
-async function loadPlan() {
-  await flushPlanSave();   // 設定画面での前提変更を確定させてから取得（即時反映）
+// /api/plan を取得して planData に格納する。保存待ちの前提変更があれば先に確定させる
+// （設定画面での変更が古い値で上書きされないようにするため）。成功したら true。
+async function fetchPlanData() {
+  await flushPlanSave();
   try {
-    const r = await fetch("/api/plan");
-    const d = await r.json();
-    if (d.ok) {
-      planData = d;
-      planData.plan = planData.plan || {};
-      $("plan-goal").value = fmtInt(planData.plan.goal || 0);
-      $("plan-monthly").value = fmtInt(planData.plan.monthly || 0);
-      $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
-      renderPlanGoal();
-      renderCashAdvice();
-      renderDividends();
-    }
-  } catch (_) {}
+    const d = await (await fetch("/api/plan")).json();
+    if (!d || !d.ok) return false;
+    planData = d;
+    planData.plan = planData.plan || {};
+    return true;
+  } catch (_) { return false; }
+}
+
+async function loadPlan() {
+  if (await fetchPlanData()) {
+    $("plan-goal").value = fmtInt(planData.plan.goal || 0);
+    $("plan-monthly").value = fmtInt(planData.plan.monthly || 0);
+    $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
+    renderPlanGoal();
+    renderCashAdvice();
+    renderDividends();
+  }
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
   const aiRow = $("plan-ai-row");
   if (aiRow) aiRow.hidden = (aiSettings.ai_model === "off");
@@ -1936,8 +1934,6 @@ function planReserve() {
 }
 // 投信評価額
 function planFundValue() { return planData.total_value || 0; }
-// 総資産（投信＋現金＋債券）
-function planTotalAssets() { return planFundValue() + planReserve(); }
 
 // --- 目標・進捗 ---
 function renderPlanGoal() {
@@ -2135,14 +2131,9 @@ async function saveDividendMode(watchId, mode) {
 
 // /api/plan を取り直して、分配金カードと（表示中なら）資産プラン画面を描き直す
 async function refreshPlanData() {
-  try {
-    const d = await (await fetch("/api/plan")).json();
-    if (!d || !d.ok) return;
-    planData = d;
-    planData.plan = planData.plan || {};
-    renderDividends();
-    if (currentView === "plan") { renderPlanGoal(); renderCashAdvice(); renderPlanHistory(); }
-  } catch (_) {}
+  if (!(await fetchPlanData())) return;
+  renderDividends();
+  if (currentView === "plan") { renderPlanGoal(); renderCashAdvice(); renderPlanHistory(); }
 }
 
 // --- 資産の推移＋将来予測と目標達成予定 ---
@@ -2157,15 +2148,6 @@ function projSeries(cur, monthly, annual, months) {
   const rm = projMonthlyRate(annual); const out = [cur]; let v = cur;
   for (let m = 1; m <= months; m++) { v = v * (1 + rm) + monthly; out.push(Math.round(v)); }
   return out;
-}
-// 目標到達までの月数（未到達は -1、達成不能は -1、既に達成は 0）
-function projMonthsToGoal(cur, monthly, annual, goal, cap) {
-  if (goal <= 0) return -1;
-  if (cur >= goal) return 0;
-  if (monthly <= 0 && annual <= 0) return -1;
-  const rm = projMonthlyRate(annual); let v = cur;
-  for (let m = 1; m <= cap; m++) { v = v * (1 + rm) + monthly; if (v >= goal) return m; }
-  return -1;
 }
 function achLabel(lastDate, m) {
   if (m < 0) return "40年以内に届かず";

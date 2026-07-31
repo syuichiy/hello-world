@@ -137,6 +137,11 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
     kind="fund" は投信協会CSV（基準価額）、kind="stock" は株価（Stooq→Yahoo）。
     取得失敗は10分間キャッシュし、画面更新のたびに再アクセスして
     データ源の回数制限を消費しないようにする（「最新に更新」なら再試行）。
+
+    キャッシュは約12時間で切れる。以前は価格推移の表示中にセッション内で固定していたが、
+    アプリを起動したままだと翌日公開された基準価額（＝昨日分）がいつまでも反映されない
+    不具合があったため固定をやめた。「↻最新に更新」・アプリ再起動・12時間経過のいずれかで
+    キャッシュが更新され、表やグラフにも反映される。
     """
     isin = (isin or "").strip().upper()
     assoc = (assoc or "").strip()
@@ -783,14 +788,6 @@ def _persist_today_value(watch_id, date, value):
         return False
 
 
-def _snapshot_series(isin, assoc, name, kind, force=False):
-    """価格シリーズを取得する（内部DBキャッシュ経由・約12時間）。
-    以前はセッション内で固定していたが、アプリを起動したままだと翌日公開された
-    基準価額（＝昨日分）がいつまでも反映されない不具合があったため固定をやめた。
-    「↻最新に更新」やアプリ再起動、12時間経過でキャッシュが更新されると価格推移にも反映される。"""
-    return load_series(isin, assoc, name, force=force, kind=kind)
-
-
 def _latest_valid(dates, values):
     """末尾から見て最初の (日付, 値)（値がNoneでないもの）を返す。無ければ (None, None)。"""
     for d, v in zip(reversed(dates or []), reversed(values or [])):
@@ -851,7 +848,7 @@ def api_price_history():
             continue
         kind = it.get("kind", "fund") or "fund"
         try:
-            series = _snapshot_series(it["isin"], it["assoc_code"], name, kind, force)
+            series = load_series(it["isin"], it["assoc_code"], name, force=force, kind=kind)
             dates, prices, _ = _apply_range(series, range_key)
             pts = [(d, p) for d, p in zip(dates, prices) if p is not None]
             if len(pts) < 2:
@@ -901,7 +898,7 @@ def api_actual_history():
         if units > 0 and (it.get("isin") or it.get("assoc_code")):
             try:
                 kind = it.get("kind", "fund") or "fund"
-                series = _snapshot_series(it["isin"], it["assoc_code"], it["name"], kind, force)
+                series = load_series(it["isin"], it["assoc_code"], it["name"], force=force, kind=kind)
                 dts, prs, _ = _apply_range(series, range_key)
                 # 評価額 = 投信:基準価額×口数÷10000 / 株:株価×株数
                 factor = units / (10000.0 if kind != "stock" else 1.0)
