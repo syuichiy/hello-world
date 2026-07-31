@@ -165,6 +165,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         cols = [r["name"] for r in c.execute("PRAGMA table_info(watchlist)")]
         if "account_type" not in cols:
             c.execute("ALTER TABLE watchlist ADD COLUMN account_type TEXT DEFAULT 'taxable'")
+        # マイグレーション: 分配金/配当の受け取り方（''=自動判定 / receive=受取 / reinvest=再投資）
+        if "dividend_mode" not in cols:
+            c.execute("ALTER TABLE watchlist ADD COLUMN dividend_mode TEXT DEFAULT ''")
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -494,7 +497,7 @@ def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
             "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, "
-            "w.invested, w.label, w.account_type, c.* "
+            "w.invested, w.label, w.account_type, w.dividend_mode, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -539,6 +542,15 @@ def set_account_type(watch_id: int, account_type: str, db_path: Optional[str] = 
     with _conn(db_path) as c:
         c.execute("UPDATE watchlist SET account_type=? WHERE id=?", (t, watch_id))
     return t
+
+
+def set_dividend_mode(watch_id: int, mode: str, db_path: Optional[str] = None):
+    """分配金/配当の受け取り方を設定する。
+    ''=自動判定（特定かつ分配ありは受取／それ以外は再投資）/ receive=受取 / reinvest=再投資。"""
+    m = mode if mode in ("receive", "reinvest") else ""
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET dividend_mode=? WHERE id=?", (m, watch_id))
+    return m
 
 
 def set_broker(watch_id: int, broker: str, db_path: Optional[str] = None):

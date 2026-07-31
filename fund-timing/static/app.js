@@ -1824,6 +1824,7 @@ async function loadPlan() {
       $("plan-return").value = planData.plan.return_rate != null ? planData.plan.return_rate : "";
       renderPlanGoal();
       renderCashAdvice();
+      renderDividends();
     }
   } catch (_) {}
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
@@ -1980,6 +1981,93 @@ function renderCashAdvice() {
 }
 $("cash-goto-settings").addEventListener("click", () => switchView("settings"));
 
+// --- 分配金・配当（インカム） ---
+function renderDividends() {
+  const body = $("dividend-body");
+  if (!body) return;
+  const dv = planData.dividends || {};
+  const items = (dv.items || []).slice();
+  const paying = items.filter((it) => (it.annual || 0) > 0);
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  if (!paying.length) {
+    const anyOk = items.length > 0;
+    body.innerHTML = `<p class="empty-watch">${anyOk
+      ? "現在の保有商品には、直近1年で分配金・配当の実績がありません（無分配のインデックス投信が中心です）。"
+      : "銘柄一覧で各商品の口数を入力すると、分配金・配当の実績を集計します。"}</p>`;
+    return;
+  }
+  // 受取が多い順に並べる
+  paying.sort((a, b) => (b.annual || 0) - (a.annual || 0));
+
+  const modeSelect = (it) => {
+    const opt = (v, label) => `<option value="${v}"${it.mode_raw === v ? " selected" : ""}>${label}</option>`;
+    // 自動時は実際に適用されるモードを併記
+    const autoLabel = it.mode === "receive" ? "自動（受取）" : "自動（再投資）";
+    return `<select class="div-mode-select div-mode-${it.mode}" data-watch="${it.watch_id}"
+        title="分配金の受け取り方。受取＝税引後キャッシュとして資産グラフの現金に反映。再投資＝運用資産に留まる想定">
+      ${opt("", autoLabel)}${opt("receive", "受取")}${opt("reinvest", "再投資")}
+    </select>`;
+  };
+  const basis = (it) => {
+    const unit = it.kind === "stock" ? "1株" : "1万口";
+    const price = it.latest_price != null ? Number(it.latest_price).toLocaleString() + "円" : "—";
+    if (!(it.div_ttm > 0)) return "分配金なし（無分配）";
+    return `${unit}あたり年 ${Number(it.div_ttm).toLocaleString()}円<span class="div-basis-sub">${it.kind === "stock" ? "配当" : "分配金"}実績 ÷ ${price}</span>`;
+  };
+  const acctChip = (it) => it.account_type === "nisa"
+    ? '<span class="acct-chip acct-nisa">NISA</span>' : '<span class="acct-chip">特定</span>';
+
+  let rows = paying.map((it) => `
+    <tr>
+      <td class="div-name">${escapeHtml(it.name)}${it.broker ? `<span class="div-broker">${escapeHtml(it.broker)}</span>` : ""}</td>
+      <td class="num">${yen(it.annual)}</td>
+      <td class="num">${it.yield}%</td>
+      <td>${acctChip(it)}</td>
+      <td>${modeSelect(it)}</td>
+      <td class="num">${it.mode === "receive" ? yen(it.after_tax) : "<span class=\"div-reinv\">再投資</span>"}</td>
+      <td class="div-basis">${basis(it)}</td>
+    </tr>`).join("");
+
+  const nonPay = items.length - paying.length;
+  const totalAnnual = paying.reduce((s, it) => s + (it.annual || 0), 0);
+  body.innerHTML = `
+    <div class="div-table-wrap">
+      <table class="div-table">
+        <thead><tr>
+          <th>商品</th><th class="num">年間（保有ベース）</th><th class="num">利回り</th>
+          <th>口座</th><th>受取／再投資</th><th class="num">税引後受取</th><th>根拠</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="div-totals">
+      <div class="div-total-row"><span>分配金・配当の年間合計（税引前・保有ベース）</span><b>${yen(totalAnnual)}</b></div>
+      <div class="div-total-row div-total-recv"><span>うち「受取」の税引後キャッシュ収入（年）</span><b>${yen(dv.receive_net || 0)}</b></div>
+      <div class="div-total-row div-total-sub"><span>うち「再投資」（運用資産に留まる想定・年）</span><b>${yen(dv.reinvest_total || 0)}</b></div>
+      ${(dv.tax || 0) > 0 ? `<div class="div-total-row div-total-sub"><span>受取分にかかる税金（年・特定口座分）</span><b>${yen(dv.tax || 0)}</b></div>` : ""}
+    </div>
+    <p class="hint">${nonPay > 0 ? `※ 他 ${nonPay} 件は無分配（分配金なし）のため表に含めていません。` : ""}
+      「受取」の税引後キャッシュ収入は、上の「資産の推移」グラフで<strong>現金の帯</strong>として積み上がり、取り崩し時の売却額を軽減します。
+      受取／再投資は商品ごとに切り替えられます（特定口座で自動再投資でない商品は「受取」が既定です）。</p>`;
+
+  body.querySelectorAll(".div-mode-select").forEach((sel) => {
+    sel.addEventListener("change", (e) => saveDividendMode(e.target.dataset.watch, e.target.value));
+  });
+}
+
+async function saveDividendMode(watchId, mode) {
+  try {
+    const r = await fetch("/api/watchlist/dividend-mode", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: Number(watchId), mode }),
+    });
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || "保存に失敗しました", "error"); return; }
+    toast("分配金の設定を更新しました");
+    await loadPlan();   // 合計・グラフを再計算
+  } catch (_) { toast("保存に失敗しました", "error"); }
+}
+
 // --- 資産の推移＋将来予測と目標達成予定 ---
 function addMonths(dateStr, n) {
   const d = new Date(dateStr);
@@ -2027,10 +2115,15 @@ function planLifePlan() {
 // 税率(tax)が指定された場合、pts の v は「利益に課税した後（売却して手にする）」の額。
 //   運用資産の含み益 = 評価額 − 取得原価。取得原価は積立で増え、取り崩しで按分して減る。
 //   現金・債券(reserve)には課税しない。
-function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor) {
+// div.grossY/netY: 「受取」に設定した分配金・配当の年率（運用資産に対する割合）。
+//   想定年利は総リターン（分配込み）とみなし、受取分は運用資産から出て税引後キャッシュ（現金）
+//   に振り替わる。再投資分は運用資産に留まり総リターンに含まれる想定なので別加算しない。
+function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor, div) {
   const rm = projMonthlyRate(annual);
   const t = tax || 0;
   const floor = emFloor || 0;   // ①生活防衛資金：緊急時用に現金として残す下限
+  const dGrossM = (div && div.grossY ? div.grossY : 0) / 12;   // 受取分配（税引前・月率）
+  const dNetM = (div && div.netY ? div.netY : 0) / 12;         // 受取分配（税引後・月率）
   let fund = cur;              // 運用資産（投信＋株）：想定年利で成長
   let basis = (basis0 != null) ? basis0 : cur;   // 取得原価
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
@@ -2047,6 +2140,15 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
     fund = fund * (1 + rm);              // 運用資産のみ成長（原価は変わらない＝含み益が増える）
+    // 受取分配金：運用資産から出て、税引後は現金へ（グラフの現金の帯に反映）。
+    if (dGrossM > 0 && fund > 0) {
+      const gross = Math.min(fund, fund * dGrossM);   // 当月の受取分配（税引前）
+      const net = fund * dNetM;                       // 税引後（現金へ）
+      basis -= gross * (basis / fund); fund -= gross; // 原価も按分して減らす
+      cash += net;
+      if (fund < 0) fund = 0;
+      if (basis < 0) basis = 0;
+    }
     if (age < lp.retire) {
       fund += monthly; basis += monthly;   // 積立は原価
     } else {
@@ -2286,7 +2388,10 @@ function renderLifeStages(o) {
   // ①生活防衛資金（生活費×月数）は取り崩さず現金として残す下限。手元現金を上限にする。
   const emMonths = (planData.plan.emergency_months != null) ? planData.plan.emergency_months : 6;
   const emFloor = Math.min(cash0, (lp.spend || 0) * emMonths);
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate, emFloor);
+  // 「受取」分配金の年率（税引前・税引後）。受取分は税引後キャッシュとして現金の帯に積み上がる。
+  const dv = planData.dividends || {};
+  const div = { grossY: dv.receive_gross_yield || 0, netY: dv.receive_net_yield || 0 };
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate, emFloor, div);
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -2424,6 +2529,7 @@ function renderLifeStages(o) {
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
   if (emFloor > 0) msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。`;
+  if ((dv.receive_net || 0) > 0) msg += `また「受取」に設定した分配金・配当（現在の保有で税引後 約 ${Math.round(dv.receive_net).toLocaleString()} 円/年）を税引後キャッシュとして現金の帯に加え、取り崩し時の売却額を軽減しています。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;

@@ -736,6 +736,27 @@ tr:hover .row-del { opacity: 1; }
 .cash-adv-judge { margin: 12px 0 0; font-size: 13px; font-weight: 700; line-height: 1.6; }
 .cash-adv-judge.warn { color: var(--neutral); }
 .cash-adv-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+
+/* ------------------------------------------------ 分配金・配当（インカム） */
+.div-table-wrap { overflow-x: auto; margin-top: 6px; }
+.div-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
+.div-table th, .div-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.div-table th { font-size: 11px; color: var(--ink-soft); font-weight: 700; white-space: nowrap; }
+.div-table td.num, .div-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.div-name { font-weight: 600; line-height: 1.35; }
+.div-broker { display: block; font-size: 10.5px; color: var(--ink-soft); font-weight: 400; }
+.div-basis { font-size: 11px; color: var(--ink-soft); line-height: 1.35; }
+.div-basis-sub { display: block; font-size: 10px; opacity: .85; }
+.div-reinv { color: var(--ink-soft); font-weight: 600; }
+.acct-chip.acct-nisa { background: rgba(18,131,59,.10); color: var(--up-text); border-color: rgba(18,131,59,.35); }
+.div-mode-select { font-size: 12px; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: inherit; }
+.div-mode-select.div-mode-receive { color: var(--up-text); border-color: rgba(18,131,59,.4); background: rgba(18,131,59,.06); }
+.div-totals { margin-top: 12px; border-top: 2px solid var(--line); padding-top: 10px; }
+.div-total-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 2px; font-size: 13px; }
+.div-total-row b { font-variant-numeric: tabular-nums; font-size: 14.5px; }
+.div-total-recv b { color: var(--up-text); font-size: 16px; }
+.div-total-sub { font-size: 12px; color: var(--ink-soft); }
+.div-total-sub b { font-size: 13px; }
 .pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
 .pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }

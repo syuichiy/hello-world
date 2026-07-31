@@ -30,9 +30,37 @@ class FundSeries:
     dates: list          # "YYYY-MM-DD" の文字列
     nav: list            # 基準価額(円) float
     net_assets: list     # 純資産総額(百万円) float
+    dists: list = None   # 分配金/配当（投信:1万口あたり円 / 株:1株あたり円）。決算日以外は0
+
+    def __post_init__(self):
+        if self.dists is None:
+            self.dists = [0.0] * len(self.dates)
 
     def to_dict(self):
         return asdict(self)
+
+
+def ttm_dividend(dates, dists) -> float:
+    """直近1年（末尾日から365日）の分配金/配当の合計を返す。
+    投信は「1万口あたりの分配金」、株は「1株あたりの配当」の年間実績になる。
+    データが無ければ0。"""
+    if not dates or not dists:
+        return 0.0
+    try:
+        last = dt.date.fromisoformat(dates[-1])
+    except (ValueError, TypeError):
+        return 0.0
+    cutoff = last - dt.timedelta(days=365)
+    total = 0.0
+    for d, v in zip(dates, dists):
+        if not v:
+            continue
+        try:
+            if dt.date.fromisoformat(d) > cutoff:
+                total += float(v)
+        except (ValueError, TypeError):
+            continue
+    return round(total, 4)
 
 
 class FundDataError(Exception):
@@ -163,6 +191,11 @@ def parse_csv(text: str, isin: str, assoc_code: str, name: str = "") -> FundSeri
     date_col = _find_column(df.columns, ["年月日", "日付", "基準日"])
     nav_col = _find_column(df.columns, ["基準価額"])
     asset_col = _find_column(df.columns, ["純資産"])
+    # 「分配金」列（決算日に1万口あたりの分配金が入る。多くの行は0/空）。
+    # 「分配金再投資基準価額」など価額系の列を誤検出しないよう明示的に除外する。
+    dist_col = next((c for c in df.columns
+                     if "分配金" in str(c) and "再投資" not in str(c) and "価額" not in str(c)),
+                    None)
 
     if date_col is None or nav_col is None:
         raise FundDataError(
@@ -176,7 +209,8 @@ def parse_csv(text: str, isin: str, assoc_code: str, name: str = "") -> FundSeri
         if d is None or nav is None:
             continue
         assets = _to_float(r[asset_col]) if asset_col else None
-        rows.append((d, nav, assets))
+        dist = (_to_float(r[dist_col]) if dist_col else None) or 0.0
+        rows.append((d, nav, assets, dist))
 
     if not rows:
         raise FundDataError("有効な価格データが1件もありませんでした。")
@@ -185,6 +219,7 @@ def parse_csv(text: str, isin: str, assoc_code: str, name: str = "") -> FundSeri
     dates = [r[0].isoformat() for r in rows]
     nav_list = [r[1] for r in rows]
     assets_list = [r[2] if r[2] is not None else float("nan") for r in rows]
+    dist_list = [r[3] for r in rows]
 
     return FundSeries(
         isin=isin,
@@ -193,6 +228,7 @@ def parse_csv(text: str, isin: str, assoc_code: str, name: str = "") -> FundSeri
         dates=dates,
         nav=nav_list,
         net_assets=assets_list,
+        dists=dist_list,
     )
 
 
@@ -214,12 +250,19 @@ def get_fund_series(isin: str, assoc_code: str, name: str = "") -> FundSeries:
 STOCK_CSV_URL = "https://stooq.com/q/d/l/"
 
 _stock_fetch_override = None
+_stock_div_override = None
 
 
 def set_stock_override(func):
     """デモ/テスト用に、株価CSVテキストを返す関数へ差し替える。"""
     global _stock_fetch_override
     _stock_fetch_override = func
+
+
+def set_stock_dividend_override(func):
+    """デモ/テスト用に、配当実績 [(YYYY-MM-DD, 1株あたり配当円), ...] を返す関数へ差し替える。"""
+    global _stock_div_override
+    _stock_div_override = func
 
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -374,11 +417,41 @@ def _fetch_stock_yfinance(ticker: str):
     return rows
 
 
+def _fetch_stock_dividends(ticker: str):
+    """個別株の配当実績 [(date, 1株あたり配当円), ...] を取得する（best-effort）。
+    yfinance の .dividends（配当支払い履歴）を使う。取れなければ空リストを返す。"""
+    if _stock_div_override is not None:
+        out = []
+        for d, amt in (_stock_div_override(ticker) or []):
+            dd = _parse_date(d)
+            a = _to_float(amt)
+            if dd is not None and a:
+                out.append((dd, a))
+        return out
+    symbol = ticker.upper()
+    if symbol.endswith(".JP"):
+        symbol = symbol[:-3] + ".T"
+    try:
+        import yfinance as yf
+        s = yf.Ticker(symbol).dividends
+    except Exception:
+        return []
+    out = []
+    try:
+        for idx, amt in s.items():
+            if amt and float(amt) > 0:
+                out.append((idx.date(), float(amt)))
+    except Exception:
+        return []
+    return out
+
+
 def get_stock_series(ticker: str, name: str = "") -> FundSeries:
     """個別株の日次終値を取得する（ticker例: '6501.JP'）。
 
     Stooq → yfinance → Yahoo直接 の順に試す
     （Stooqは回数制限、Yahoo直接はTLS指紋によるbot判定で失敗することがあるため）。
+    配当実績（1株あたり）も取得できれば dists に載せる（各日付は0、権利落ち日に配当額）。
     """
     ticker = (ticker or "").strip()
     if not ticker:
@@ -402,9 +475,28 @@ def get_stock_series(ticker: str, name: str = "") -> FundSeries:
                                 "時間をおいて「最新に更新」をお試しください。")
 
     rows.sort(key=lambda x: x[0])
+    dates = [r[0].isoformat() for r in rows]
+    # 配当実績を日付に載せる（同日が無ければ直前の営業日に寄せる）。取得失敗時は全て0。
+    dists = [0.0] * len(dates)
+    try:
+        divs = _fetch_stock_dividends(ticker)
+    except Exception:
+        divs = []
+    if divs:
+        idx_by_date = {d: i for i, d in enumerate(dates)}
+        for dd, amt in divs:
+            iso = dd.isoformat()
+            i = idx_by_date.get(iso)
+            if i is None:
+                # 権利落ち日が価格データに無い場合は、それ以前の最も新しい営業日に寄せる
+                i = next((k for k in range(len(dates) - 1, -1, -1) if dates[k] <= iso), None)
+            if i is not None:
+                dists[i] += amt
+
     return FundSeries(
         isin=ticker.upper(), assoc_code="", name=name or ticker.upper(),
-        dates=[r[0].isoformat() for r in rows],
+        dates=dates,
         nav=[r[1] for r in rows],
         net_assets=[float("nan")] * len(rows),
+        dists=dists,
     )

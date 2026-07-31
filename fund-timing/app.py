@@ -286,13 +286,20 @@ def _summarize_fund(row, range_key, force=False):
         # 時間軸別スコア（ポートフォリオ全体判定用・全履歴で計算）
         hz_full = signal_mod.analyze_horizons(series["dates"], series["nav"])
         hz = [{"key": h["key"], "ok": h["ok"], "score": h.get("score")} for h in hz_full]
+        # 分配金/配当：協会CSVの分配金列（株はYahoo等の配当実績）から直近1年の実績を集計。
+        # 利回り = 直近1年の分配金(1万口/1株あたり) ÷ 現在の基準価額/株価。
+        latest = a.stats.get("latest_price")
+        div_ttm = fund_data.ttm_dividend(series.get("dates"), series.get("dists"))
+        div_yield = (div_ttm / latest) if (latest and div_ttm) else 0.0
         summary.update({
             "ok": True,
             "verdict": a.verdict,
             "verdict_label": a.verdict_label,
             "score": a.score,
-            "latest_price": a.stats.get("latest_price"),
+            "latest_price": latest,
             "latest_date": dates[-1],
+            "div_ttm": round(div_ttm, 2),      # 直近1年の分配金（1万口/1株あたり・円）
+            "div_yield": round(div_yield, 5),  # 分配金利回り（実績・小数）
             "rsi": a.stats.get("rsi"),
             "deviation_pct": a.stats.get("deviation_pct"),
             "uptrend": (a.stats.get("sma_short") or 0) >= (a.stats.get("sma_long") or 0),
@@ -322,6 +329,7 @@ def _build_summaries(range_key, force=False):
         s["sell_policy"] = it.get("sell_policy") or "full"
         s["broker"] = it.get("broker") or ""
         s["account_type"] = it.get("account_type") or "taxable"   # nisa=非課税 / taxable=特定
+        s["dividend_mode"] = it.get("dividend_mode") or ""         # ''=自動 / receive / reinvest
         hist = histories.get(wid, {})
 
         stock = s.get("kind") == "stock"
@@ -1235,7 +1243,75 @@ def api_ai_advice():
 
 
 # ================================================================== 資産プラン
-# 積立シミュレーション・分配金カレンダー・目標(FIRE)進捗のための設定と現況を返す。
+def _dividend_effective_mode(s, annual):
+    """分配金の受け取り方を確定する。手動設定が無ければ自動判定：
+    特定口座で分配実績があれば「受取」、それ以外（NISA・無分配）は「再投資」。
+    （NISAは自動再投資、無分配インデックスは分配自体が無いため）。"""
+    raw = s.get("dividend_mode") or ""
+    if raw in ("receive", "reinvest"):
+        return raw
+    is_taxable = (s.get("account_type") != "nisa")
+    return "receive" if (is_taxable and annual > 0) else "reinvest"
+
+
+def _build_dividends(summaries, base_tax):
+    """保有中の分配金/配当（現在保有ベース・年額）を集計する。
+    base_tax は利益への税率（小数）。受取分の税引後額と、グラフ用の利回りを返す。"""
+    items = []
+    total_value = sum((s.get("value") or 0) for s in summaries if s.get("ok"))
+    recv_gross = recv_net = reinvest_total = tax_total = 0.0
+    for s in summaries:
+        if not s.get("ok"):
+            continue
+        val = s.get("value") or 0
+        dy = s.get("div_yield") or 0
+        annual = round(dy * val)
+        eff = _dividend_effective_mode(s, annual)
+        is_taxable = (s.get("account_type") != "nisa")
+        # 分配金への課税：特定口座の普通分配金は税率どおり、NISAは非課税
+        after_tax = round(annual * (1 - base_tax)) if is_taxable else annual
+        if annual > 0 and eff == "receive":
+            recv_gross += annual
+            recv_net += after_tax
+            tax_total += (annual - after_tax)
+        elif annual > 0:
+            reinvest_total += annual
+        items.append({
+            "watch_id": s.get("watch_id"), "name": s.get("name"),
+            "broker": s.get("broker") or "", "account": s.get("account") or "",
+            "kind": s.get("kind") or "fund",
+            "account_type": s.get("account_type") or "taxable",
+            "value": round(val), "div_ttm": s.get("div_ttm") or 0,
+            "latest_price": s.get("latest_price"),
+            "yield": round(dy * 100, 2), "annual": annual,
+            "after_tax": after_tax if annual > 0 else 0,
+            "mode_raw": s.get("dividend_mode") or "",
+            "mode": eff, "taxable": is_taxable,
+        })
+    # グラフ用の利回り（総運用資産に対する年率）。受取のみがキャッシュ収入になる。
+    gy = (recv_gross / total_value) if total_value > 0 else 0.0
+    ny = (recv_net / total_value) if total_value > 0 else 0.0
+    return {
+        "items": items,
+        "receive_gross": round(recv_gross), "receive_net": round(recv_net),
+        "reinvest_total": round(reinvest_total), "tax": round(tax_total),
+        "receive_gross_yield": round(gy, 6), "receive_net_yield": round(ny, 6),
+        "base_tax": round(base_tax, 5),
+    }
+
+
+@app.route("/api/watchlist/dividend-mode", methods=["POST"])
+def api_watchlist_dividend_mode():
+    """分配金の受け取り方を設定する（receive=受取 / reinvest=再投資 / 空=自動判定）。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    saved = db.set_dividend_mode(int(watch_id), data.get("mode") or "")
+    return jsonify({"ok": True, "mode": saved})
+
+
+# 積立シミュレーション・分配金・目標(FIRE)進捗のための設定と現況を返す。
 @app.route("/api/plan", methods=["GET", "POST"])
 def api_plan():
     if request.method == "POST":
@@ -1274,11 +1350,13 @@ def api_plan():
         else:
             taxable_value += val; taxable_invested += inv
     plan = db.get_setting("plan", {}) or {}
+    base_tax = (plan.get("tax") if plan.get("tax") is not None else 20.315) / 100.0
+    dividends = _build_dividends(summaries, base_tax)
     return jsonify({"ok": True, "total_value": round(total_value),
                     "total_invested": round(total_invested),
                     "nisa_value": round(nisa_value), "nisa_invested": round(nisa_invested),
                     "taxable_value": round(taxable_value), "taxable_invested": round(taxable_invested),
-                    "holdings": holdings, "plan": plan})
+                    "holdings": holdings, "plan": plan, "dividends": dividends})
 
 
 _AI_PLAN_PROMPT = (
@@ -1293,6 +1371,8 @@ _AI_PLAN_PROMPT = (
     "現金(cash)・債券(bonds)がある場合は、それらを含めた総資産(current_total)で見立て、"
     "退職〜年金開始までの取り崩しに現金・債券のクッションをどう使うか等にも触れてください。"
     "現金・債券は値上がりを見込まない安定資産である点に留意する。\n"
+    "dividend_income_after_tax_yearly（受取に設定した分配金・配当の税引後の年間キャッシュ収入）が"
+    "ある場合は、取り崩し期にこのインカムが売却額を軽減する点に comment_drawdown で触れてください。\n"
     "これは機械的な参考情報であり、将来を保証する投資助言ではありません。"
 )
 
@@ -1330,11 +1410,17 @@ def api_ai_plan():
     plan = db.get_setting("plan", {}) or {}
     _fund_total = round(sum((s.get("value") or 0) for s in summaries if s.get("ok")))
     _cash, _bonds = round(plan.get("cash", 0) or 0), round(plan.get("bonds", 0) or 0)
+    _base_tax = (plan.get("tax") if plan.get("tax") is not None else 20.315) / 100.0
+    _div = _build_dividends(summaries, _base_tax)
     ctx = {
         "current_fund_value": _fund_total,
         "cash": _cash,
         "bonds": _bonds,
         "current_total": _fund_total + _cash + _bonds,   # 投信＋現金＋債券
+        # 「受取」に設定した分配金・配当の税引後キャッシュ収入（年・現在保有ベース）。
+        # 取り崩し期に売却額を軽減する。再投資分は運用資産に留まる想定。
+        "dividend_income_after_tax_yearly": _div.get("receive_net", 0),
+        "dividend_reinvested_yearly": _div.get("reinvest_total", 0),
         "goal": plan.get("goal", 0),
         "monthly_contribution": plan.get("monthly", 0),
         "life_plan": {
@@ -1519,6 +1605,7 @@ def main():
         import demo_data
         fund_data.set_fetch_override(demo_data.demo_csv)
         fund_data.set_stock_override(demo_data.demo_stock_csv)
+        fund_data.set_stock_dividend_override(demo_data.demo_stock_dividends)
         if not args.db:
             db.DB_PATH = db.os.path.join(db.os.path.dirname(db.DB_PATH), "funds.demo.db")
 
