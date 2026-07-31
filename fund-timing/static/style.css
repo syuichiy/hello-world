@@ -232,19 +232,20 @@ main { max-width: 980px; margin: 0 auto; padding: 10px 16px 48px; }
 
 /* 銘柄一覧テーブル：列幅を固定してレイアウト崩れ（列の潰れ・折返し）を防ぐ。
    ランキング表(.ranking-card内)は列構成が違うため対象外。 */
-.table-card .watch-table { table-layout: fixed; min-width: 1274px; }
-.table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 200px; }
-.table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 116px; }
-.table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 130px; }
-.table-card .watch-table th:nth-child(4),  .table-card .watch-table td:nth-child(4)  { width: 90px; }
-.table-card .watch-table th:nth-child(5),  .table-card .watch-table td:nth-child(5)  { width: 92px; }
-.table-card .watch-table th:nth-child(6),  .table-card .watch-table td:nth-child(6)  { width: 100px; }
-.table-card .watch-table th:nth-child(7),  .table-card .watch-table td:nth-child(7)  { width: 100px; }
-.table-card .watch-table th:nth-child(8),  .table-card .watch-table td:nth-child(8)  { width: 128px; }
-.table-card .watch-table th:nth-child(9),  .table-card .watch-table td:nth-child(9)  { width: 100px; }
-.table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 68px; }
-.table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 108px; }
-.table-card .watch-table th:nth-child(12), .table-card .watch-table td:nth-child(12) { width: 42px; }
+.table-card .watch-table { table-layout: fixed; min-width: 1360px; }
+.table-card .watch-table th:nth-child(1),  .table-card .watch-table td:nth-child(1)  { width: 200px; } /* ファンド名 */
+.table-card .watch-table th:nth-child(2),  .table-card .watch-table td:nth-child(2)  { width: 116px; } /* 判定 */
+.table-card .watch-table th:nth-child(3),  .table-card .watch-table td:nth-child(3)  { width: 130px; } /* シグナル強度 */
+.table-card .watch-table th:nth-child(4),  .table-card .watch-table td:nth-child(4)  { width: 90px; }  /* 基準価額 */
+.table-card .watch-table th:nth-child(5),  .table-card .watch-table td:nth-child(5)  { width: 92px; }  /* 口数 */
+.table-card .watch-table th:nth-child(6),  .table-card .watch-table td:nth-child(6)  { width: 100px; } /* 評価額 */
+.table-card .watch-table th:nth-child(7),  .table-card .watch-table td:nth-child(7)  { width: 100px; } /* 投資金額 */
+.table-card .watch-table th:nth-child(8),  .table-card .watch-table td:nth-child(8)  { width: 128px; } /* 証券会社 */
+.table-card .watch-table th:nth-child(9),  .table-card .watch-table td:nth-child(9)  { width: 86px; }  /* 口座 */
+.table-card .watch-table th:nth-child(10), .table-card .watch-table td:nth-child(10) { width: 100px; } /* 売却 */
+.table-card .watch-table th:nth-child(11), .table-card .watch-table td:nth-child(11) { width: 68px; }  /* 騰落 */
+.table-card .watch-table th:nth-child(12), .table-card .watch-table td:nth-child(12) { width: 108px; } /* 値動き */
+.table-card .watch-table th:nth-child(13), .table-card .watch-table td:nth-child(13) { width: 42px; }  /* 削除 */
 .table-card .watch-table .fund-nm { white-space: normal; word-break: break-word; line-height: 1.35; }
 .table-card .watch-table .units-input,
 .table-card .watch-table .invested-input,
