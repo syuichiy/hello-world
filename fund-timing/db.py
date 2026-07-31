@@ -182,6 +182,9 @@ def init_db(db_path: Optional[str] = None, seed: bool = True):
         # マイグレーション: 分配金/配当の受け取り方（''=自動判定 / receive=受取 / reinvest=再投資）
         if "dividend_mode" not in cols:
             c.execute("ALTER TABLE watchlist ADD COLUMN dividend_mode TEXT DEFAULT ''")
+        # マイグレーション: 売買手数料の既定値（率%）。0なら前回入力額を引き継ぐ
+        if "fee_rate" not in cols:
+            c.execute("ALTER TABLE watchlist ADD COLUMN fee_rate REAL DEFAULT 0")
         # マイグレーション: 資産クラス・商品種別（投信/個別株）
         ccols = [r["name"] for r in c.execute("PRAGMA table_info(catalog)")]
         if "asset_class" not in ccols:
@@ -511,7 +514,7 @@ def list_watchlist(db_path: Optional[str] = None):
     with _conn(db_path) as c:
         rows = c.execute(
             "SELECT w.id AS watch_id, w.sort_order, w.units, w.sell_policy, w.broker, "
-            "w.invested, w.label, w.account_type, w.dividend_mode, c.* "
+            "w.invested, w.label, w.account_type, w.dividend_mode, w.fee_rate, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id "
             "ORDER BY w.sort_order, w.id"
         ).fetchall()
@@ -523,7 +526,7 @@ def get_watch(watch_id: int, db_path: Optional[str] = None):
     with _conn(db_path) as c:
         r = c.execute(
             "SELECT w.id AS watch_id, w.units, w.sell_policy, w.broker, w.invested, "
-            "w.label, w.account_type, w.dividend_mode, c.* "
+            "w.label, w.account_type, w.dividend_mode, w.fee_rate, c.* "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id WHERE w.id=?",
             (watch_id,)).fetchone()
         return dict(r) if r else None
@@ -576,6 +579,14 @@ def set_dividend_mode(watch_id: int, mode: str, db_path: Optional[str] = None):
     with _conn(db_path) as c:
         c.execute("UPDATE watchlist SET dividend_mode=? WHERE id=?", (m, watch_id))
     return m
+
+
+def set_fee_rate(watch_id: int, rate: float, db_path: Optional[str] = None):
+    """売買手数料の既定値（率%）を設定する。0なら自動計算せず前回入力額を引き継ぐ。"""
+    r = max(0.0, min(100.0, float(rate or 0)))
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET fee_rate=? WHERE id=?", (r, watch_id))
+    return r
 
 
 def set_broker(watch_id: int, broker: str, db_path: Optional[str] = None):
@@ -768,7 +779,7 @@ def export_data(db_path: Optional[str] = None) -> dict:
             "SELECT name, isin, assoc_code, category, asset_class, kind FROM catalog ORDER BY id")]
         watch = [dict(r) for r in c.execute(
             "SELECT w.id AS watch_id, c.isin, c.assoc_code, w.sort_order, w.added_at, "
-            "w.units, w.sell_policy, w.broker, w.invested, w.label, w.account_type, w.dividend_mode "
+            "w.units, w.sell_policy, w.broker, w.invested, w.label, w.account_type, w.dividend_mode, w.fee_rate "
             "FROM watchlist w JOIN catalog c ON c.id = w.catalog_id ORDER BY w.sort_order, w.id")]
         hist = {}
         for r in c.execute("SELECT watch_id, date, amount FROM amount_history ORDER BY watch_id, date"):
@@ -836,13 +847,13 @@ def import_data(data: dict, db_path: Optional[str] = None) -> dict:
                 continue     # 対応する商品が無い保有はスキップ
             cur = c.execute(
                 "INSERT INTO watchlist(catalog_id, sort_order, added_at, units, sell_policy, "
-                "broker, invested, label, account_type, dividend_mode) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "broker, invested, label, account_type, dividend_mode, fee_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (row["id"], int(w.get("sort_order") or 0),
                  w.get("added_at") or dt.datetime.now().isoformat(timespec="seconds"),
                  float(w.get("units") or 0), w.get("sell_policy") or "full",
                  w.get("broker") or "", float(w.get("invested") or 0),
                  w.get("label") or "", w.get("account_type") or "taxable",
-                 w.get("dividend_mode") or ""))
+                 w.get("dividend_mode") or "", float(w.get("fee_rate") or 0)))
             id_map[str(w.get("watch_id"))] = cur.lastrowid
             n_watch += 1
         for old_id, series in (hist or {}).items():

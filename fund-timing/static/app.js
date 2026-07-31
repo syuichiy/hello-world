@@ -1495,6 +1495,9 @@ $("watch-body").addEventListener("click", (e) => {
 // ============================================================ 売買の記録（モーダル）
 let tradeWatchId = null;
 let tradeKind = "fund";
+let tradeFeeRate = 0;      // この商品の既定手数料率(%)。0なら前回入力額を引き継ぐ
+let tradeLastFee = 0;      // 直近に入力した手数料（率が未設定のときの初期値）
+let tradeFeeEdited = false; // 手数料を手で直したら自動計算で上書きしない
 
 async function openTradeModal(watchId) {
   tradeWatchId = watchId;
@@ -1510,8 +1513,32 @@ async function openTradeModal(watchId) {
   ["trade-units", "trade-price", "trade-fee", "trade-note"].forEach((id) => { $(id).value = ""; });
   $("trade-side").value = "buy";
   $("trade-amount-preview").textContent = "";
+  tradeFeeEdited = false;
   $("trade-modal").hidden = false;
   await loadTrades();
+}
+
+// 手数料を自動で埋める。率が設定されていれば「売買金額×率」、無ければ前回入力額。
+// 手で直したあとは上書きしない。
+function applyFeePreset() {
+  if (tradeFeeEdited) return;
+  const hint = $("trade-fee-hint");
+  const u = parseNumComma($("trade-units").value), p = parseNumComma($("trade-price").value);
+  if (tradeFeeRate > 0) {
+    if (u > 0 && p > 0) {
+      const fee = Math.round(tradeAmount(u, p) * tradeFeeRate / 100);
+      $("trade-fee").value = fee ? fee.toLocaleString() : "";
+      hint.textContent = `既定 ${tradeFeeRate}% で自動計算`;
+    } else {
+      $("trade-fee").value = "";
+      hint.textContent = `既定 ${tradeFeeRate}%（金額の入力後に計算します）`;
+    }
+  } else if (tradeLastFee > 0) {
+    $("trade-fee").value = tradeLastFee.toLocaleString();
+    hint.textContent = "前回入力した手数料";
+  } else {
+    hint.textContent = "";
+  }
 }
 
 function closeTradeModal() {
@@ -1531,6 +1558,10 @@ async function loadTrades() {
     d = await (await fetch(`/api/trades?watch_id=${tradeWatchId}`)).json();
   } catch (_) { return; }
   if (!d.ok) return;
+  tradeFeeRate = Number(d.fee_rate) || 0;
+  tradeLastFee = Number(d.last_fee) || 0;
+  $("trade-fee-rate").value = tradeFeeRate || "";
+  applyFeePreset();
   const p = d.position || {};
   const yen = (n) => Math.round(n).toLocaleString() + " 円";
   const unitLabel = tradeKind === "stock" ? "株" : "口";
@@ -1571,7 +1602,33 @@ async function loadTrades() {
     const u = parseNumComma($("trade-units").value), p = parseNumComma($("trade-price").value);
     $("trade-amount-preview").textContent = (u > 0 && p > 0)
       ? `受渡金額の目安：約 ${Math.round(tradeAmount(u, p)).toLocaleString()} 円` : "";
+    applyFeePreset();   // 率が設定されていれば手数料も追従させる
   });
+});
+// 手で直したら以降は自動計算で上書きしない（空に戻せば自動計算を再開）
+$("trade-fee").addEventListener("input", (e) => {
+  tradeFeeEdited = e.target.value.trim() !== "";
+  if (!tradeFeeEdited) applyFeePreset();
+  else $("trade-fee-hint").textContent = "手入力";
+});
+// 既定の手数料率を保存する
+$("trade-fee-rate").addEventListener("change", async (e) => {
+  if (tradeWatchId == null) return;
+  const rate = parseFloat(e.target.value) || 0;
+  try {
+    const d = await (await fetch("/api/watchlist/fee-rate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: tradeWatchId, fee_rate: rate }),
+    })).json();
+    if (!d.ok) { toast(d.error || "保存に失敗しました", "error"); return; }
+    tradeFeeRate = d.fee_rate;
+    $("trade-fee-rate").value = tradeFeeRate || "";
+    $("trade-fee-rate-status").textContent = tradeFeeRate > 0
+      ? `✅ 既定 ${tradeFeeRate}% を保存しました。次回から自動で計算します。`
+      : "✅ 自動計算をオフにしました（前回入力した手数料を初期値にします）。";
+    tradeFeeEdited = false;
+    applyFeePreset();
+  } catch (_) { toast("保存に失敗しました", "error"); }
 });
 
 $("trade-form").addEventListener("submit", async (e) => {
@@ -1590,6 +1647,7 @@ $("trade-form").addEventListener("submit", async (e) => {
     toast("売買を記録しました");
     ["trade-units", "trade-price", "trade-fee", "trade-note"].forEach((id) => { $(id).value = ""; });
     $("trade-amount-preview").textContent = "";
+    tradeFeeEdited = false;
     await loadTrades();
     await loadWatchlist();      // 口数・投資金額・損益を更新
   } catch (_) { toast("記録に失敗しました", "error"); }

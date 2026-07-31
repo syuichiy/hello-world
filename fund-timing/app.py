@@ -805,14 +805,33 @@ def _sync_position_from_trades(watch_id, kind=None):
 
 @app.route("/api/trades")
 def api_trades():
-    """ある保有の売買の記録と、そこから計算した平均取得単価・実現損益を返す。"""
+    """ある保有の売買の記録と、そこから計算した平均取得単価・実現損益を返す。
+    手数料の入力を省けるよう、既定の手数料率と直近の手数料も返す。"""
     watch_id = request.args.get("watch_id")
     if watch_id is None:
         return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
-    kind = _watch_kind(watch_id)
+    it = db.get_watch(int(watch_id))
+    kind = (it.get("kind") or "fund") if it else "fund"
     trades = db.list_trades(int(watch_id))
+    last_fee = trades[-1].get("fee") if trades else 0
     return jsonify({"ok": True, "watch_id": int(watch_id), "kind": kind,
+                    "fee_rate": (it.get("fee_rate") or 0) if it else 0,
+                    "last_fee": round(float(last_fee or 0)),
                     "trades": trades, "position": db.trade_position(trades, kind)})
+
+
+@app.route("/api/watchlist/fee-rate", methods=["POST"])
+def api_watchlist_fee_rate():
+    """売買手数料の既定値（率%）を設定する。0なら自動計算しない。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    try:
+        saved = db.set_fee_rate(int(watch_id), data.get("fee_rate"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "手数料率は数値で入力してください。"}), 400
+    return jsonify({"ok": True, "fee_rate": saved})
 
 
 @app.route("/api/trades", methods=["POST"])

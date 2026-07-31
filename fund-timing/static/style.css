@@ -794,6 +794,15 @@ tr:hover .row-del { opacity: 1; }
 .trade-side-buy { background: rgba(18,131,59,.10); color: var(--up-text); border: 1px solid rgba(18,131,59,.3); }
 .trade-side-sell { background: rgba(225,29,72,.10); color: var(--down-text); border: 1px solid rgba(225,29,72,.3); }
 
+.fee-hint { font-size: 10.5px; color: var(--ink-soft); font-weight: 400; min-height: 14px; }
+.fee-preset {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 12px;
+}
+.fee-preset .plan-label { margin: 0; white-space: nowrap; }
+.fee-preset .hint { margin: 0; flex: 1 1 220px; }
+
 .row-ops { white-space: nowrap; }
 .row-trade {
   border: none; background: none; cursor: pointer; font-size: 13px; padding: 2px 4px;
