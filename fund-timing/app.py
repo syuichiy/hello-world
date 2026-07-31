@@ -184,6 +184,16 @@ def _nan_clean(seq):
     return [None if (v is None or (isinstance(v, float) and math.isnan(v))) else v for v in seq]
 
 
+def _safe_num(v, default=0.0):
+    """NaN/infを除いた数値を返す。NaNはJSONに出力できず、API応答全体が壊れて
+    画面が「応答を返せませんでした」になるため、返す直前に必ず通す。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return default if (math.isnan(f) or math.isinf(f)) else f
+
+
 def _downsample(seq, target=60):
     n = len(seq)
     if n <= target:
@@ -289,8 +299,10 @@ def _summarize_fund(row, range_key, force=False):
         # 分配金/配当：協会CSVの分配金列（株はYahoo等の配当実績）から直近1年の実績を集計。
         # 利回り = 直近1年の分配金(1万口/1株あたり) ÷ 現在の基準価額/株価。
         latest = a.stats.get("latest_price")
-        div_ttm = fund_data.ttm_dividend(series.get("dates"), series.get("dists"))
-        div_yield = (div_ttm / latest) if (latest and div_ttm) else 0.0
+        # 既存キャッシュにNaNが残っている場合もあるため _safe_num で必ず正規化する
+        div_ttm = _safe_num(fund_data.ttm_dividend(series.get("dates"), series.get("dists")))
+        _latest = _safe_num(latest)
+        div_yield = _safe_num(div_ttm / _latest) if (_latest and div_ttm) else 0.0
         summary.update({
             "ok": True,
             "verdict": a.verdict,

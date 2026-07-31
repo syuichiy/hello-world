@@ -7,6 +7,7 @@ CSVはShift-JIS(cp932)で、日次の基準価額・純資産総額・分配金�
 from __future__ import annotations
 
 import io
+import math
 import re
 import datetime as dt
 from dataclasses import dataclass, asdict
@@ -56,8 +57,11 @@ def ttm_dividend(dates, dists) -> float:
         if not v:
             continue
         try:
+            fv = float(v)
+            if math.isnan(fv) or math.isinf(fv):   # NaNはJSONに出せないので無視する
+                continue
             if dt.date.fromisoformat(d) > cutoff:
-                total += float(v)
+                total += fv
         except (ValueError, TypeError):
             continue
     return round(total, 4)
@@ -167,12 +171,15 @@ def _to_float(value) -> Optional[float]:
     if value is None:
         return None
     s = str(value).strip().replace(",", "")
-    if s in ("", "-", "－", "―"):
+    # 空欄は pandas が NaN になり str() で "nan" となる。float("nan") は成功して
+    # しまうため明示的に除外する（NaNはJSONに出力できず、API応答が壊れるため）。
+    if s in ("", "-", "－", "―") or s.lower() in ("nan", "none", "inf", "-inf"):
         return None
     try:
-        return float(s)
+        v = float(s)
     except ValueError:
         return None
+    return None if (math.isnan(v) or math.isinf(v)) else v
 
 
 def _find_column(columns, keywords):
