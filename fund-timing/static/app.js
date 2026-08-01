@@ -2107,10 +2107,23 @@ function renderCsvPreview() {
   if (!csvPreview) { box.hidden = true; return; }
   box.hidden = false;
   const hs = csvPreview.holdings || [];
-  const opt = (g) => `<option value="">（取り込まない）</option>` + hs.map((h) => {
-    const label = `${h.name}${h.label && h.label !== h.name ? `／${h.label}` : ""}${h.broker ? `（${h.broker}）` : ""}`;
-    return `<option value="${h.watch_id}"${g.watch_id === h.watch_id ? " selected" : ""}>${escapeHtml(label)}</option>`;
-  }).join("");
+  const cat = csvPreview.catalog || [];
+  // 「保有から選ぶ」に加え、一覧に無い商品は「追加して取り込む」を選べるようにする
+  const opt = (g) => {
+    const sel = g.watch_id ? String(g.watch_id) : (g.catalog_id ? `c:${g.catalog_id}` : "");
+    const own = hs.map((h) => {
+      const label = `${h.name}${h.label && h.label !== h.name ? `／${h.label}` : ""}${h.broker ? `（${h.broker}）` : ""}`;
+      return `<option value="${h.watch_id}"${sel === String(h.watch_id) ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+    // 名前が近いものが上に来るように並べ替える（選ぶだけで、自動選択はしない）
+    const order = g.catalog_order || [];
+    const rank = (c) => { const i = order.indexOf(c.catalog_id); return i < 0 ? 999 : i; };
+    const add = cat.slice().sort((a, b) => rank(a) - rank(b)).map((c) =>
+      `<option value="c:${c.catalog_id}"${sel === `c:${c.catalog_id}` ? " selected" : ""}>＋ ${escapeHtml(c.name)}</option>`).join("");
+    return `<option value=""${sel ? "" : " selected"}>（取り込まない）</option>`
+      + (own ? `<optgroup label="保有から選ぶ">${own}</optgroup>` : "")
+      + (add ? `<optgroup label="一覧に追加して取り込む">${add}</optgroup>` : "");
+  };
   const rows = (csvPreview.groups || []).map((g) => `
     <tr class="${g.watch_id ? "" : "csv-unmatched"}">
       <td class="csv-name">${escapeHtml(g.name)}
@@ -2118,6 +2131,8 @@ function renderCsvPreview() {
       <td class="num">${g.count}<span class="csv-meta">買${g.buy}／売${g.sell}</span></td>
       <td>${g.watch_id
           ? `<span class="csv-badge csv-auto">${g.how === "partial" ? "自動（部分一致）" : "自動一致"}</span>`
+          : g.catalog_id
+          ? `<span class="csv-badge csv-add">一覧に無い（追加候補あり）</span>`
           : `<span class="csv-badge csv-need">要確認</span>`}</td>
       <td><select class="csv-map" data-key="${escapeHtml(g.key)}">${opt(g)}</select></td>
       <td class="num csv-meta">${g.duplicates ? `${g.duplicates}件は取込済み` : ""}</td>
@@ -2142,7 +2157,8 @@ async function runCsvImport() {
   if (!csvPreview) return;
   const mapping = {};
   document.querySelectorAll("#csv-preview .csv-map").forEach((s) => {
-    if (s.value) mapping[s.dataset.key] = Number(s.value);
+    // "c:12" は「カタログの商品を一覧に追加してから取り込む」指定
+    if (s.value) mapping[s.dataset.key] = s.value.startsWith("c:") ? s.value : Number(s.value);
   });
   if (!Object.keys(mapping).length) {
     setCsvStatus("⚠️ 取り込み先の保有が1つも選ばれていません。", "error"); return;
@@ -2151,13 +2167,14 @@ async function runCsvImport() {
   try {
     const d = await (await fetch("/api/trades/import", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: csvPreview.rows, mapping }),
+      body: JSON.stringify({ rows: csvPreview.rows, mapping, broker: csvPreview.broker || "" }),
     })).json();
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "取り込みに失敗しました"), "error"); return; }
     setCsvStatus(`✅ ${d.added} 件を取り込みました`
       + (d.duplicates ? `（重複 ${d.duplicates} 件は登録済みのため除外）` : "")
       + (d.skipped ? `（対応づけ未選択 ${d.skipped} 件は取り込まず）` : "")
-      + `。${d.holdings} 銘柄の口数・投資金額を更新しました。`);
+      + `。${d.holdings} 銘柄の口数・投資金額を更新しました。`
+      + (d.created ? `新しく ${d.created} 銘柄を一覧に追加しました。` : ""));
     toast("取引履歴を取り込みました");
     $("csv-preview").hidden = true;
     csvPreview = null;

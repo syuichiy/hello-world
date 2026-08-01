@@ -792,6 +792,22 @@ def _watch_kind(watch_id):
     return (it.get("kind") or "fund") if it else "fund"
 
 
+def _add_watch_returning_id(catalog_id, broker=""):
+    """商品を一覧（ウォッチリスト）へ追加し、その保有IDを返す。
+    すでに同じ商品×同じ証券会社で持っている場合は、その保有IDを返す。
+    db.add_watch は追加できたかの真偽値を返す（画面が使っている）ので、
+    IDが必要なここでは追加後に引き当てる。"""
+    if not db.get_catalog(int(catalog_id)):
+        return None
+    db.add_watch(int(catalog_id), broker=broker)
+    for it in db.list_watchlist():
+        if it["id"] == int(catalog_id) and (it.get("broker") or "") == (broker or ""):
+            return it["watch_id"]
+    # 証券会社が一致する行が無ければ、同じ商品の保有から最も新しいものを使う
+    same = [it for it in db.list_watchlist() if it["id"] == int(catalog_id)]
+    return same[-1]["watch_id"] if same else None
+
+
 def _sync_position_from_trades(watch_id, kind=None):
     """売買の記録から保有口数と投資金額（取得原価）を計算し、保有へ反映する。
     記録が1件も無い保有は手入力のままにする（自動で0にしない）。"""
@@ -891,6 +907,10 @@ def api_trades_import_preview():
 
     holdings = db.list_watchlist()
     matches = broker_import.match_holdings(parsed["rows"], holdings, parsed.get("broker", ""))
+    # 保有に無い商品は、登録済みカタログから「一覧に追加して取り込む」候補を出す
+    catalog = db.list_catalog()
+    watched_ids = {h["id"] for h in holdings}
+    suggests = broker_import.suggest_catalog(parsed["rows"], catalog, watched_ids)
     existing = {(t["watch_id"], t["date"], t["side"], round(float(t["units"]), 4),
                  round(float(t["price"]), 4)) for t in db.list_trades()}
 
@@ -903,6 +923,10 @@ def api_trades_import_preview():
             "first": r["date"], "last": r["date"], "duplicates": 0,
             "watch_id": matches.get(key, {}).get("watch_id"),
             "how": matches.get(key, {}).get("how"),
+            # 保有に無い場合の「追加候補」（カタログのid）と、候補の並び順（似ている順）
+            "catalog_id": (None if matches.get(key, {}).get("watch_id")
+                           else suggests.get(key, {}).get("catalog_id")),
+            "catalog_order": suggests.get(key, {}).get("order", []),
             "account_type": r["account_type"], "dividend_mode": r["dividend_mode"],
         })
         g["count"] += 1
@@ -921,6 +945,10 @@ def api_trades_import_preview():
         "holdings": [{"watch_id": h["watch_id"], "name": h.get("name") or "",
                       "label": h.get("label") or "", "broker": h.get("broker") or "",
                       "kind": h.get("kind") or "fund"} for h in holdings],
+        # 一覧に無い商品を、その場で追加して取り込むための候補
+        "catalog": [{"catalog_id": c["id"], "name": c.get("name") or "",
+                     "kind": c.get("kind") or "fund"}
+                    for c in catalog if c["id"] not in watched_ids],
     })
 
 
@@ -935,15 +963,44 @@ def api_trades_import():
 
     existing = {(t["watch_id"], t["date"], t["side"], round(float(t["units"]), 4),
                  round(float(t["price"]), 4)) for t in db.list_trades()}
+    broker = (data.get("broker") or "").strip()
     added = skipped = dup = 0
+    created = 0
     touched = set()
+    resolved = {}          # 対応づけの解決結果（"c:12" の追加は1回だけ行う）
+
+    def resolve(value):
+        """対応づけの値を watch_id に変換する。
+        "c:<catalog_id>" は「一覧に追加してから取り込む」指定。"""
+        if value in resolved:
+            return resolved[value]
+        wid = None
+        s = str(value)
+        if s.startswith("c:"):
+            try:
+                wid = _add_watch_returning_id(int(s[2:]), broker)
+            except (ValueError, TypeError):
+                wid = None
+        else:
+            try:
+                wid = int(value)
+            except (ValueError, TypeError):
+                wid = None
+        resolved[value] = wid
+        return wid
+
     for r in rows:
         key = broker_import.normalize_name(r.get("name") or "")
-        wid = mapping.get(key)
+        raw_target = mapping.get(key)
+        if not raw_target:
+            skipped += 1
+            continue
+        wid = resolve(raw_target)
         if not wid:
             skipped += 1
             continue
-        wid = int(wid)
+        if str(raw_target).startswith("c:") and wid not in touched:
+            created += 1
         sig = (wid, r.get("date"), r.get("side"),
                round(float(r.get("units") or 0), 4), round(float(r.get("price") or 0), 4))
         if sig in existing:
@@ -962,7 +1019,7 @@ def api_trades_import():
     for wid in touched:
         _sync_position_from_trades(wid)
     return jsonify({"ok": True, "added": added, "duplicates": dup, "skipped": skipped,
-                    "holdings": len(touched)})
+                    "holdings": len(touched), "created": created})
 
 
 @app.route("/api/trades", methods=["DELETE"])

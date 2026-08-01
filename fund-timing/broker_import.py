@@ -255,6 +255,48 @@ def parse(raw: bytes, mapping: dict | None = None) -> dict:
 _MIN_PARTIAL_LEN = 12
 
 
+def _lookup(key, table, pick):
+    """正規化名 key に対応する候補を table（{正規化名: [項目]}）から1件選ぶ。
+    完全一致 → 正式名称どうしの部分一致 の順。絞り込めなければ None。"""
+    hs = table.get(key)
+    if hs:
+        cands = pick(hs)
+        return cands[0] if len(cands) == 1 else None
+    partial = [h for k, items in table.items()
+               if len(k) >= _MIN_PARTIAL_LEN and len(key) >= _MIN_PARTIAL_LEN
+               and (k in key or key in k) for h in items]
+    cands = pick(partial)
+    return cands[0] if len(cands) == 1 else None
+
+
+def suggest_catalog(rows, catalog, watched_ids=()):
+    """CSVの商品名に対して、まだ保有していない登録商品（カタログ）を提案する。
+    保有に無い商品をその場で一覧へ追加して取り込めるようにするために使う。
+
+    自動で選ぶのは完全一致・正式名称どうしの部分一致だけにする。名前が似ている
+    別商品（例「Tracers NASDAQ100ゴールドプラス」と「Tracers S&P500ゴールドプラス」）を
+    取り違えると誤ったデータが入るため、あいまいな一致では選ばない。
+    代わりに order で「選びやすい順（似ている順）」を返し、画面の候補の並びに使う。
+
+    戻り値: {正規化名: {"catalog_id": id or None, "order": [id, ...]}}
+    """
+    import difflib
+    items = [c for c in catalog if c.get("name") and c.get("id") not in watched_ids]
+    table = {}
+    for c in items:
+        table.setdefault(normalize_name(c["name"]), []).append(c)
+    norm = {c["id"]: normalize_name(c["name"]) for c in items}
+
+    out = {}
+    for key in {normalize_name(r["name"]) for r in rows}:
+        hit = _lookup(key, table, lambda hs: hs)
+        ranked = sorted(items, reverse=True,
+                        key=lambda c: difflib.SequenceMatcher(None, key, norm[c["id"]]).ratio())
+        out[key] = {"catalog_id": hit["id"] if hit else None,
+                    "order": [c["id"] for c in ranked[:8]]}
+    return out
+
+
 def match_holdings(rows, holdings, broker=""):
     """CSVの商品名を、保有（ウォッチリスト）へ突き合わせる。
 

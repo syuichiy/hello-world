@@ -839,6 +839,7 @@ tr:hover .row-del { opacity: 1; }
 .csv-badge { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
 .csv-auto { background: rgba(18,131,59,.10); color: var(--up-text); border: 1px solid rgba(18,131,59,.3); }
 .csv-need { background: rgba(202,138,4,.12); color: #a16207; border: 1px solid rgba(202,138,4,.35); }
+.csv-add { background: rgba(91,91,214,.10); color: var(--accent); border: 1px solid rgba(91,91,214,.32); }
 .csv-map { max-width: 260px; font-size: 12px; padding: 4px 6px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--card); color: inherit; }
 .csv-col { max-width: 300px; font-size: 12px; padding: 4px 6px; border-radius: 8px;
