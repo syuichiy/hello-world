@@ -2060,7 +2060,8 @@ async function readCsv(mapping) {
     }
     csvPreview = d;
     renderCsvPreview();
-    setCsvStatus(`${d.broker || "証券会社"}のCSVを読み取りました（売買 ${d.rows.length} 件）`);
+    setCsvStatus(`${d.broker || "証券会社"}のCSVを読み取りました（売買 ${d.rows.length} 件）`
+      + (d.mapping_saved ? "。列の対応を保存したので、次回から自動で読み取ります。" : ""));
   } catch (err) {
     setCsvStatus("⚠️ 読み取りに失敗しました: " + err.message, "error");
   }

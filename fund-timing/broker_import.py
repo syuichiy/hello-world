@@ -145,6 +145,13 @@ ROLE_LABELS = {"date": "約定日", "name": "銘柄・ファンド名", "side": 
                "fee": "手数料", "acct": "口座（特定/NISA）", "div": "分配金コース"}
 
 
+def header_signature(header) -> str:
+    """見出し行から、CSVの形式を表す文字列を作る。
+    同じ証券会社・同じ種類のCSVなら同じ値になるので、一度指定した列の対応づけを
+    次回以降も使い回すための鍵として使う。"""
+    return "|".join(str(h or "").strip() for h in (header or []))
+
+
 def _guess_broker(header, text):
     """見出しと本文から証券会社を推定する（表示用。取り込み処理は列名で判断する）。
     社名などの強い手がかりがあるときだけ名乗り、曖昧なら空にする

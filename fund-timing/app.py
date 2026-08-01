@@ -867,11 +867,27 @@ def api_trades_import_preview():
             mapping = json.loads(raw_map)
         except json.JSONDecodeError:
             mapping = None
-    parsed = broker_import.parse(f.read(), mapping)
+
+    raw = f.read()
+    parsed = broker_import.parse(raw, mapping)
     if not parsed.get("ok"):
         return jsonify(parsed), 400
+
+    saved_maps = db.get_setting("csv_mappings", {}) or {}
+    sig = broker_import.header_signature(parsed.get("header"))
     if parsed.get("needs_mapping"):
-        return jsonify(parsed)          # 画面で列を選んでもらう
+        # 以前に同じ形式のCSVで指定した対応づけがあれば、それを使って読み直す
+        if not mapping and sig and sig in saved_maps:
+            retry = broker_import.parse(raw, saved_maps[sig])
+            if retry.get("ok") and not retry.get("needs_mapping"):
+                parsed = retry
+        if parsed.get("needs_mapping"):
+            return jsonify(parsed)      # それでも決まらなければ画面で選んでもらう
+    # 手動で指定して読めた場合は、その対応づけを覚えて次回から自動で使う
+    if mapping and sig and parsed.get("rows"):
+        saved_maps[sig] = {k: v for k, v in (parsed.get("columns") or {}).items()}
+        db.set_setting("csv_mappings", saved_maps)
+        parsed["mapping_saved"] = True
 
     holdings = db.list_watchlist()
     matches = broker_import.match_holdings(parsed["rows"], holdings, parsed.get("broker", ""))
@@ -901,6 +917,7 @@ def api_trades_import_preview():
         "ok": True, "broker": parsed.get("broker", ""),
         "groups": sorted(groups.values(), key=lambda g: -g["count"]),
         "rows": parsed["rows"], "skipped": parsed.get("skipped", []),
+        "mapping_saved": bool(parsed.get("mapping_saved")),
         "holdings": [{"watch_id": h["watch_id"], "name": h.get("name") or "",
                       "label": h.get("label") or "", "broker": h.get("broker") or "",
                       "kind": h.get("kind") or "fund"} for h in holdings],
