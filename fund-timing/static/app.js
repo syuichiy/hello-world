@@ -2003,6 +2003,18 @@ $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
 
 // ============================================================ 取引履歴CSVの取り込み
 let csvPreview = null;   // { rows, groups, holdings, broker }
+let csvFile = null;      // 選んだCSV（列を指定して読み直すため保持する）
+// 列の対応づけで選べる項目（サーバーの ROLE_LABELS と対応）
+const CSV_ROLES = [
+  { role: "date", label: "約定日", required: true },
+  { role: "name", label: "銘柄・ファンド名", required: true },
+  { role: "side", label: "取引（売買）", required: true },
+  { role: "units", label: "数量（口数・株数）", required: true },
+  { role: "price", label: "単価（基準価額・株価）", required: true },
+  { role: "fee", label: "手数料", required: false },
+  { role: "acct", label: "口座（特定/NISA）", required: false },
+  { role: "div", label: "分配金コース", required: false },
+];
 
 function setCsvStatus(msg, kind) {
   const el = $("csv-status");
@@ -2014,20 +2026,80 @@ $("csv-file").addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = "";
   if (!file) return;
+  csvFile = file;
+  await readCsv(null);
+});
+
+// CSVを読み取る。mapping を渡すと、その列の対応づけで読み直す。
+async function readCsv(mapping) {
+  if (!csvFile) return;
   setCsvStatus("読み取り中… ⏳");
   $("csv-preview").hidden = true;
   try {
     const fd = new FormData();
-    fd.append("file", file);
+    fd.append("file", csvFile);
+    if (mapping) fd.append("mapping", JSON.stringify(mapping));
     const d = await (await fetch("/api/trades/import-preview", { method: "POST", body: fd })).json();
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "読み取りに失敗しました"), "error"); return; }
+    if (d.needs_mapping) {
+      csvPreview = null;
+      renderCsvMapping(d);
+      setCsvStatus("どの列が何にあたるか選んでください", "error");
+      return;
+    }
+    if (!d.rows.length) {
+      // 列の指定違いや、取引欄の書き方が想定外のときに気づけるようにする
+      csvPreview = null;
+      $("csv-preview").hidden = true;
+      const why = (d.reasons || []).length
+        ? `（除外の理由：${d.reasons.map((r) => `「${r}」`).join("・")}）` : "";
+      setCsvStatus(`⚠️ 取り込める売買がありませんでした${why}。列の対応づけを確認してください。`, "error");
+      renderCsvMapping({ header: d.header || [], columns: d.columns || {}, broker: d.broker,
+                         roles: CSV_ROLES, samples: [] });
+      return;
+    }
     csvPreview = d;
     renderCsvPreview();
     setCsvStatus(`${d.broker || "証券会社"}のCSVを読み取りました（売買 ${d.rows.length} 件）`);
   } catch (err) {
     setCsvStatus("⚠️ 読み取りに失敗しました: " + err.message, "error");
   }
-});
+}
+
+// 列を自動判定できなかったとき、CSVの列を役割に割り当ててもらう
+function renderCsvMapping(d) {
+  const box = $("csv-preview");
+  box.hidden = false;
+  const opts = (sel) => `<option value="-1">（なし）</option>` + (d.header || []).map((h, i) =>
+    `<option value="${i}"${sel === i ? " selected" : ""}>${i + 1}. ${escapeHtml(h || "(空欄)")}</option>`).join("");
+  const rows = (d.roles || []).map((r) => `
+    <tr>
+      <td>${escapeHtml(r.label)}${r.required ? '<span class="csv-req">必須</span>' : ""}</td>
+      <td><select class="csv-col" data-role="${r.role}">${opts((d.columns || {})[r.role])}</select></td>
+    </tr>`).join("");
+  const sample = (d.samples || []).map((s) =>
+    `<tr>${s.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+  box.innerHTML = `
+    <p class="hint">このCSVは列名から自動で判別できませんでした（${escapeHtml(d.broker || "対応表未登録の証券会社")}）。
+      下でCSVの列を割り当てると取り込めます。一度選べばそのまま読み込みます。</p>
+    <div class="csv-table-wrap">
+      <table class="csv-table">
+        <thead><tr><th>項目</th><th>CSVの列</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <details class="plan-help"><summary>CSVの中身（先頭3行）を見る</summary>
+      <div class="csv-table-wrap"><table class="csv-table">
+        <thead><tr>${(d.header || []).map((h, i) => `<th>${i + 1}. ${escapeHtml(h || "")}</th>`).join("")}</tr></thead>
+        <tbody>${sample}</tbody></table></div>
+    </details>
+    <div class="backup-row"><button id="csv-remap" type="button">この対応で読み取る</button></div>`;
+  $("csv-remap").addEventListener("click", () => {
+    const m = {};
+    document.querySelectorAll("#csv-preview .csv-col").forEach((s) => { m[s.dataset.role] = Number(s.value); });
+    readCsv(m);
+  });
+}
 
 function renderCsvPreview() {
   const box = $("csv-preview");

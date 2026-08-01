@@ -859,9 +859,19 @@ def api_trades_import_preview():
     f = request.files.get("file")
     if f is None:
         return jsonify({"ok": False, "error": "CSVファイルを選択してください。"}), 400
-    parsed = broker_import.parse(f.read())
+    # 列の対応づけを画面で指定された場合はそれを使う（証券会社ごとの列名の違いに対応）
+    mapping = None
+    raw_map = request.form.get("mapping")
+    if raw_map:
+        try:
+            mapping = json.loads(raw_map)
+        except json.JSONDecodeError:
+            mapping = None
+    parsed = broker_import.parse(f.read(), mapping)
     if not parsed.get("ok"):
         return jsonify(parsed), 400
+    if parsed.get("needs_mapping"):
+        return jsonify(parsed)          # 画面で列を選んでもらう
 
     holdings = db.list_watchlist()
     matches = broker_import.match_holdings(parsed["rows"], holdings, parsed.get("broker", ""))

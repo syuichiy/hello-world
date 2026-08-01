@@ -19,8 +19,8 @@ import re
 import unicodedata
 
 # 取引の種別 → buy / sell。ここに無いもの（コース変更の出庫・入庫など）は取り込まない。
-_BUY_WORDS = ("買付", "買い付け", "現物買", "買", "再投資")
-_SELL_WORDS = ("解約", "売却", "現物売", "売", "償還")
+_BUY_WORDS = ("買付", "買い付け", "現物買", "買", "再投資", "取得", "buy")
+_SELL_WORDS = ("解約", "売却", "現物売", "売", "償還", "sell")
 # 売買ではない行（口座間の移動など）。金額が動かないので取り込むと二重計上になる。
 _SKIP_WORDS = ("コース変更", "出庫", "入庫", "振替", "移管")
 
@@ -65,7 +65,7 @@ def _to_date(v) -> str:
 
 def _side_of(text: str):
     """取引の種別から buy / sell を決める。売買でなければ None。"""
-    t = str(text or "")
+    t = str(text or "").lower()
     if any(w in t for w in _SKIP_WORDS):
         return None
     # 「買付」「解約」の判定は語の出現順ではなく、売り語を先に見る
@@ -77,54 +77,126 @@ def _side_of(text: str):
     return None
 
 
-def _find_header(rows, required):
-    """必要な列名がすべて含まれる行を見出しとして探し、(行番号, 列名リスト) を返す。"""
-    for i, r in enumerate(rows):
+# 列の役割ごとの手がかり。証券会社によって呼び方が違うため候補を広めに持つ。
+# 前にあるものほど優先（"約定日" と "受渡日" が両方あれば約定日を使う）。
+COLUMN_HINTS = {
+    "date":  ("約定日", "取引日", "売買日", "年月日", "日付", "受渡日"),
+    "name":  ("ファンド名", "銘柄名", "商品名", "ファンド", "銘柄", "商品"),
+    "side":  ("取引区分", "売買区分", "取引", "売買", "区分"),
+    "units": ("約定数量", "数量", "口数", "株数"),
+    "price": ("約定単価", "基準価額", "単価", "約定価格", "価格"),
+    "fee":   ("手数料", "委託手数料", "経費", "諸費用", "諸経費"),
+    "acct":  ("預り", "口座", "課税区分"),
+    "div":   ("分配金",),
+}
+# 見出し行を探すときの手がかり（この語を多く含む行を見出しとみなす）
+_HEADER_MARKERS = ("約定日", "取引日", "日付", "銘柄", "ファンド", "商品",
+                   "数量", "口数", "株数", "単価", "基準価額", "取引", "売買")
+
+
+def _detect_header(rows):
+    """見出しらしい行を探して (行番号, 列名リスト) を返す。
+    証券会社によっては前置き（照会条件など）が数行入るため、
+    手がかり語を最も多く含む行を見出しとみなす。
+
+    手がかり語が少ない（列名が英語など見慣れない）場合も、データ行が続いていれば
+    最初の列らしい行を見出しとして返す。列の対応づけは画面で選んでもらえるため、
+    ここで弾かずに取り込めるようにする。"""
+    best, best_score = -1, 0
+    first = -1                                 # 列数のある最初の行（手がかりが無いとき用）
+    for i, r in enumerate(rows[:40]):          # 前置きは長くても数十行
         cells = [str(c or "").strip() for c in r]
-        joined = "".join(cells)
-        if all(k in joined for k in required):
-            return i, cells
+        if len(cells) < 4 or not any(cells):
+            continue
+        if first < 0:
+            first = i
+        score = sum(1 for k in _HEADER_MARKERS if k in "".join(cells))
+        if score > best_score:
+            best, best_score = i, score
+    if best_score >= 3:
+        return best, [str(c or "").strip() for c in rows[best]]
+    # 手がかり語では決められない → データ行が1行以上続くならそこを見出しとみなす
+    if first >= 0 and any(len(r) >= 4 and any(str(c or "").strip() for c in r)
+                          for r in rows[first + 1:]):
+        return first, [str(c or "").strip() for c in rows[first]]
     return -1, []
 
 
-def _col(header, *keywords):
-    """列名に keywords のいずれかを含む列の位置を返す（無ければ -1）。"""
-    for i, h in enumerate(header):
-        for k in keywords:
+def _col(header, keywords):
+    """列名に keywords のいずれかを含む列の位置を返す（無ければ -1）。
+    keywords は優先順で、先に挙げたものを優先して探す。"""
+    for k in keywords:
+        for i, h in enumerate(header):
             if k in h:
                 return i
     return -1
 
 
-def parse(raw: bytes) -> dict:
-    """CSVを解析して {broker, rows:[{date, name, side, units, price, fee, account, dividend_mode}], skipped}
-    を返す。broker は "SBI証券" / "楽天証券" / ""（判別できず）。"""
+def auto_columns(header):
+    """見出しから、役割ごとの列位置を推定する。"""
+    return {role: _col(header, hints) for role, hints in COLUMN_HINTS.items()}
+
+
+# 取り込みに最低限必要な列
+REQUIRED = ("date", "name", "side", "units", "price")
+# 役割名の表示（画面で列を選んでもらうときのラベル）
+ROLE_LABELS = {"date": "約定日", "name": "銘柄・ファンド名", "side": "取引（売買）",
+               "units": "数量（口数・株数）", "price": "単価（基準価額・株価）",
+               "fee": "手数料", "acct": "口座（特定/NISA）", "div": "分配金コース"}
+
+
+def _guess_broker(header, text):
+    """見出しと本文から証券会社を推定する（表示用。取り込み処理は列名で判断する）。
+    社名などの強い手がかりがあるときだけ名乗り、曖昧なら空にする
+    （列構成が似ている他社のCSVを誤って別の会社と表示しないため）。"""
+    j = "".join(header) + text[:600]
+    if "eスマート" in j or "カブコム" in j or "三菱ＵＦＪ" in j or "三菱UFJ" in j:
+        return "三菱UFJ eスマート証券"
+    if "楽天" in j:
+        return "楽天証券"
+    if "約定履歴照会" in j or "ＳＢＩ" in j or "SBI" in j:
+        return "SBI証券"
+    return ""
+
+
+def parse(raw: bytes, mapping: dict | None = None) -> dict:
+    """CSVを解析して売買の一覧を返す。
+
+    mapping で列位置（{"date":0,"name":2,...}）を明示できる。省略時は見出しから
+    自動判定し、必要な列が見つからなければ needs_mapping=True と見出し一覧を返して
+    画面で選んでもらう（証券会社ごとの列名の違いに、決め打ちせず対応するため）。
+    """
     text = decode(raw)
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return {"ok": False, "error": "CSVが空です。"}
 
-    # 楽天は先頭行が見出し。SBIは前置きの後に見出しが来る。
-    hi, header = _find_header(rows, ("約定日", "単価"))
-    if hi < 0:
-        hi, header = _find_header(rows, ("約定日", "約定単価"))
+    hi, header = _detect_header(rows)
     if hi < 0:
         return {"ok": False, "error": "取引履歴の見出し行が見つかりませんでした。"
                                       "証券会社の「取引履歴」「約定履歴」のCSVか確認してください。"}
+    broker = _guess_broker(header, text)
 
-    joined = "".join(header)
-    broker = "楽天証券" if "ファンド名" in joined else ("SBI証券" if "銘柄" in joined else "")
+    cols = dict(auto_columns(header))
+    if mapping:
+        for k, v in mapping.items():
+            if k in COLUMN_HINTS:
+                cols[k] = int(v) if v not in (None, "", -1) else -1
+    missing = [k for k in REQUIRED if cols.get(k, -1) < 0]
+    if missing:
+        # 自動で決められなかった → 画面で列を選んでもらう
+        return {
+            "ok": True, "needs_mapping": True, "broker": broker,
+            "header": header, "columns": cols,
+            "missing": [{"role": k, "label": ROLE_LABELS[k]} for k in missing],
+            "roles": [{"role": k, "label": ROLE_LABELS[k], "required": k in REQUIRED}
+                      for k in COLUMN_HINTS],
+            "samples": [[str(c or "") for c in r] for r in rows[hi + 1:hi + 4]],
+        }
 
-    i_date = _col(header, "約定日")
-    i_name = _col(header, "ファンド名", "銘柄")
-    i_side = _col(header, "取引")
-    i_units = _col(header, "数量")
-    i_price = _col(header, "単価")
-    i_fee = _col(header, "手数料", "経費")
-    i_acct = _col(header, "預り", "口座")
-    i_div = _col(header, "分配金")
-    if min(i_date, i_name, i_side, i_units, i_price) < 0:
-        return {"ok": False, "error": "必要な列（約定日・銘柄名・取引・数量・単価）が見つかりませんでした。"}
+    i_date, i_name = cols["date"], cols["name"]
+    i_side, i_units, i_price = cols["side"], cols["units"], cols["price"]
+    i_fee, i_acct, i_div = cols.get("fee", -1), cols.get("acct", -1), cols.get("div", -1)
 
     out, skipped = [], []
     for r in rows[hi + 1:]:
@@ -143,18 +215,31 @@ def parse(raw: bytes) -> dict:
         if units <= 0 or price <= 0:
             skipped.append({"name": name, "date": date, "reason": "数量または単価が読み取れません"})
             continue
-        acct = str(r[i_acct] or "").strip() if i_acct >= 0 else ""
-        div = str(r[i_div] or "").strip() if i_div >= 0 else ""
+        # 任意の列は、無い場合も行が短い場合も安全に取り出す
+        def cell(i):
+            return str(r[i] or "").strip() if 0 <= i < len(r) else ""
+        acct, div = cell(i_acct), cell(i_div)
         out.append({
             "date": date, "name": name, "side": side,
             "units": units, "price": price,
-            "fee": _to_num(r[i_fee]) if i_fee >= 0 else 0.0,
+            "fee": _to_num(cell(i_fee)),
             # 預り区分（NISA/特定）と分配金コース。取り込み時の参考として持っておく
             "account_type": "nisa" if "NISA" in acct.upper() else ("taxable" if acct else ""),
             "dividend_mode": ("receive" if "受取" in div else
                               "reinvest" if "再投資" in div else ""),
         })
-    return {"ok": True, "broker": broker, "rows": out, "skipped": skipped}
+    # 1件も取り込めなかったときは、何が理由で除外されたかを分かるようにする
+    # （列の指定を間違えている／取引欄の書き方が想定外、などに気づけるように）
+    reasons = []
+    if not out and skipped:
+        seen = []
+        for s in skipped:
+            r = s.get("reason") or ""
+            if r and r not in seen:
+                seen.append(r)
+        reasons = seen[:8]
+    return {"ok": True, "broker": broker, "rows": out, "skipped": skipped,
+            "header": header, "columns": cols, "reasons": reasons}
 
 
 # 部分一致で同一商品とみなすのに必要な最低文字数。これより短い名前（口座の

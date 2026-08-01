@@ -841,6 +841,10 @@ tr:hover .row-del { opacity: 1; }
 .csv-need { background: rgba(202,138,4,.12); color: #a16207; border: 1px solid rgba(202,138,4,.35); }
 .csv-map { max-width: 260px; font-size: 12px; padding: 4px 6px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--card); color: inherit; }
+.csv-col { max-width: 300px; font-size: 12px; padding: 4px 6px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); color: inherit; }
+.csv-req { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
+  color: var(--down-text); background: rgba(225,29,72,.10); border-radius: 999px; padding: 0 6px; }
 
 /* ------------------------------------------------ バックアップ */
 .backup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 10px; }
