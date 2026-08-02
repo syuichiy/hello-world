@@ -1340,6 +1340,36 @@ def api_settings():
     return jsonify({"ok": True, **_settings_state()})
 
 
+def _ai_error_message(e) -> str:
+    """AI呼び出しの失敗を、原因と対処が分かる日本語にする。
+    APIの生のエラー文（英語＋JSON）をそのまま出すと何をすればよいか伝わらないため。"""
+    text = str(e)
+    low = text.lower()
+    status = getattr(e, "status_code", None)
+    if "credit balance is too low" in low or "insufficient" in low:
+        return ("AnthropicのAPIクレジット残高が不足しています。"
+                "https://console.anthropic.com/settings/billing で"
+                "クレジットを購入するか、プランをご確認ください。"
+                "（アプリの設定やAPIキーの問題ではありません。AIをオフにすれば、"
+                "AIコメント以外の機能はこれまでどおり使えます）")
+    if status == 401 or "authentication" in low or "invalid x-api-key" in low:
+        return ("APIキーが正しくないため認証できませんでした。"
+                "設定画面でキーを入れ直してください（sk-ant- で始まる文字列です）。")
+    if status == 403 or "permission" in low:
+        return "このAPIキーには利用権限がありません。キーの発行元・権限をご確認ください。"
+    if status == 404 or "not_found" in low or "model" in low and "not" in low and "found" in low:
+        return ("指定のAIモデルを利用できませんでした。"
+                "設定画面で別のモデル（Haiku など）に切り替えてお試しください。")
+    if status == 429 or "rate limit" in low:
+        return "呼び出しの回数制限に達しました。少し時間をおいてから再度お試しください。"
+    if status in (500, 502, 503, 529) or "overloaded" in low:
+        return "Anthropic側が混雑しています。少し時間をおいてから再度お試しください。"
+    if "connection" in low or "timeout" in low or "network" in low:
+        return ("Anthropicに接続できませんでした。インターネット接続をご確認のうえ、"
+                "再度お試しください。")
+    return f"AI呼び出しに失敗しました: {text}"
+
+
 def _short_term_signal(s):
     """短期ホライズンのスコアから buy/sell/neutral を返す（±30が閾値）。"""
     for h in (s.get("hz") or []):
@@ -1485,7 +1515,7 @@ def api_ai_advice():
             return jsonify({"ok": False, "error":
                             "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
     except Exception as e:
-        return jsonify({"ok": False, "error": f"AI呼び出しに失敗しました: {e}"}), 502
+        return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
     return jsonify({"ok": True, "model": model_key, "advice": data})
 
@@ -1701,7 +1731,7 @@ def api_ai_plan():
         text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
         data = json.loads(text) if text else {}
     except Exception as e:
-        return jsonify({"ok": False, "error": f"AI呼び出しに失敗しました: {e}"}), 502
+        return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
     return jsonify({"ok": True, "model": state["ai_model"], "prediction": data})
 
 
