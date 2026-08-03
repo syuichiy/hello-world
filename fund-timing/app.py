@@ -130,6 +130,30 @@ def parse_identifier(text: str):
 _FAIL_TTL_SEC = 600
 _fail_cache: dict = {}
 
+# キャッシュが「前営業日にも届いていない」＝明らかに古いときは、12時間待たずに取り直す。
+# ただし祝日などで実際に新しいデータが無いこともあるため、再確認は1時間に1回までにする。
+_STALE_RECHECK_SEC = 3600
+_stale_recheck: dict = {}
+
+
+def _prev_business_day(today=None):
+    """前営業日（土日を除く）を返す。祝日は判定しない（そのぶんは再確認の間隔で吸収する）。"""
+    d = (today or dt.date.today()) - dt.timedelta(days=1)
+    while d.weekday() >= 5:          # 5=土, 6=日
+        d -= dt.timedelta(days=1)
+    return d
+
+
+def _is_stale(cached) -> bool:
+    """キャッシュの最終日が前営業日より前なら、古いとみなす。"""
+    dates = (cached or {}).get("dates") or []
+    if not dates:
+        return True
+    try:
+        return dt.date.fromisoformat(dates[-1]) < _prev_business_day()
+    except (ValueError, TypeError):
+        return False
+
 
 def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
                 kind: str = "fund") -> dict:
@@ -152,7 +176,19 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
         if cached:
             if name and not cached.get("name"):
                 cached["name"] = name
-            return cached
+            # 前営業日にも届いていないキャッシュは、12時間を待たずに取り直す
+            # （新しい基準価額が公表されているのに反映されない、を防ぐ）。
+            if not (_is_stale(cached)
+                    and (time.time() - _stale_recheck.get(key, 0)) > _STALE_RECHECK_SEC):
+                return cached
+            _stale_recheck[key] = time.time()
+            try:
+                fresh = (fund_data.get_stock_series(isin, name) if kind == "stock"
+                         else fund_data.get_fund_series(isin, assoc, name)).to_dict()
+            except Exception:
+                return cached          # 取り直せなければ手持ちのキャッシュで表示を続ける
+            db.set_cached_series(isin, assoc, fresh["name"], fresh)
+            return fresh
         failed = _fail_cache.get(key)
         if failed and (time.time() - failed[0]) < _FAIL_TTL_SEC:
             raise fund_data.FundDataError(failed[1])

@@ -474,10 +474,29 @@ async function loadPriceHistory(force) {
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
   st.hidden = true;
   lastActualData = data;
+  renderPriceAsOf(data);
   renderPriceSkipped(data.skipped || []);
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
   renderPriceTable(data.holdings || [], data.excel_dates || data.dates || [], data.totals || []);
+}
+
+// いつ時点のデータかを示す。投信の基準価額は当日中には公表されないため、
+// 「今日の分が出ない」のが正常なのか、更新が必要なのかを判断できるようにする。
+function renderPriceAsOf(data) {
+  const el = $("price-asof");
+  if (!el) return;
+  const ds = data.excel_dates || data.dates || [];
+  if (!ds.length) { el.hidden = true; return; }
+  const last = ds[ds.length - 1];
+  const today = new Date().toISOString().slice(0, 10);
+  const diff = Math.round((new Date(today) - new Date(last)) / 86400000);
+  el.hidden = false;
+  el.innerHTML = `📅 データは <strong>${escapeHtml(last)}</strong> 時点です`
+    + (last === today ? "（本日分まで反映済み）"
+       : `（${diff}日前）。投資信託の基準価額は<strong>当日中には公表されません</strong>`
+         + "（夕方以降、海外資産を含むものは翌営業日）。新しい価格が出ていれば "
+         + "<strong>↻ 最新に更新</strong> で取り込めます。");
 }
 
 // グラフ・表に出せない保有を理由つきで知らせる（黙って除外すると原因が分からないため）
