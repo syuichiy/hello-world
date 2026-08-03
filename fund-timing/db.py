@@ -581,6 +581,16 @@ def set_dividend_mode(watch_id: int, mode: str, db_path: Optional[str] = None):
     return m
 
 
+def set_label(watch_id: int, label: str, db_path: Optional[str] = None):
+    """保有ごとの表示名（口座名など）を設定する。
+    同じ商品を「NISA成長投資枠」「つみたて投資枠」「特定」のように分けて持つとき、
+    一覧で見分けるために使う。空文字なら未設定（カタログ名だけを表示）。"""
+    label = (label or "").strip()[:40]
+    with _conn(db_path) as c:
+        c.execute("UPDATE watchlist SET label=? WHERE id=?", (label, watch_id))
+    return label
+
+
 def set_fee_rate(watch_id: int, rate: float, db_path: Optional[str] = None):
     """売買手数料の既定値（率%）を設定する。0なら自動計算せず前回入力額を引き継ぐ。"""
     r = max(0.0, min(100.0, float(rate or 0)))
@@ -612,18 +622,23 @@ def set_sell_policy(watch_id: int, policy: str, db_path: Optional[str] = None):
     return policy
 
 
-def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None):
+def add_watch(catalog_id: int, broker: str = "", db_path: Optional[str] = None,
+              force: bool = False):
     """保有を1件追加する。同じ商品でも証券会社が違えば別の保有として追加できる。
-    同一商品×同一証券会社の重複だけは追加しない。"""
+
+    同一商品×同一証券会社は、うっかり二重登録するのを防ぐため既定では追加しない。
+    ただし同じ証券会社の中でも NISA と特定口座に分けて持つ、成長投資枠とつみたて投資枠で
+    分けて持つ、といったことは普通にあるため、force=True で意図的に追加できる。"""
     broker = (broker or "").strip()
     if broker and broker not in seed_funds.BROKERS:
         broker = ""
     with _conn(db_path) as c:
-        exists = c.execute(
-            "SELECT id FROM watchlist WHERE catalog_id=? AND broker=?", (catalog_id, broker)
-        ).fetchone()
-        if exists:
-            return False   # 同じ商品・同じ証券会社は重複追加しない
+        if not force:
+            exists = c.execute(
+                "SELECT id FROM watchlist WHERE catalog_id=? AND broker=?", (catalog_id, broker)
+            ).fetchone()
+            if exists:
+                return False   # 同じ商品・同じ証券会社の二重登録を防ぐ（force で追加可）
         mx = c.execute("SELECT COALESCE(MAX(sort_order), -1) FROM watchlist").fetchone()[0]
         c.execute(
             "INSERT INTO watchlist(catalog_id, sort_order, added_at, broker) VALUES (?,?,?,?)",

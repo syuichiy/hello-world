@@ -483,6 +483,11 @@ tr:hover .row-del { opacity: 1; }
   border-radius: 999px; padding: 0 7px; margin-right: 4px; white-space: nowrap;
 }
 @media (prefers-color-scheme: dark) { .acct-chip { color: #e0c56a; } }
+/* 口座名はクリックで編集できる。未設定のときは目立たせない */
+.acct-edit { cursor: pointer; font-family: inherit; line-height: 1.5; }
+.acct-edit:hover { border-color: var(--accent); color: var(--accent); }
+.acct-empty { background: none; border-style: dashed; color: var(--ink-soft); opacity: .65; }
+.acct-empty:hover { opacity: 1; }
 @media (max-width: 680px) { .alloc-charts { grid-template-columns: 1fr; } }
 
 /* ------------------------------------------------ 短期シグナル（買い時・売り時） */

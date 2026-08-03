@@ -265,7 +265,10 @@ def api_watchlist_add():
         return jsonify({"ok": False, "error": "catalog_id が必要です。"}), 400
     if not db.get_catalog(int(catalog_id)):
         return jsonify({"ok": False, "error": "指定の投信が見つかりません。"}), 404
-    added = db.add_watch(int(catalog_id), broker=(data.get("broker") or ""))
+    # force=true は「すでに同じ商品を同じ証券会社で持っているが、
+    # NISAと特定など別口座として分けて登録したい」場合に使う
+    force = bool(data.get("force"))
+    added = db.add_watch(int(catalog_id), broker=(data.get("broker") or ""), force=force)
     return jsonify({"ok": True, "added": added})
 
 
@@ -772,6 +775,18 @@ def api_watchlist_invested():
         return jsonify({"ok": False, "error": "投資金額は0以上で入力してください。"}), 400
     saved = db.set_invested(int(watch_id), invested)
     return jsonify({"ok": True, "invested": saved})
+
+
+@app.route("/api/watchlist/label", methods=["POST"])
+def api_watchlist_label():
+    """保有ごとの表示名（口座名）を設定する。
+    同じ商品を複数の口座（NISA成長枠・つみたて枠・特定など）で持つときの区別に使う。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    saved = db.set_label(int(watch_id), data.get("label") or "")
+    return jsonify({"ok": True, "label": saved})
 
 
 @app.route("/api/watchlist/account", methods=["POST"])

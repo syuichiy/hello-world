@@ -428,14 +428,19 @@ function renderPresetCatalog() {
 const ASSET_CLASS_NAMES_ORDER = Object.fromEntries(
   Object.keys(ASSET_CLASS_META).map((n, i) => [n, i]));
 
-async function addPreset(catalogId, broker) {
+async function addPreset(catalogId, broker, force) {
   const resp = await fetch("/api/watchlist", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ catalog_id: Number(catalogId), broker: broker || "" }),
+    body: JSON.stringify({ catalog_id: Number(catalogId), broker: broker || "", force: !!force }),
   });
   const data = await resp.json().catch(() => ({}));
   if (data && data.added === false) {
-    toast(broker ? `既に「${broker}」で保有しています` : "既に保有しています（証券会社を選ぶと別口座で追加できます）");
+    // 同じ証券会社でも NISA と特定、成長投資枠とつみたて投資枠で分けて持つことがある
+    const where = broker ? `「${broker}」で` : "";
+    if (confirm(`すでに同じ商品を${where}保有しています。\n\nNISAと特定口座など、別口座として`
+              + "もう1件追加しますか？\n（口座の種別は一覧の「口座」列で設定できます）")) {
+      await addPreset(catalogId, broker, true);
+    }
     return;
   }
   toast(broker ? `✓ ${broker}の口座に追加しました` : "✓ ポートフォリオに追加しました");
@@ -977,7 +982,7 @@ function renderWatchTable() {
     return `<tr class="${rowCls}" data-id="${s.catalog_id}" data-watch="${s.watch_id}">
       <td class="fund-cell">
         <div class="fund-nm">${escapeHtml(s.name)}${stBadge}</div>
-        <div class="fund-sub">${classChip(s.asset_class)}${s.account && s.account !== s.name ? `<span class="acct-chip">${escapeHtml(s.account)}</span>` : ""}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
+        <div class="fund-sub">${classChip(s.asset_class)}${acctLabelChip(s)}${s.kind === "stock" ? '<span class="kind-chip">株</span>' : ""} ${escapeHtml(s.category || "")}</div>
         ${aiAdv}
       </td>
       <td>${badge}</td>
@@ -1001,6 +1006,30 @@ function renderWatchTable() {
       </td>
     </tr>`;
   }).join("");
+}
+
+// 口座名（NISA成長投資枠・つみたて投資枠など）。同じ商品を複数口座で持つときの区別用。
+// クリックで編集できる。未設定の銘柄では控えめな表示にする。
+function acctLabelChip(s) {
+  const has = s.account && s.account !== s.name;
+  const title = "クリックで口座名を編集（同じ商品をNISA成長枠・つみたて枠・特定などで分けて持つときの目印）";
+  return `<button class="acct-chip acct-edit${has ? "" : " acct-empty"}" data-watch="${s.watch_id}"
+      title="${title}">${has ? escapeHtml(s.account) : "口座名"}</button>`;
+}
+
+async function saveLabel(watchId, current) {
+  const v = prompt("口座名を入力してください（空欄で削除）\n"
+    + "例）NISA成長枠 / つみたて枠 / 特定口座", current || "");
+  if (v === null) return;
+  try {
+    const d = await (await fetch("/api/watchlist/label", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: Number(watchId), label: v }),
+    })).json();
+    if (!d.ok) { toast(d.error || "保存に失敗しました", "error"); return; }
+    toast(d.label ? `口座名を「${d.label}」にしました` : "口座名を削除しました");
+    loadWatchlist();
+  } catch (_) { toast("保存に失敗しました", "error"); }
 }
 
 function accountSelect(s) {
@@ -1138,16 +1167,21 @@ async function doSearch() {
   searchSel = -1;
 }
 
-async function addToWatch(catalogId) {
+async function addToWatch(catalogId, force) {
   const resp = await fetch("/api/watchlist", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ catalog_id: Number(catalogId) }),
+    body: JSON.stringify({ catalog_id: Number(catalogId), force: !!force }),
   });
   const data = await resp.json().catch(() => ({}));
   $("search-results").hidden = true;
   $("search-input").value = "";
   if (data && data.added === false) {
-    toast("既に保有しています（証券会社は一覧で設定できます）");
+    // 同じ商品でも NISA と特定、成長投資枠とつみたて投資枠のように
+    // 分けて持つことがあるため、確認のうえ別の保有として追加できるようにする
+    if (confirm("すでに同じ商品を保有しています。\n\nNISAと特定口座など、別口座として"
+              + "もう1件追加しますか？\n（口座の種別は一覧の「口座」列で設定できます）")) {
+      await addToWatch(catalogId, true);
+    }
     return;
   }
   toast("✓ ウォッチリストに追加しました");
@@ -1482,6 +1516,13 @@ $("watch-body").addEventListener("click", (e) => {
   if (tr) {
     e.stopPropagation();
     openTradeModal(Number(tr.dataset.watch));
+    return;
+  }
+  const lb = e.target.closest(".acct-edit");
+  if (lb) {
+    e.stopPropagation();
+    const s = lastSummaries.find((x) => x.watch_id === Number(lb.dataset.watch));
+    saveLabel(lb.dataset.watch, s && s.account !== s.name ? s.account : "");
     return;
   }
   // 入力・設定中は詳細を開かない
