@@ -2505,6 +2505,7 @@ $("strategy-goto-settings").addEventListener("click", () => switchView("settings
 // --- 取り崩し戦略の比較とリスク検証 ---
 let lastLifeArgs = null;      // 資産推移グラフと同じ前提（renderLifeStages が控える）
 let portfolioRisk = null;     // 実際の保有から推定した年率リターン・変動率
+let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2528,6 +2529,7 @@ $("strategy-run").addEventListener("click", async () => {
     const r = await (await fetch("/api/portfolio-risk?years=5")).json();
     portfolioRisk = r.ok ? r : null;
   } catch (_) { portfolioRisk = null; }
+  strategyShown = true;
   renderStrategy();
   setStrategyStatus("");
 });
@@ -2535,6 +2537,7 @@ $("strategy-run").addEventListener("click", async () => {
 function renderStrategy() {
   const box = $("strategy-body");
   const a = lastLifeArgs;
+  if (!a) { box.innerHTML = ""; strategyShown = false; return; }
   const yen = (n) => Math.round(n).toLocaleString() + " 円";
   const ageOf = (p) => p.depletionAge > 0 ? `${Math.floor(p.depletionAge)}歳で枯渇` : "100歳まで持続";
 
@@ -2992,6 +2995,9 @@ function renderPlanHistory() {
   }
 
   // === ライフプラン未設定：実績＋将来予測を1枚のグラフで表示（従来） ===
+  // 生涯の試算を行わないので、取り崩しの検証カードも消しておく（古い結果を残さない）
+  lastLifeArgs = null;
+  if (strategyShown) renderStrategy();
   const traces = [{
     x: pastDates, y: pastAmt, name: "実績", mode: "lines",
     line: { width: 2.5, color: "#5b8def" }, fill: "tozeroy", fillcolor: "rgba(91,141,239,0.08)",
@@ -3256,6 +3262,10 @@ function renderLifeStages(o) {
   else if (depAge > 0) msg += `この前提では、資産は 約 ${Math.floor(depAge)}歳 で尽きる見込みです。`;
   else msg += `この前提でも、資産は 100歳まで持続する見込みです（100歳時点で 約 ${Math.round(path.endBal).toLocaleString()} 円）。`;
   ddSummary.textContent = msg;
+
+  // 検証カードを表示中なら、同じ前提で計算し直す。
+  // 設定を変えたのに古い結果が残っていると、表示と実際の設定が食い違うため。
+  if (strategyShown) renderStrategy();
 }
 
 // 目標額の入力
