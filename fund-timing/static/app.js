@@ -428,6 +428,11 @@ function renderPresetCatalog() {
 const ASSET_CLASS_NAMES_ORDER = Object.fromEntries(
   Object.keys(ASSET_CLASS_META).map((n, i) => [n, i]));
 
+// 画面（JS）だけ新しくてサーバー（Python）が古いときの案内。
+// アプリのフォルダを差し替えてもプロセスを再起動しないとサーバー側は古いままになる。
+const RESTART_HINT = "追加できませんでした。アプリを再起動してください"
+  + "（ターミナルで Ctrl+C → もう一度 python3 app.py）。サーバー側が古い版のままです。";
+
 async function addPreset(catalogId, broker, force) {
   const resp = await fetch("/api/watchlist", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -435,6 +440,9 @@ async function addPreset(catalogId, broker, force) {
   });
   const data = await resp.json().catch(() => ({}));
   if (data && data.added === false) {
+    // force を付けても追加されない＝サーバーが古い（アプリ未再起動）。
+    // ここで再確認するとダイアログが繰り返し出るだけなので、原因を伝えて止める。
+    if (force) { toast(RESTART_HINT, "error"); return; }
     // 同じ証券会社でも NISA と特定、成長投資枠とつみたて投資枠で分けて持つことがある
     const where = broker ? `「${broker}」で` : "";
     if (confirm(`すでに同じ商品を${where}保有しています。\n\nNISAと特定口座など、別口座として`
@@ -1176,6 +1184,7 @@ async function addToWatch(catalogId, force) {
   $("search-results").hidden = true;
   $("search-input").value = "";
   if (data && data.added === false) {
+    if (force) { toast(RESTART_HINT, "error"); return; }   // 上と同じ理由（サーバーが古い）
     // 同じ商品でも NISA と特定、成長投資枠とつみたて投資枠のように
     // 分けて持つことがあるため、確認のうえ別の保有として追加できるようにする
     if (confirm("すでに同じ商品を保有しています。\n\nNISAと特定口座など、別口座として"
