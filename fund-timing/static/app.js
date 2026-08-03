@@ -1934,6 +1934,8 @@ async function loadSettings() {
   $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
   $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
   $("set-near-term").value = fmtInt(pl.near_term || 0);
+  $("set-draw-method").value = pl.draw_method || "fixed";
+  $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
 }
 
 function renderSettingsUI() {
@@ -2316,6 +2318,8 @@ bindPremise("set-inflation", "inflation", false);
 bindPremise("set-tax", "tax", false);
 bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
+bindPremise("set-draw-rate", "draw_rate", false);
+$("set-draw-method").addEventListener("change", (e) => savePlan({ draw_method: e.target.value }));
 
 // ============================================================ 資産プラン
 let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
@@ -2496,6 +2500,135 @@ function renderCashAdvice() {
   body.innerHTML = html;
 }
 $("cash-goto-settings").addEventListener("click", () => switchView("settings"));
+$("strategy-goto-settings").addEventListener("click", () => switchView("settings"));
+
+// --- 取り崩し戦略の比較とリスク検証 ---
+let lastLifeArgs = null;      // 資産推移グラフと同じ前提（renderLifeStages が控える）
+let portfolioRisk = null;     // 実際の保有から推定した年率リターン・変動率
+
+function setStrategyStatus(msg, kind) {
+  const el = $("strategy-status");
+  if (el) { el.textContent = msg || ""; el.className = "ai-test-status " + (kind || ""); }
+}
+
+// 同じ前提で、方法とシナリオだけ差し替えて1本走らせる
+function runPath(extra) {
+  const a = lastLifeArgs;
+  return buildLifePath(a.cur, a.lastDate, a.monthly, a.baseRate, a.lp, a.cash0, a.bonds0,
+                       a.basis0, a.taxRate, a.emFloor, a.div, drawOpts(extra));
+}
+
+$("strategy-run").addEventListener("click", async () => {
+  if (!lastLifeArgs) {
+    setStrategyStatus("⚠️ 先に設定で退職年齢・生活費などの前提を入力してください。", "error");
+    return;
+  }
+  setStrategyStatus("検証中… ⏳");
+  try {
+    const r = await (await fetch("/api/portfolio-risk?years=5")).json();
+    portfolioRisk = r.ok ? r : null;
+  } catch (_) { portfolioRisk = null; }
+  renderStrategy();
+  setStrategyStatus("");
+});
+
+function renderStrategy() {
+  const box = $("strategy-body");
+  const a = lastLifeArgs;
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  const ageOf = (p) => p.depletionAge > 0 ? `${Math.floor(p.depletionAge)}歳で枯渇` : "100歳まで持続";
+
+  // ① 取り崩し方法の比較（同じ前提・同じ利回りで方法だけ変える）
+  const methods = ["fixed", "percent", "guardrail"];
+  const cmp = methods.map((mth) => {
+    const p = runPath({ method: mth });
+    return { mth, p };
+  });
+  const cur = (planData.plan || {}).draw_method || "fixed";
+  const cmpRows = cmp.map(({ mth, p }) => `
+    <tr class="${mth === cur ? "strat-current" : ""}">
+      <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
+      <td class="num">${yen(p.retireBal)}</td>
+      <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
+      <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
+      <td class="num">${yen(p.minLiving)}/月</td>
+    </tr>`).join("");
+
+  // ② 暴落シナリオ（退職直後の下落・出だしの不調）
+  const rm = projMonthlyRate(a.baseRate);
+  const retireM = Math.max(1, Math.round((a.retireAge - a.lp.age0) * 12));
+  const scenarios = [
+    { name: "想定どおり（ブレなし）", ret: null },
+    { name: "退職直後に −30%", ret: (m) => (m === retireM ? -0.30 : rm) },
+    { name: "退職直後に −50%", ret: (m) => (m === retireM ? -0.50 : rm) },
+    { name: "退職後の5年が不調（年−3%）",
+      ret: (m) => (m >= retireM && m < retireM + 60 ? projMonthlyRate(-0.03) : rm) },
+  ];
+  const scRows = scenarios.map((s) => {
+    const p = runPath(s.ret ? { ret: s.ret } : {});
+    return `<tr>
+      <td>${escapeHtml(s.name)}</td>
+      <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
+      <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
+    </tr>`;
+  }).join("");
+
+  // ③ モンテカルロ（実際の保有の変動率で値動きを揺らして多数回試算）
+  let mc = "";
+  if (portfolioRisk) {
+    const sdM = (portfolioRisk.annual_vol / 100) / Math.sqrt(12);   // 月次の標準偏差
+    const N = 400;
+    const mcRows = methods.map((mth) => {
+      let ok = 0; const ends = [];
+      for (let i = 0; i < N; i++) {
+        const p = runPath({ method: mth, ret: () => randNorm(rm, sdM) });
+        if (p.depletionAge < 0) ok++;
+        ends.push(p.endBal);
+      }
+      ends.sort((x, y) => x - y);
+      const pct = (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))];
+      const rate = Math.round(ok / N * 100);
+      const cls = rate >= 90 ? "up" : rate >= 70 ? "warn" : "down";
+      return `<tr class="${mth === cur ? "strat-current" : ""}">
+        <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
+        <td class="num ${cls}"><b>${rate}%</b></td>
+        <td class="num">${yen(pct(0.1))}</td>
+        <td class="num">${yen(pct(0.5))}</td>
+      </tr>`;
+    }).join("");
+    mc = `
+      <h3 class="strat-h">③ 値動きのブレを含めた成功確率（モンテカルロ ${N}回×3方式）</h3>
+      <p class="hint">お持ちの銘柄の実績から <strong>年率リターン ${portfolioRisk.annual_return}％・
+        変動率 ${portfolioRisk.annual_vol}％</strong>（直近${Math.round(portfolioRisk.months / 12)}年・${portfolioRisk.months}ヶ月で推定）。
+        毎月の値動きをこのブレ幅で揺らし、<strong>100歳まで資産が尽きなかった割合</strong>を数えます。</p>
+      <div class="csv-table-wrap"><table class="csv-table strat-table">
+        <thead><tr><th>取り崩し方法</th><th class="num">成功確率</th>
+          <th class="num">下位10%のとき<br>100歳時点</th><th class="num">中央値<br>100歳時点</th></tr></thead>
+        <tbody>${mcRows}</tbody></table></div>`;
+  } else {
+    mc = `<h3 class="strat-h">③ 値動きのブレを含めた成功確率</h3>
+      <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
+        価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
+  }
+
+  box.innerHTML = `
+    <h3 class="strat-h">① 取り崩し方法の比較（同じ前提・利回りのブレなし）</h3>
+    <div class="csv-table-wrap"><table class="csv-table strat-table">
+      <thead><tr><th>方法</th><th class="num">退職時の資産</th><th class="num">資産寿命</th>
+        <th class="num">100歳時点</th><th class="num">生活費の下限<br><small>（今日の価値）</small></th></tr></thead>
+      <tbody>${cmpRows}</tbody></table></div>
+    <p class="hint">定率は枯渇しにくい代わりに<strong>生活費が下がりうる</strong>点に注目してください。
+      「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。</p>
+
+    <h3 class="strat-h">② 暴落シナリオ（設定中の「${DRAW_LABELS[cur]}」で試算）</h3>
+    <div class="csv-table-wrap"><table class="csv-table strat-table">
+      <thead><tr><th>シナリオ</th><th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
+      <tbody>${scRows}</tbody></table></div>
+    <p class="hint">同じ平均リターンでも、<strong>暴落が来る時期</strong>で結果は大きく変わります。
+      退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。</p>
+
+    ${mc}`;
+}
 
 // --- 分配金・配当（インカム） ---
 function renderDividends() {
@@ -2632,8 +2765,17 @@ function planLifePlan() {
 // div.grossY/netY: 「受取」に設定した分配金・配当の年率（運用資産に対する割合）。
 //   想定年利は総リターン（分配込み）とみなし、受取分は運用資産から出て税引後キャッシュ（現金）
 //   に振り替わる。再投資分は運用資産に留まり総リターンに含まれる想定なので別加算しない。
-function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor, div) {
-  const rm = projMonthlyRate(annual);
+// opts で取り崩し方法と値動きを差し替えられる：
+//   method  … "fixed"（定額・既定）/ "percent"（定率）/ "guardrail"（ガードレール）
+//   pctRate … 定率のときの年率（0.04 = 毎年 残高の4%）
+//   ret(m)  … その月のリターンを返す関数。省略時は想定年利から一定。
+//             暴落シナリオやモンテカルロは、ここに関数を渡して実現する。
+function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor, div, opts) {
+  const o = opts || {};
+  const method = o.method || "fixed";
+  const pctRate = (o.pctRate != null) ? o.pctRate : 0.04;
+  const rmConst = projMonthlyRate(annual);
+  const retOf = (typeof o.ret === "function") ? o.ret : () => rmConst;
   const t = tax || 0;
   const floor = emFloor || 0;   // ①生活防衛資金：緊急時用に現金として残す下限
   const dGrossM = (div && div.grossY ? div.grossY : 0) / 12;   // 受取分配（税引前・月率）
@@ -2658,11 +2800,15 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   };
   const pts = [snap(lp.age0, lastDate)];
   let depletionAge = -1, penStartAge = -1, retireBal = null;
+  // 生活水準の記録：その月に使える額（年金＋取り崩し）を、今日の価値に直して見る。
+  // 定率やガードレールは枯渇しにくい代わりに生活費が下がるので、そのトレードオフを測る。
+  let minLivingReal = Infinity, guardSpend = lp.spend, initRate = null;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
-    fund = fund * (1 + rm);              // 運用資産のみ成長（原価は変わらない＝含み益が増える）
+    fund = fund * (1 + retOf(m));        // 運用資産のみ成長（原価は変わらない＝含み益が増える）
+    if (fund < 0) fund = 0;
     // 受取分配金：運用資産から出て、税引後は現金へ（グラフの現金の帯に反映）。
     if (dGrossM > 0 && fund > 0) {
       const net = fund * dNetM;                  // 税引後（現金へ）
@@ -2672,13 +2818,41 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     if (age < lp.retire) {
       fund += monthly; basis += monthly;   // 積立は原価
     } else {
-      if (retireBal === null) retireBal = fundAT() + cash + bonds;   // 退職時点の税引後資産
+      const bal = fundAT() + cash + bonds;         // 取り崩し前の総資産（税引後）
+      if (retireBal === null) {
+        retireBal = bal;                           // 退職時点の税引後資産
+        // ガードレールの基準：退職時点の「年間引出額 ÷ 資産」を初期の引出率とする
+        initRate = bal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / bal : 0;
+      }
       const inflF = Math.pow(1 + lp.infl, m / 12);
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
       const floorNow = floor * inflF;    // ①生活防衛資金：インフレ調整後（実質額を維持）
-      let w = lp.spend * inflF - pen;    // 取り崩し額（正なら引き出し）
+
+      let w, living;   // w=資産から引き出す額 / living=その月に使える生活費（年金＋引出）
+      if (method === "percent") {
+        // 定率：毎年その時点の残高の pctRate を取り崩す。資産が減れば引出額も自動で減るため
+        // 枯渇しにくい一方、生活費が変動する。
+        w = Math.max(0, bal * pctRate / 12);
+        living = w + pen;
+      } else if (method === "guardrail") {
+        // ガードレール：定額を基本にしつつ、引出率が初期水準から大きくずれた年に増減させる。
+        // 年1回だけ見直し、生活費が下がりすぎ／上がりすぎないよう幅を制限する。
+        if (m % 12 === 0 && initRate > 0 && bal > 0) {
+          const curRate = Math.max(0, (guardSpend - lp.pension) * 12) / bal;
+          if (curRate > initRate * 1.2) guardSpend *= 0.9;        // 資産の目減りが早い→減額
+          else if (curRate < initRate * 0.8) guardSpend *= 1.1;   // 余裕がある→増額
+          guardSpend = Math.min(lp.spend * 1.25, Math.max(lp.spend * 0.7, guardSpend));
+        }
+        living = guardSpend * inflF;
+        w = living - pen;
+      } else {
+        // 定額：生活費をインフレ調整して毎月そのまま引き出す（従来どおり）
+        living = lp.spend * inflF;
+        w = living - pen;
+      }
+      if (inflF > 0) minLivingReal = Math.min(minLivingReal, living / inflF);
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
@@ -2702,7 +2876,28 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   }
   if (retireBal === null) retireBal = fundAT() + cash + bonds;
   const endBal = pts[pts.length - 1].v;
-  return { pts, retireBal, penStartAge, depletionAge, endBal };
+  return { pts, retireBal, penStartAge, depletionAge, endBal,
+           // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
+           minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
+           method };
+}
+
+// 設定された取り崩し方法を buildLifePath のオプションにする
+function drawOpts(extra) {
+  const p = planData.plan || {};
+  return Object.assign({
+    method: p.draw_method || "fixed",
+    pctRate: (p.draw_rate != null ? p.draw_rate : 4) / 100,
+  }, extra || {});
+}
+const DRAW_LABELS = { fixed: "定額", percent: "定率", guardrail: "ガードレール" };
+
+// 正規分布の乱数（Box-Muller法）。モンテカルロで月々のリターンを揺らすのに使う。
+function randNorm(mean, sd) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
 // --- 金額の簡易フォーマット（軸ラベル用：億／万） ---
@@ -2902,7 +3097,12 @@ function renderLifeStages(o) {
   // 「受取」分配金の年率（税引前・税引後／運用資産全体に対する率）。
   const dv = planData.dividends || {};
   const div = { grossY: dv.receive_gross_yield || 0, netY: dv.receive_net_yield || 0 };
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0, taxRate, emFloor, div);
+  // 設定した取り崩し方法（定額／定率／ガードレール）で描く
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
+                             taxRate, emFloor, div, drawOpts());
+  // 比較・リスク検証カードから同じ前提で再計算できるよう、引数一式を控えておく
+  lastLifeArgs = { cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
+                   taxRate, emFloor, div, retireAge: lp.retire };
   const pts = path.pts;
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
@@ -3036,7 +3236,18 @@ function renderLifeStages(o) {
   else eta.textContent = `🎯 現在の条件では、退職（${retireAge}歳）までに目標へ到達しません。積立額や想定年利を見直してみてください。`;
 
   // 取り崩しサマリー
-  let msg = `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
+  // どの取り崩し方法で計算したかを明示する（定率などは生活費が下がる前提のため）
+  const mth = path.method || "fixed";
+  let msg = `取り崩し方法は「${DRAW_LABELS[mth]}」で計算しています`;
+  if (mth === "percent") {
+    msg += `（毎年 残高の${((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}%を引き出す前提。`
+      + `資産が減れば引出額も減るため枯渇しにくい一方、生活費は最低 約 ${Math.round(path.minLiving).toLocaleString()} 円/月まで下がる計算です）。`;
+  } else if (mth === "guardrail") {
+    msg += `（相場に応じて増減させる前提。生活費は最低 約 ${Math.round(path.minLiving).toLocaleString()} 円/月まで下がる計算です）。`;
+  } else {
+    msg += "（生活費をインフレ調整して毎年同じだけ引き出す前提）。";
+  }
+  msg += `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
   if (emFloor > 0) msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。`;

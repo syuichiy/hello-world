@@ -459,6 +459,35 @@
         </details>
       </div>
 
+      <!-- 取り崩し戦略の比較とリスク検証 -->
+      <div class="card plan-card" id="strategy-card">
+        <h2>🎲 取り崩し戦略の比較とリスク検証</h2>
+        <p class="hint">
+          資産の推移グラフは「毎年きっちり同じ利回りで増える」前提の一本道です。実際は値動きにブレがあり、
+          <strong>とくに退職直後の暴落は資産寿命を大きく縮めます</strong>（下がった資産から生活費を取り崩すため）。
+          ここでは<strong>取り崩し方法の比較</strong>と<strong>暴落・ブレを含めた検証</strong>を行います。
+        </p>
+        <div class="backup-row">
+          <button id="strategy-run" type="button">🎲 検証する</button>
+          <span id="strategy-status" class="ai-test-status"></span>
+        </div>
+        <div id="strategy-body"></div>
+        <details class="plan-help">
+          <summary>3つの取り崩し方法について</summary>
+          <ul>
+            <li><strong>定額</strong>：生活費をインフレ調整して毎年同じだけ引き出します。生活水準は安定しますが、
+              資産が減っても引出額を減らさないため<strong>最も枯渇しやすい</strong>方法です。</li>
+            <li><strong>定率</strong>：毎年その時点の残高の一定割合（4%など）を引き出します。資産が減れば引出額も
+              自動的に減るため<strong>理屈上は枯渇しません</strong>が、<strong>相場が悪いと生活費が下がります</strong>。</li>
+            <li><strong>ガードレール</strong>：定額を基本に、資産の減りが早い年は減額、余裕がある年は増額します。
+              生活費の変動を一定の幅に抑えつつ、枯渇も避けにくくする折衷案です。</li>
+          </ul>
+          <p class="plan-help-note">※ 取り崩し方法は<button class="linklike" id="strategy-goto-settings" type="button">設定</button>で変更でき、上の資産推移グラフにも反映されます。
+            変動率は<strong>お持ちの銘柄の実際の価格履歴</strong>から算出します（想定値ではありません）。
+            試算であり、将来を保証するものではありません。</p>
+        </details>
+      </div>
+
       <!-- 手元に置きたい現金の目安 -->
       <div class="card plan-card" id="cash-advice-card">
         <h2>💰 手元に置きたい現金の目安</h2>
@@ -569,6 +598,18 @@
           <div class="plan-field">
             <label class="plan-label" for="set-near-term">数年内に使う予定額（円）</label>
             <input id="set-near-term" type="text" inputmode="numeric" class="plan-input" placeholder="例）2,000,000">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-draw-method">取り崩し方法</label>
+            <select id="set-draw-method" class="plan-input">
+              <option value="fixed">定額（生活費をインフレ調整して引き出す）</option>
+              <option value="percent">定率（毎年 残高の一定割合を引き出す）</option>
+              <option value="guardrail">ガードレール（定額＋相場に応じて増減）</option>
+            </select>
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-draw-rate">定率のときの取り崩し率（%）</label>
+            <input id="set-draw-rate" type="number" step="0.1" min="0.5" max="20" class="plan-input plan-input-sm" placeholder="例）4">
           </div>
         </div>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>

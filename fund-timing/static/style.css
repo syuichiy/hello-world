@@ -832,6 +832,18 @@ tr:hover .row-del { opacity: 1; }
 .skipped-why { font-size: 11.5px; color: var(--ink-soft); margin-left: 8px; }
 .skipped-need { color: var(--down-text); font-weight: 700; }
 
+/* ------------------------------------------------ 取り崩し戦略の比較・リスク検証 */
+.strat-h { font-size: 13.5px; margin: 18px 0 6px; color: var(--ink); }
+.strat-h:first-child { margin-top: 4px; }
+.strat-table { min-width: 480px; }
+.strat-table td.num b { font-size: 15px; }
+.strat-table small { font-weight: 400; }
+.strat-current { background: rgba(91,91,214,.06); }
+.strat-current td:first-child { font-weight: 700; }
+.strat-badge { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
+  color: var(--accent); background: rgba(91,91,214,.12); border-radius: 999px; padding: 0 7px; }
+.strat-table .warn { color: var(--neutral); font-weight: 700; }
+
 /* ------------------------------------------------ 取引履歴CSVの取り込み */
 .csv-table-wrap { overflow-x: auto; margin: 12px 0 10px; }
 .csv-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 620px; }

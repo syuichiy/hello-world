@@ -1228,6 +1228,98 @@ def api_actual_history():
                     "totals": totals, "totals_full": totals_full})
 
 
+def _monthly_returns(dates, values):
+    """日次の価格系列から、月末値どうしの月次リターン（単純収益率）を作る。"""
+    month_end = {}
+    for d, v in zip(dates or [], values or []):
+        if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+            continue
+        month_end[str(d)[:7]] = (d, float(v))     # 同じ月は後の日付で上書き＝月末値
+    keys = sorted(month_end)
+    out = []
+    for i in range(1, len(keys)):
+        prev = month_end[keys[i - 1]][1]
+        cur = month_end[keys[i]][1]
+        if prev > 0:
+            out.append((keys[i], cur / prev - 1.0))
+    return out
+
+
+@app.route("/api/portfolio-risk")
+def api_portfolio_risk():
+    """保有銘柄の価格履歴から、ポートフォリオ全体の年率リターンと変動率を推定する。
+
+    将来予測の「ブレ幅」を、想定値ではなく実際の保有商品の値動きから求めるために使う。
+    各銘柄の月次リターンを現在の評価額で加重して合成し、その標準偏差を年率換算する。
+    """
+    years = max(1.0, min(20.0, float(request.args.get("years", 5) or 5)))
+    per_fund, weights, series = [], {}, {}
+    for it in db.list_watchlist():
+        units = float(it.get("units") or 0)
+        if units <= 0:
+            continue
+        kind = it.get("kind", "fund") or "fund"
+        try:
+            s = load_series(it["isin"], it["assoc_code"], it["name"], kind=kind)
+        except Exception:
+            continue
+        rets = _monthly_returns(s.get("dates"), s.get("nav"))
+        if len(rets) < 13:                     # 1年分に満たない銘柄は推定に使わない
+            continue
+        rets = rets[-int(years * 12):]
+        d, p = _latest_valid(s.get("dates"), s.get("nav"))
+        if p is None:
+            continue
+        value = p * units / (1.0 if kind == "stock" else 10000.0)
+        weights[it["watch_id"]] = value
+        series[it["watch_id"]] = dict(rets)
+        sd = _stdev([r for _, r in rets])
+        per_fund.append({"name": it.get("name"), "value": round(value),
+                         "months": len(rets),
+                         "annual_return": round((_mean([r for _, r in rets])) * 12 * 100, 2),
+                         "annual_vol": round(sd * math.sqrt(12) * 100, 2)})
+
+    total = sum(weights.values())
+    if not total or not series:
+        return jsonify({"ok": False, "error": "変動率を推定できる保有商品がありません"
+                                              "（口数の入力と価格の取得が必要です）。"})
+    # 各月について、保有比率で加重した合成リターンを作る
+    months = sorted(set().union(*[set(v.keys()) for v in series.values()]))
+    port = []
+    for m in months:
+        num = wsum = 0.0
+        for wid, w in weights.items():
+            r = series[wid].get(m)
+            if r is not None:
+                num += w * r
+                wsum += w
+        if wsum > 0:
+            port.append(num / wsum)
+    if len(port) < 13:
+        return jsonify({"ok": False, "error": "共通する期間の価格データが不足しています。"})
+    mu = _mean(port)
+    sd = _stdev(port)
+    return jsonify({
+        "ok": True, "months": len(port),
+        "annual_return": round(mu * 12 * 100, 2),
+        "annual_vol": round(sd * math.sqrt(12) * 100, 2),
+        "monthly_vol": round(sd * 100, 3),
+        "total_value": round(total),
+        "funds": sorted(per_fund, key=lambda x: -x["value"]),
+    })
+
+
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def _stdev(xs):
+    if len(xs) < 2:
+        return 0.0
+    m = _mean(xs)
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+
 @app.route("/api/ranking")
 def api_ranking():
     """内蔵カタログ全体をテクニカル勢い（スコア）で順位付けして返す。
@@ -1617,12 +1709,17 @@ def api_plan():
         for k in ("goal", "monthly", "return_rate",
                   "current_age", "retire_age", "pension_age",
                   "pension_monthly", "spend_monthly", "inflation",
-                  "cash", "bonds", "tax", "emergency_months", "near_term"):
+                  "cash", "bonds", "tax", "emergency_months", "near_term",
+                  "draw_rate"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
                 except (TypeError, ValueError):
                     plan[k] = 0
+        # 取り崩し方法は数値ではなく種別（定額／定率／ガードレール）
+        if "draw_method" in data:
+            m = str(data.get("draw_method") or "fixed")
+            plan["draw_method"] = m if m in ("fixed", "percent", "guardrail") else "fixed"
         db.set_setting("plan", plan)
         return jsonify({"ok": True})
 
