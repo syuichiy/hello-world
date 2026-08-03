@@ -2841,12 +2841,16 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       fund += monthly; basis += monthly;   // 積立は原価
     } else {
       const bal = fundAT() + cash + bonds;         // 取り崩し前の総資産（税引後）
+      const inflF = Math.pow(1 + lp.infl, m / 12);
+      // 引出率は「今日の価値」で比べる。生活費(lp.spend/guardSpend)は今日の価値、
+      // 資産(bal)は名目なので、資産側を inflF で割って基準を揃える。
+      // （揃えないとインフレのぶんだけ引出率が低く見え、ガードレールが増額側に偏る）
+      const balReal = inflF > 0 ? bal / inflF : bal;
       if (retireBal === null) {
         retireBal = bal;                           // 退職時点の税引後資産
         // ガードレールの基準：退職時点の「年間引出額 ÷ 資産」を初期の引出率とする
-        initRate = bal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / bal : 0;
+        initRate = balReal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / balReal : 0;
       }
-      const inflF = Math.pow(1 + lp.infl, m / 12);
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
@@ -2861,8 +2865,8 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       } else if (method === "guardrail") {
         // ガードレール：定額を基本にしつつ、引出率が初期水準から大きくずれた年に増減させる。
         // 年1回だけ見直し、生活費が下がりすぎ／上がりすぎないよう幅を制限する。
-        if (m % 12 === 0 && initRate > 0 && bal > 0) {
-          const curRate = Math.max(0, (guardSpend - lp.pension) * 12) / bal;
+        if (m % 12 === 0 && initRate > 0 && balReal > 0) {
+          const curRate = Math.max(0, (guardSpend - lp.pension) * 12) / balReal;
           if (curRate > initRate * 1.2) guardSpend *= 0.9;        // 資産の目減りが早い→減額
           else if (curRate < initRate * 0.8) guardSpend *= 1.1;   // 余裕がある→増額
           guardSpend = Math.min(lp.spend * 1.25, Math.max(lp.spend * 0.7, guardSpend));
@@ -3268,7 +3272,9 @@ function renderLifeStages(o) {
     msg += `（毎年 残高の${((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}%を引き出す前提。`
       + `資産が減れば引出額も減るため枯渇しにくい一方、生活費は最低 約 ${Math.round(path.minLiving).toLocaleString()} 円/月まで下がる計算です）。`;
   } else if (mth === "guardrail") {
-    msg += `（相場に応じて増減させる前提。生活費は最低 約 ${Math.round(path.minLiving).toLocaleString()} 円/月まで下がる計算です）。`;
+    msg += "（定額を基本に、年1回だけ見直す前提。引出率が退職時の水準より2割高くなったら生活費を1割減らし、"
+      + "2割低くなったら1割増やします。増減は当初の生活費の70〜125%の範囲に収めます。"
+      + `生活費は最低 約 ${Math.round(path.minLiving).toLocaleString()} 円/月まで下がる計算です）。`;
   } else {
     msg += "（生活費をインフレ調整して毎年同じだけ引き出す前提）。";
   }
