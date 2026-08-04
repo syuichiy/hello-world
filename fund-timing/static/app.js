@@ -2611,6 +2611,21 @@ function renderStrategy() {
     const d = drawAtAge(drawPath, g);
     return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k]) => drawCell(d, k)).join("")}</tr>`;
   }).join("");
+  // 「合計」が何の額なのかを方法ごとに明示する。生活費そのものではなく、
+  // 年金で足りないぶん（＝資産から出す額）である点が誤解されやすい。
+  const spendY = yen(a.lp.spend), penY = yen(a.lp.pension);
+  const drawFormula = drawTableMethod === "percent"
+    ? `<strong>「合計」＝その時の資産残高 × ${
+         ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> です。
+       定率は生活費と連動しないため、<strong>その月に使える生活費は「合計 ＋ 年金」</strong>になります
+       （年金 ${penY}/月もインフレで増える前提）。`
+    : `<strong>「合計」＝生活費 ${spendY}/月 ×インフレ − 年金 ${penY}/月 ×インフレ</strong> です。
+       生活費そのものではなく<strong>年金で足りないぶん</strong>を表しています。
+       ${a.lp.penAge > a.lp.retire
+         ? `年金開始（${Math.round(a.lp.penAge)}歳）までは年金がないので、生活費の全額が「合計」になります。` : ""}
+       <strong>年金もインフレで増える前提</strong>なので、差額である「合計」もインフレのぶん増えていきます。
+       ${drawTableMethod === "guardrail"
+         ? "ガードレールでは、見直しで生活費が増減した年は、その増減後の生活費で計算します。" : ""}`;
 
   // ③ 取り崩す口座の順序（税効率）の比較
   // NISAは非課税なので、課税される特定口座を先に売るほど非課税運用が長く続き、税額が減る。
@@ -2755,6 +2770,7 @@ function renderStrategy() {
       : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。
          定額でも年齢が上がるほど金額は増えていきます。`}
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。</p>
+    <p class="hint">${drawFormula}</p>
     <p class="hint">取り崩しは<strong>現金 → 債券 → 投信</strong>の順に行います。
       ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
       ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
