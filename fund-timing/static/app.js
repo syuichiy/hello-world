@@ -2349,9 +2349,9 @@ function renderEmFloorNote() {
   if (!(spend > 0)) { el.textContent = "退職後の生活費を入力すると金額を表示します。"; el.classList.remove("field-note-warn"); return; }
   const want = spend * months;
   if (want > cash) {
-    el.textContent = `${yen(spend)}×${months}ヶ月＝${yen(want)} ですが、`
-      + `手元現金 ${yen(cash)} が上限のため実際は ${yen(cash)}（現金の全額）です。`
-      + "月数を増やしても結果は変わりません。";
+    el.textContent = `${yen(spend)}×${months}ヶ月＝${yen(want)} を現金で残します。`
+      + `手元現金 ${yen(cash)} では ${yen(want - cash)} 足りないため、`
+      + "退職後に債券→投信を売って現金に振り替える前提で計算します。";
     el.classList.add("field-note-warn");
   } else {
     el.textContent = `${yen(spend)}×${months}ヶ月＝${yen(want)} を現金で残します（手元現金 ${yen(cash)}）。`;
@@ -2762,9 +2762,10 @@ function renderStrategy() {
       <summary>この表の細かい前提</summary>
       <ul>
         <li>取り崩しは<strong>現金 → 債券 → 投信</strong>の順。ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
-          ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
-            ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと現金も生活費に回ります。"
-            : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}</li>
+          現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。
+          ${(a.emFloor || 0) > (a.cash0 || 0) + 1
+            ? `手元現金（${yen(a.cash0 || 0)}）では足りないぶんは、<strong>債券→投信を売って現金に振り替えます</strong>。この振替は生活費ではないので表には現れませんが、そのぶん投信は減ります。`
+            : ""}</li>
         <li><strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
           「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。
           その月に使い切らなかった分は現金として積み上がります（翌月以降は「現金」に数えます）。</li>
@@ -3385,9 +3386,11 @@ function renderLifeStages(o) {
   const basis0 = (o.basis0 != null) ? o.basis0 : cur;
   const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
   const curTotal = afterTax(cur, basis0);            // 現在の税引後総資産
-  // ①生活防衛資金（生活費×月数）は取り崩さず現金として残す下限。手元現金を上限にする。
+  // ①生活防衛資金（生活費×月数）は取り崩さず現金として残す下限。
+  // 手元現金が足りなければ、退職後に債券→投信を売って現金に振り替えて確保する
+  // （インフレで下限が上がる分も同じ方法で補充するので、扱いを揃えている）。
   const emMonths = (planData.plan.emergency_months != null) ? planData.plan.emergency_months : 6;
-  const emFloor = Math.min(cash0, (lp.spend || 0) * emMonths);
+  const emFloor = (lp.spend || 0) * emMonths;
   // 「受取」分配金の年率（税引前・税引後／運用資産全体に対する率）。
   const dv = planData.dividends || {};
   const div = { grossY: dv.receive_gross_yield || 0, netY: dv.receive_net_yield || 0 };
@@ -3549,13 +3552,13 @@ function renderLifeStages(o) {
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
   if (emFloor > 0) {
     msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円`
-      + `＝生活費${emMonths}ヶ月ぶん`;
-    // 生活費×月数が手元現金を超えると現金が上限になる。月数を増やしても変わらない理由を書く。
-    const want = (lp.spend || 0) * emMonths;
-    msg += (want > cash0)
-      ? `を想定しましたが、手元現金 ${Math.round(cash0).toLocaleString()} 円が上限のため現金の全額`
-      : "";
-    msg += "）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。";
+      + `＝生活費${emMonths}ヶ月ぶん）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です。`;
+    // 手元現金が足りない場合は、退職後に債券・投信を売って現金に振り替える
+    msg += (emFloor > cash0)
+      ? `手元現金 ${Math.round(cash0).toLocaleString()} 円では不足するため、`
+        + `退職後に債券→投信を売って差額 約 ${Math.round(emFloor - cash0).toLocaleString()} 円を現金に振り替えます`
+        + "（年金受給後も維持）。"
+      : "（不足分は運用資産から補充。年金受給後も維持）。";
   }
   // 口座の順序は税額に効くため、NISAを持っている場合だけ前提を明示する
   if ((split && split.nisaV > 0) && (split.taxV > 0)) {
