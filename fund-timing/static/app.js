@@ -2594,38 +2594,43 @@ function renderStrategy() {
   // 表に出す方法はプルダウンで選ぶ（既定は設定中の方法）。①の比較で作った経路を使い回す。
   if (!DRAW_LABELS[drawTableMethod]) drawTableMethod = cur;
   const drawPath = (cmp.find(({ mth }) => mth === drawTableMethod) || cmp[0]).p;
-  // 出どころ（現金・債券・投信）と合計を横に並べる。現金には受け取った分配金・配当も入る。
-  const srcCols = [["cash", "現金"], ["bonds", "債券"], ["fund", "投信・株"], ["total", "合計"]];
-  const drawCell = (d, key) => {
-    if (!d) return '<td class="num draw-none">—</td>';
+  // 年金＋出どころ（現金・債券・投信）＝生活費、と左から右へ足し上がるように並べる。
+  // 現金には受け取った分配金・配当も入る。
+  const srcCols = [
+    ["pension", "年金", "draw-pen"],
+    ["cash", "現金", ""], ["bonds", "債券", ""], ["fund", "投信・株", ""],
+    ["total", "取り崩し計", "draw-sub"],
+    ["living", "生活費", "draw-total"],
+  ];
+  const drawCell = (d, key, cls) => {
+    if (!d) return `<td class="num draw-none ${cls}">—</td>`;
     const v = d[key];
     const mo = drawTableReal ? v.monthReal : v.month;
     const yr = drawTableReal ? v.yearReal : v.year;
-    const cls = key === "total" ? "draw-cell draw-total" : "draw-cell";
-    return `<td class="num ${cls}"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
+    return `<td class="num draw-cell ${cls}"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
       + `<span class="draw-year">年 ${Math.round(yr).toLocaleString()} 円</span></td>`;
   };
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
     const d = drawAtAge(drawPath, g);
-    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k]) => drawCell(d, k)).join("")}</tr>`;
+    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}</tr>`;
   }).join("");
   // 「合計」が何の額なのかを方法ごとに明示する。生活費そのものではなく、
   // 年金で足りないぶん（＝資産から出す額）である点が誤解されやすい。
   const spendY = yen(a.lp.spend), penY = yen(a.lp.pension);
-  const drawFormula = drawTableMethod === "percent"
-    ? `<strong>「合計」＝その時の資産残高 × ${
-         ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> です。
-       定率は生活費と連動しないため、<strong>その月に使える生活費は「合計 ＋ 年金」</strong>になります
-       （年金 ${penY}/月もインフレで増える前提）。`
-    : `<strong>「合計」＝生活費 ${spendY}/月 ×インフレ − 年金 ${penY}/月 ×インフレ</strong> です。
-       生活費そのものではなく<strong>年金で足りないぶん</strong>を表しています。
-       ${a.lp.penAge > a.lp.retire
-         ? `年金開始（${Math.round(a.lp.penAge)}歳）までは年金がないので、生活費の全額が「合計」になります。` : ""}
-       <strong>年金もインフレで増える前提</strong>なので、差額である「合計」もインフレのぶん増えていきます。
-       ${drawTableMethod === "guardrail"
-         ? "ガードレールでは、見直しで生活費が増減した年は、その増減後の生活費で計算します。" : ""}`;
+  const drawFormula = `<strong>年金 ＋ 現金 ＋ 債券 ＋ 投信・株 ＝ 生活費</strong> になるように並べています
+    （「取り崩し計」は現金・債券・投信の小計＝<strong>資産から引き出す額</strong>）。`
+    + (drawTableMethod === "percent"
+      ? `定率では<strong>「取り崩し計」＝その時の資産残高 × ${
+           ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> と決まり、
+         生活費はその結果（取り崩し計 ＋ 年金）になります。`
+      : `${DRAW_LABELS[drawTableMethod]}では先に生活費（${spendY}/月 ×インフレ${
+           drawTableMethod === "guardrail" ? "、見直しで増減した年はその増減後の額" : ""}）が決まり、
+         <strong>そこから年金を引いた残りが「取り崩し計」</strong>になります。`)
+    + `年金 ${penY}/月も<strong>インフレで増える前提</strong>です。`
+    + (a.lp.penAge > a.lp.retire
+      ? `年金開始（${Math.round(a.lp.penAge)}歳）までは年金が0円なので、生活費の全額を資産から取り崩します。` : "");
 
   // ③ 取り崩す口座の順序（税効率）の比較
   // NISAは非課税なので、課税される特定口座を先に売るほど非課税運用が長く続き、税額が減る。
@@ -2762,8 +2767,8 @@ function renderStrategy() {
         今日の価値で表示する（インフレ分を除く）</label>
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
-      <thead><tr><th>年齢</th>${srcCols.map(([, label]) =>
-        `<th class="num">${label}</th>`).join("")}</tr></thead>
+      <thead><tr><th>年齢</th>${srcCols.map(([, label, c]) =>
+        `<th class="num ${c}">${label}</th>`).join("")}</tr></thead>
       <tbody>${drawRows}</tbody></table></div>
     <p class="hint">${drawTableReal
       ? "インフレ分を除いた<strong>今日の価値</strong>で表示しています。定額なら毎年ほぼ同じ額に見えます。"
@@ -3042,6 +3047,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
     // 今日の価値に直すときは同じ月の inflNow で割る。
     let drawM = null, dCash = 0, dBonds = 0, dFund = 0, inflNow = 1;
+    let dPen = 0, dLiving = 0;   // 年金のうち生活費に充てた分／その月に使える生活費
     const rM = retOf(m);                 // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     taxV = Math.max(0, taxV * (1 + rM));
     nisaV = Math.max(0, nisaV * (1 + rM));
@@ -3102,6 +3108,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       // 年金が生活費を上回る月（w<0）は取り崩しゼロとして記録する
       drawM = Math.max(0, w);
       inflNow = inflF > 0 ? inflF : 1;
+      // 年金が生活費を上回る月は、超過分を運用に回すので「生活費に充てた年金」は生活費と同額。
+      // これで 年金 ＋ 現金 ＋ 債券 ＋ 投信 ＝ 生活費 が常に成り立つ。
+      dLiving = living;
+      dPen = Math.max(0, living - drawM);
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
@@ -3123,7 +3133,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     const pt = snap(age, dt);
     if (drawM != null) {
       pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
-      pt.inflF = inflNow;
+      pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
     }
     pts.push(pt);
     if (pt.v <= 0) { depletionAge = age; break; }
@@ -3163,7 +3173,8 @@ function drawAtAge(path, age) {
     const monthReal = ms.reduce((s, q) => s + (q[key] || 0) / (q.inflF || 1), 0) / ms.length;
     return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
   };
-  return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund") };
+  return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund"),
+           pension: of("drawPen"), living: of("living") };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
