@@ -2598,7 +2598,8 @@ function renderStrategy() {
   // 現金には受け取った分配金・配当も入る。
   const srcCols = [
     ["pension", "年金", "draw-pen"],
-    ["cash", "現金", ""], ["bonds", "債券", ""], ["fund", "投信・株", ""],
+    ["cash", "現金", ""], ["bonds", "債券", ""],
+    ["div", "分配金・配当", "draw-div"], ["fund", "投信・株<br><small>（売却）</small>", ""],
     ["total", "取り崩し計", "draw-sub"],
     ["living", "生活費", "draw-total"],
   ];
@@ -2619,8 +2620,10 @@ function renderStrategy() {
   // 「合計」が何の額なのかを方法ごとに明示する。生活費そのものではなく、
   // 年金で足りないぶん（＝資産から出す額）である点が誤解されやすい。
   const spendY = yen(a.lp.spend), penY = yen(a.lp.pension);
-  const drawFormula = `<strong>年金 ＋ 現金 ＋ 債券 ＋ 投信・株 ＝ 生活費</strong> になるように並べています
-    （「取り崩し計」は現金・債券・投信の小計＝<strong>資産から引き出す額</strong>）。`
+  const drawFormula = `<strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
+    になるように並べています（「取り崩し計」は年金以外の小計＝<strong>資産から出る額</strong>）。
+    <strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
+    「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。`
     + (drawTableMethod === "percent"
       ? `定率では<strong>「取り崩し計」＝その時の資産残高 × ${
            ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> と決まり、
@@ -2781,7 +2784,8 @@ function renderStrategy() {
       ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
         ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと、現金も生活費に回ります。"
         : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}
-      受け取った分配金・配当は現金に入るので、「現金」の欄にはその分も含まれます。</p>
+      分配金や売却代金はいったん現金に入りますが、表では<strong>元の出どころ</strong>
+      （分配金・債券・投信）として数えています。</p>
     <p class="hint">${drawTableStep === 5
       ? "表の行は<strong>5年おきの抜粋</strong>です。金額は5年間据え置きではなく、"
       : "金額は"}<strong>月単位で計算</strong>しており毎月変化します
@@ -2971,6 +2975,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   const dGrossM = (div && div.grossY ? div.grossY : 0) / 12;   // 受取分配（税引前・月率）
   const dNetM = (div && div.netY ? div.netY : 0) / 12;         // 受取分配（税引後・月率）
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
+  // 現金の中身を出どころ別に持つ。分配金や、生活防衛資金の補充で売った投信・債券の代金は
+  // いったん現金に入るため、そのまま使うと「現金から取り崩した」ように見えてしまう。
+  // 元をたどれるようにして、表では本来の出どころとして数える。
+  let cashDiv = 0, cashFromFund = 0, cashFromBonds = 0;
   // 運用資産は「特定口座（課税）」と「NISA（非課税）」に分けて持つ。
   // どちらから先に売るかで生涯の税額が変わるため、口座ごとに評価額と取得原価を追う。
   // opts.split が無いときは全額を特定口座扱い＋実効税率とし、従来と同じ挙動になる。
@@ -3046,15 +3054,26 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // その月に資産から引き出す額と、その出どころ（現金・債券・投信）。
     // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
     // 今日の価値に直すときは同じ月の inflNow で割る。
-    let drawM = null, dCash = 0, dBonds = 0, dFund = 0, inflNow = 1;
+    let drawM = null, dCash = 0, dBonds = 0, dFund = 0, dDiv = 0, inflNow = 1;
     let dPen = 0, dLiving = 0;   // 年金のうち生活費に充てた分／その月に使える生活費
+    // 現金から amt を使う。分配金や売却代金に由来する分は、その出どころとして数える。
+    const useCash = (amt) => {
+      if (!(amt > 0)) return;
+      let r = amt;
+      const d = Math.min(cashDiv, r); cashDiv -= d; r -= d; dDiv += d;
+      const f = Math.min(cashFromFund, r); cashFromFund -= f; r -= f; dFund += f;
+      const b = Math.min(cashFromBonds, r); cashFromBonds -= b; r -= b; dBonds += b;
+      dCash += r;
+      cash -= amt;
+    };
     const rM = retOf(m);                 // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     taxV = Math.max(0, taxV * (1 + rM));
     nisaV = Math.max(0, nisaV * (1 + rM));
     // 受取分配金：運用資産から出て、税引後は現金へ（グラフの現金の帯に反映）。
     // 分配は売却ではないので譲渡益税はかからず、保有比率どおりに各口座から出る。
     if (dGrossM > 0 && fundV() > 0) {
-      cash += fundV() * dNetM;                   // 税引後（現金へ）
+      const net = fundV() * dNetM;               // 税引後（現金へ）
+      cash += net; cashDiv += net;               // 出どころは投信・株なので分配金として記録
       taxV -= taxV * dGrossM;
       nisaV -= nisaV * dGrossM;
     }
@@ -3115,11 +3134,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
-        let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
-        dCash += take;
+        let take = Math.min(Math.max(0, cash - floorNow), w); useCash(take); w -= take;
         if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; dBonds += take; }
         if (w > 0) { take = sellFund(w); w -= take; dFund += take; }
-        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; dCash += take; }   // 最後の手段：生活防衛資金
+        if (w > 0) { take = Math.min(cash, w); useCash(take); w -= take; }   // 最後の手段：生活防衛資金
       } else {              // 年金＞生活費の余剰は運用資産へ（原価扱い）。退職後なので特定口座に積む
         taxV -= w; taxB -= w;
       }
@@ -3127,13 +3145,14 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       if (cash < floorNow) {
         let need = floorNow - cash;
         let take = Math.min(bonds, need); bonds -= take; cash += take; need -= take;
-        if (need > 0) { cash += sellFund(need); }
+        cashFromBonds += take;                    // 現金に移っただけなので出どころは債券のまま
+        if (need > 0) { const got = sellFund(need); cash += got; cashFromFund += got; }
       }
     }
     const pt = snap(age, dt);
     if (drawM != null) {
       pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
-      pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
+      pt.drawDiv = dDiv; pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
     }
     pts.push(pt);
     if (pt.v <= 0) { depletionAge = age; break; }
@@ -3174,7 +3193,7 @@ function drawAtAge(path, age) {
     return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
   };
   return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund"),
-           pension: of("drawPen"), living: of("living") };
+           div: of("drawDiv"), pension: of("drawPen"), living: of("living") };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
