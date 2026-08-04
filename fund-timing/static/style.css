@@ -851,6 +851,8 @@ tr:hover .row-del { opacity: 1; }
 .strat-badge { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
   color: var(--accent); background: rgba(91,91,214,.12); border-radius: 999px; padding: 0 7px; }
 .strat-table .warn { color: var(--neutral); font-weight: 700; }
+/* 節の中の小見出し（①②…の見出しより一段軽くする） */
+.strat-h4 { font-size: 12.5px; margin: 16px 0 4px; color: var(--ink-soft); font-weight: 700; }
 
 /* 年齢ごとの取り崩し額（月額を主、年額を従で並べる） */
 .draw-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin: 2px 0 0; }

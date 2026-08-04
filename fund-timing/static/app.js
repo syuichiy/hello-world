@@ -2598,6 +2598,15 @@ function renderStrategy() {
     return `<td class="num draw-cell"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
       + `<span class="draw-year">年 ${Math.round(yr).toLocaleString()} 円</span></td>`;
   };
+  // 取り崩しの出どころ（生涯合計）。「現金は使わないのか」を確かめられるようにする。
+  const srcDefs = [
+    ["現金", "cash", "受け取った分配金・配当もここに入ります"],
+    ["債券", "bonds", ""],
+    ["投信・株", "fund", ""],
+  ];
+  const srcRows = srcDefs.map(([label, key, note]) => `
+    <tr><td>${label}${note ? `<span class="draw-year">${note}</span>` : ""}</td>
+      ${cmp.map(({ p }) => `<td class="num">${yen((p.src || {})[key] || 0)}</td>`).join("")}</tr>`).join("");
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
@@ -2747,6 +2756,19 @@ function renderStrategy() {
       （定額・ガードレールはインフレのぶん毎月少しずつ増え、定率は残高に連動します）。
       各行の月額は、その年齢の12ヶ月を平均した額です。${drawTableStep === 5
         ? "「表示間隔」を1年ごとにすると、途中の年も確認できます。" : ""}</p>
+
+    <h4 class="strat-h4">この金額はどこから出ているか（生涯の合計）</h4>
+    <div class="csv-table-wrap"><table class="csv-table strat-table">
+      <thead><tr><th>出どころ</th>${cmp.map(({ mth }) =>
+        `<th class="num">${DRAW_LABELS[mth]}</th>`).join("")}</tr></thead>
+      <tbody>${srcRows}</tbody></table></div>
+    <p class="hint">上の表の金額は<strong>現金・債券・投信の合計</strong>で、
+      <strong>現金 → 債券 → 投信</strong>の順に取り崩します。
+      ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
+      ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
+        ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと、現金も生活費に回ります。"
+        : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}
+      受け取った分配金・配当は現金に入るので、「現金」の欄にはその分も含まれます。</p>
 
     ${orderBlock}
 
@@ -2993,6 +3015,9 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   // 生活水準の記録：その月に使える額（年金＋取り崩し）を、今日の価値に直して見る。
   // 定率やガードレールは枯渇しにくい代わりに生活費が下がるので、そのトレードオフを測る。
   let minLivingReal = Infinity, guardSpend = lp.spend, initRate = null;
+  // 生活費をどこから出したかの生涯合計（現金・債券・投信）。
+  // 「現金は使わない計算なのか」を表で確認できるようにする。
+  let srcCash = 0, srcBonds = 0, srcFund = 0;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
@@ -3064,9 +3089,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
         let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
-        if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; }
-        if (w > 0) { w -= sellFund(w); }
-        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; }   // 最後の手段：生活防衛資金
+        srcCash += take;
+        if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; srcBonds += take; }
+        if (w > 0) { take = sellFund(w); w -= take; srcFund += take; }
+        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; srcCash += take; }   // 最後の手段：生活防衛資金
       } else {              // 年金＞生活費の余剰は運用資産へ（原価扱い）。退職後なので特定口座に積む
         taxV -= w; taxB -= w;
       }
@@ -3091,6 +3117,8 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   return { pts, retireBal, penStartAge, depletionAge, endBal,
            taxPaid: Math.round(taxPaid), taxDeferred: Math.round(taxDeferred),
            taxTotal: Math.round(taxPaid + taxDeferred),
+           // 生活費の出どころ（生涯合計）。現金には受け取った分配金・配当も入る。
+           src: { cash: Math.round(srcCash), bonds: Math.round(srcBonds), fund: Math.round(srcFund) },
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
            order, method };
