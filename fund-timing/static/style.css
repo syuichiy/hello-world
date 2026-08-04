@@ -20,6 +20,8 @@
   --shadow-sm: 0 1px 2px rgba(30, 33, 48, 0.05), 0 4px 16px rgba(30, 33, 48, 0.05);
   --shadow-md: 0 4px 10px rgba(30, 33, 48, 0.07), 0 12px 32px rgba(91, 91, 214, 0.10);
   --radius: 18px;
+  /* チップ・タイルの下地（カードの上に置いても沈んで見える薄い面） */
+  --chip-bg: #f7f8fd;
 }
 
 * { box-sizing: border-box; }
@@ -429,6 +431,7 @@ tr:hover .row-del { opacity: 1; }
     --ink: #e7e8ef;
     --ink-soft: #9a9fb4;
     --line: #30323f;
+    --chip-bg: #23252f;
     --up-text: #4ade80;
     --down-text: #ff6b81;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.2);
@@ -840,9 +843,20 @@ tr:hover .row-del { opacity: 1; }
 .skipped-why { font-size: 11.5px; color: var(--ink-soft); margin-left: 8px; }
 .skipped-need { color: var(--down-text); font-weight: 700; }
 
-/* ------------------------------------------------ 取り崩し戦略の比較・リスク検証 */
-.strat-h { font-size: 13.5px; margin: 18px 0 6px; color: var(--ink); }
-.strat-h:first-child { margin-top: 4px; }
+/* ------------------------------------------------ 取り崩し戦略の検証 */
+/* 検証に使った前提をチップで一覧する */
+.strat-premise { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }
+.premise-chip { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px;
+  font-weight: 700; color: var(--ink); background: var(--chip-bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
+.premise-key { font-size: 10.5px; font-weight: 700; color: var(--ink-soft); }
+.strat-actions { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; }
+
+/* 節見出し：番号つきで区切りを分かりやすくする */
+.strat-h { font-size: 14px; font-weight: 700; margin: 26px 0 8px; color: var(--ink);
+  padding-top: 16px; border-top: 1px solid var(--line); }
+.strat-h:first-child { margin-top: 6px; padding-top: 0; border-top: 0; }
+
 .strat-table { min-width: 480px; }
 .strat-table td.num b { font-size: 15px; }
 .strat-table small { font-weight: 400; }
@@ -851,22 +865,25 @@ tr:hover .row-del { opacity: 1; }
 .strat-badge { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
   color: var(--accent); background: rgba(91,91,214,.12); border-radius: 999px; padding: 0 7px; }
 .strat-table .warn { color: var(--neutral); font-weight: 700; }
-/* 取り崩し額の表：年金（収入）・小計・生活費（総計）を内訳と区別する */
-.draw-pen { background: rgba(28,150,90,.06); }
-.draw-div { background: rgba(202,138,4,.07); }
+
+/* 成功確率などの要約値を並べるタイル */
+.stat-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 10px; }
+.stat-tile { flex: 1 1 160px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--chip-bg); }
+.stat-label { display: block; font-size: 11.5px; color: var(--ink-soft); font-weight: 700; }
+.stat-value { display: block; margin-top: 4px; font-size: 21px; font-weight: 700; letter-spacing: -.01em; }
+
 /* 補足の但し書き（本文より一段控えめに） */
 .hint-sub { display: block; margin-top: 3px; font-size: 11.5px; opacity: .85; }
-.draw-sub { background: rgba(91,91,214,.04); }
-.draw-total { background: rgba(91,91,214,.09); }
-.draw-total b { color: var(--ink); }
 
-/* 年齢ごとの取り崩し額（月額を主、年額を従で並べる） */
+/* 年齢ごとの取り崩し額：月額を主、年額を従で並べる */
 .draw-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin: 2px 0 0; }
 .draw-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
   color: var(--ink-soft); cursor: pointer; }
 .draw-toggle input { cursor: pointer; }
 .draw-toggle select { font-size: 12px; padding: 3px 6px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--card); color: var(--ink); cursor: pointer; }
+.draw-unit { font-size: 11.5px; color: var(--ink-soft); margin-left: auto; }
 .draw-table { min-width: 440px; }
 .draw-table td:first-child { white-space: nowrap; font-weight: 700; }
 .draw-cell { white-space: nowrap; }
@@ -876,6 +893,12 @@ tr:hover .row-del { opacity: 1; }
 .draw-tag { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
   color: var(--up-text); background: rgba(28,150,90,.12); border-radius: 999px; padding: 0 7px; }
 .draw-tag-gap { color: var(--ink-soft); background: rgba(128,128,150,.12); }
+/* 年金（収入）・小計・生活費（総計）を内訳と区別する */
+.draw-pen { background: rgba(28,150,90,.06); }
+.draw-div { background: rgba(202,138,4,.07); }
+.draw-sub { background: rgba(91,91,214,.04); }
+.draw-total { background: rgba(91,91,214,.09); }
+.draw-total b { color: var(--ink); }
 
 /* ------------------------------------------------ 取引履歴CSVの取り込み */
 .csv-table-wrap { overflow-x: auto; margin: 12px 0 10px; }
@@ -998,8 +1021,6 @@ main > section { display: block; }
 .plan-input { padding: 10px 13px; border: 1.5px solid var(--line); border-radius: 10px;
   background: var(--card); color: var(--ink); font-size: 15px; width: 220px; text-align: right; }
 .plan-input-sm { width: 110px; }
-/* 選択肢の文言が長い項目は幅を広げて折り返さずに読めるようにする */
-.plan-field-wide .plan-input { width: 320px; text-align: left; }
 .plan-input:focus { outline: none; border-color: var(--accent); }
 .plan-note, .plan-eta { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
 .plan-eta { font-weight: 700; color: var(--ink); }

@@ -20,6 +20,7 @@ function switchView(view) {
   $("portfolio-view").hidden = view !== "portfolio";
   $("price-view").hidden = view !== "price";
   $("plan-view").hidden = view !== "plan";
+  $("strategy-view").hidden = view !== "strategy";
   $("settings-view").hidden = view !== "settings";
   document.querySelectorAll(".nav-tab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
@@ -37,6 +38,12 @@ function switchView(view) {
     loadPriceHistory();
   } else if (view === "plan") {
     loadPlan();
+  } else if (view === "strategy") {
+    // 資産プランと同じ前提で計算するため、先に読み込んでから自動で検証する
+    loadPlan().then(() => {
+      renderStrategyPremise();
+      if (!strategyShown) runStrategy();
+    });
   } else if (view === "settings") {
     loadSettings();
   }
@@ -1954,7 +1961,6 @@ async function loadSettings() {
   $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
   $("set-near-term").value = fmtInt(pl.near_term || 0);
   $("set-draw-method").value = pl.draw_method || "fixed";
-  $("set-draw-order").value = pl.draw_order || "taxable_first";
   $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
 }
 
@@ -2340,7 +2346,6 @@ bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
 bindPremise("set-draw-rate", "draw_rate", false);
 $("set-draw-method").addEventListener("change", (e) => savePlan({ draw_method: e.target.value }));
-$("set-draw-order").addEventListener("change", (e) => savePlan({ draw_order: e.target.value }));
 
 // ============================================================ 資産プラン
 let planData = { total_value: 0, total_invested: 0, holdings: [], plan: {} };
@@ -2373,7 +2378,7 @@ async function loadPlan() {
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
   const aiRow = $("plan-ai-row");
   if (aiRow) aiRow.hidden = (aiSettings.ai_model === "off");
-  loadPlanHistory();
+  await loadPlanHistory();   // ここで lastLifeArgs が確定する（取り崩し戦略ビューが使う）
 }
 
 async function loadPlanHistory() {
@@ -2529,7 +2534,6 @@ let portfolioRisk = null;     // 実際の保有から推定した年率リタ�
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
-let drawTableMethod = "";     // 取り崩し額の表に出す方法（空なら設定中の方法を使う）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2544,7 +2548,8 @@ function runPath(extra) {
                        drawOpts(Object.assign({ split: a.split }, extra || {})));
 }
 
-$("strategy-run").addEventListener("click", async () => {
+// 取り崩し戦略の検証をひととおり走らせる。タブを開いたときと「再計算」ボタンから呼ぶ。
+async function runStrategy() {
   if (!lastLifeArgs) {
     setStrategyStatus("⚠️ 先に設定で退職年齢・生活費などの前提を入力してください。", "error");
     return;
@@ -2555,47 +2560,68 @@ $("strategy-run").addEventListener("click", async () => {
     portfolioRisk = r.ok ? r : null;
   } catch (_) { portfolioRisk = null; }
   strategyShown = true;
+  renderStrategyPremise();
   renderStrategy();
   setStrategyStatus("");
-});
+}
+$("strategy-run").addEventListener("click", runStrategy);
+
+// 検証に使う前提をチップで並べる。どの設定で計算しているのかを一目で分かるようにする。
+function renderStrategyPremise() {
+  const el = $("strategy-premise");
+  if (!el) return;
+  const p = planData.plan || {};
+  const lp = planLifePlan();
+  if (!lp.ok) {
+    el.innerHTML = '<p class="empty-watch">設定の「資産プランの前提」で現在の年齢・退職年齢・生活費を入力すると検証できます。</p>';
+    return;
+  }
+  const man = (n) => Math.round((n || 0) / 10000).toLocaleString() + "万円";
+  const chips = [
+    ["取り崩し方法", DRAW_LABELS[p.draw_method || "fixed"]
+      + ((p.draw_method === "percent") ? `（年${p.draw_rate != null ? p.draw_rate : 4}%）` : "")],
+    ["退職", `${lp.retire}歳`],
+    ["年金", `${lp.penAge}歳〜 ${man(lp.pension)}/月`],
+    ["生活費", `${man(lp.spend)}/月`],
+    ["想定年利", `${p.return_rate != null ? p.return_rate : 0}%`],
+    ["インフレ", `${p.inflation != null ? p.inflation : 0}%`],
+    ["売却順序", "NISA温存"],
+  ];
+  el.innerHTML = chips.map(([k, v]) =>
+    `<span class="premise-chip"><span class="premise-key">${k}</span>${escapeHtml(String(v))}</span>`).join("");
+}
 
 function renderStrategy() {
   const box = $("strategy-body");
   const a = lastLifeArgs;
   if (!a) { box.innerHTML = ""; strategyShown = false; return; }
   const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  const man = (n) => Math.round(n / 10000).toLocaleString() + " 万円";
   const ageOf = (p) => p.depletionAge > 0 ? `${Math.floor(p.depletionAge)}歳で枯渇` : "100歳まで持続";
+  const cur = (planData.plan || {}).draw_method || "fixed";
+  const curLabel = DRAW_LABELS[cur];
 
   // ① 取り崩し方法の比較（同じ前提・同じ利回りで方法だけ変える）
   const methods = ["fixed", "percent", "guardrail"];
-  const cmp = methods.map((mth) => {
-    const p = runPath({ method: mth });
-    return { mth, p };
-  });
-  const cur = (planData.plan || {}).draw_method || "fixed";
+  const cmp = methods.map((mth) => ({ mth, p: runPath({ method: mth }) }));
+  const curPath = (cmp.find(({ mth }) => mth === cur) || cmp[0]).p;
   const cmpRows = cmp.map(({ mth, p }) => `
     <tr class="${mth === cur ? "strat-current" : ""}">
       <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
-      <td class="num">${yen(p.retireBal)}</td>
       <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
       <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
       <td class="num">${yen(p.minLiving)}/月</td>
     </tr>`).join("");
 
-  // ② 年齢ごとの取り崩し額（3方式を横並びで比べる）
-  // 退職後は「いくら引き出すことになるのか」が最大の関心事なので、月額と年額を年齢別に出す。
+  // ② 年齢ごとの取り崩し額（設定中の方法で、出どころ別に表示）
   const retAge = Math.ceil(a.retireAge);
+  const penAge = Math.ceil(a.lp.penAge);
   const ages = [];
   for (let g = retAge; g <= 100; g += drawTableStep) ages.push(g);
-  const penAge = Math.ceil(a.lp.penAge);
   if (penAge > retAge && penAge < 100 && !ages.includes(penAge)) {
     ages.push(penAge); ages.sort((x, y) => x - y);
   }
-  // 表に出す方法はプルダウンで選ぶ（既定は設定中の方法）。①の比較で作った経路を使い回す。
-  if (!DRAW_LABELS[drawTableMethod]) drawTableMethod = cur;
-  const drawPath = (cmp.find(({ mth }) => mth === drawTableMethod) || cmp[0]).p;
-  // 年金＋出どころ（現金・債券・投信）＝生活費、と左から右へ足し上がるように並べる。
-  // 現金には受け取った分配金・配当も入る。
+  // 年金＋出どころ（現金・債券・分配金・投信）＝生活費、と左から右へ足し上がるように並べる
   const srcCols = [
     ["pension", "年金", "draw-pen"],
     ["cash", "現金", ""], ["bonds", "債券", ""],
@@ -2603,95 +2629,25 @@ function renderStrategy() {
     ["total", "取り崩し計", "draw-sub"],
     ["living", "生活費", "draw-total"],
   ];
+  // 単位は見出しにまとめ、セルは「月額（上段）／年額（下段）」だけにして表を横に詰める
+  const yearTxt = (n) => (n >= 100000 ? Math.round(n / 10000).toLocaleString() + "万"
+                                      : Math.round(n).toLocaleString());
   const drawCell = (d, key, cls) => {
     if (!d) return `<td class="num draw-none ${cls}">—</td>`;
     const v = d[key];
     const mo = drawTableReal ? v.monthReal : v.month;
     const yr = drawTableReal ? v.yearReal : v.year;
-    return `<td class="num draw-cell ${cls}"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
-      + `<span class="draw-year">年 ${Math.round(yr).toLocaleString()} 円</span></td>`;
+    return `<td class="num draw-cell ${cls}"><b>${Math.round(mo).toLocaleString()}</b>`
+      + `<span class="draw-year">年 ${yearTxt(yr)}</span></td>`;
   };
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
-    const d = drawAtAge(drawPath, g);
+    const d = drawAtAge(curPath, g);
     return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}</tr>`;
   }).join("");
-  // 「合計」が何の額なのかを方法ごとに明示する。生活費そのものではなく、
-  // 年金で足りないぶん（＝資産から出す額）である点が誤解されやすい。
-  const spendY = yen(a.lp.spend), penY = yen(a.lp.pension);
-  const drawFormula = `<strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
-    になるように並べています（「取り崩し計」は年金以外の小計＝<strong>資産から出る額</strong>）。
-    <strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
-    「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。
-    分配金の欄は<strong>その月に受け取った分のうち生活費に充てた額</strong>で、
-    使い切らなかった分は現金として積み上がります（翌月以降は「現金」に数えます）。
-    分配金は<strong>利回り一定</strong>として運用資産に比例させているため、積立や値上がりで
-    資産が増えれば分配金も増えます（設定の分配金カードの金額は<strong>今の保有額</strong>ベースです）。`
-    + (drawTableMethod === "percent"
-      ? `定率では<strong>「取り崩し計」＝その時の資産残高 × ${
-           ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> と決まり、
-         生活費はその結果（取り崩し計 ＋ 年金）になります。`
-      : `${DRAW_LABELS[drawTableMethod]}では先に生活費（${spendY}/月 ×インフレ${
-           drawTableMethod === "guardrail" ? "、見直しで増減した年はその増減後の額" : ""}）が決まり、
-         <strong>そこから年金を引いた残りが「取り崩し計」</strong>になります。`)
-    + `年金 ${penY}/月も<strong>インフレで増える前提</strong>です。`
-    + (a.lp.penAge > a.lp.retire
-      ? `年金開始（${Math.round(a.lp.penAge)}歳）までは年金が0円なので、生活費の全額を資産から取り崩します。` : "");
 
-  // ③ 取り崩す口座の順序（税効率）の比較
-  // NISAは非課税なので、課税される特定口座を先に売るほど非課税運用が長く続き、税額が減る。
-  const sp0 = a.split || {};
-  const hasNisa = (sp0.nisaV || 0) > 0 && (sp0.taxV || 0) > 0;
-  const curOrder = (planData.plan || {}).draw_order || "taxable_first";
-  let orderBlock;
-  if (!hasNisa) {
-    orderBlock = `<h3 class="strat-h">③ 取り崩す口座の順序（税効率）</h3>
-      <p class="empty-watch">${(sp0.nisaV || 0) > 0
-        ? "現在の保有はすべてNISA（非課税）のため、取り崩す順序による税額の差はありません。"
-        : "現在の保有にNISAがないため、取り崩す順序による税額の差はありません。銘柄一覧で口座区分をNISAに設定すると比較できます。"}</p>`;
-  } else {
-    const orders = ["taxable_first", "proportional", "nisa_first"];
-    const runs = orders.map((od) => ({ od, p: runPath({ order: od }) }));
-    // 比較は「支払った税」だけでなく「残った含み益への税」も足した合計で行う。
-    // 特定口座を売らずに残せば支払は0円になるが、税が消えたわけではないため。
-    const best = runs.reduce((x, y) => (y.p.taxTotal < x.p.taxTotal ? y : x));
-    const worst = runs.reduce((x, y) => (y.p.taxTotal > x.p.taxTotal ? y : x));
-    const orderRows = runs.map(({ od, p }) => `
-      <tr class="${od === curOrder ? "strat-current" : ""}">
-        <td>${ORDER_LABELS[od]}${od === curOrder ? '<span class="strat-badge">設定中</span>' : ""}</td>
-        <td class="num">${yen(p.taxPaid)}</td>
-        <td class="num">${yen(p.taxDeferred)}</td>
-        <td class="num"><b>${yen(p.taxTotal)}</b>${p.taxTotal > best.p.taxTotal
-          ? `<span class="draw-year down">最良より +${yen(p.taxTotal - best.p.taxTotal)}</span>` : ""}</td>
-        <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
-        <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
-      </tr>`).join("");
-    orderBlock = `
-      <h3 class="strat-h">③ 取り崩す口座の順序（税効率）</h3>
-      <p class="hint">現在の内訳は <strong>特定口座 ${yen(sp0.taxV)}</strong> ／
-        <strong>NISA ${yen(sp0.nisaV)}</strong>（グラフの現在値ベース）。
-        NISAの利益は非課税なので、課税される特定口座を先に売るほど非課税運用が長く続きます。</p>
-      <div class="csv-table-wrap"><table class="csv-table strat-table">
-        <thead><tr><th>取り崩す順序</th><th class="num">生涯で払う税<br><small>（売却時）</small></th>
-          <th class="num">残る含み益への税<br><small>（先送り分）</small></th>
-          <th class="num">税の合計</th>
-          <th class="num">資産寿命</th><th class="num">100歳時点<br><small>（税引後）</small></th></tr></thead>
-        <tbody>${orderRows}</tbody></table></div>
-      <p class="hint"><strong>「生涯で払う税」だけで比べないでください。</strong>
-        特定口座を売り残すとその欄は小さく（0円にも）なりますが、含み益にかかる税が
-        <strong>先送りされているだけ</strong>で、売れば課税されます。日本では相続しても
-        取得価額が引き継がれるため、この税がなくなることはありません。
-        比べるべきは<strong>「税の合計」と「100歳時点（税引後）」</strong>です。</p>
-      <p class="hint">${worst.p.taxTotal > best.p.taxTotal
-        ? `この前提では <strong>「${ORDER_LABELS[best.od]}」</strong>がもっとも税の合計が少なく、
-           もっとも不利な「${ORDER_LABELS[worst.od]}」より <strong>${yen(worst.p.taxTotal - best.p.taxTotal)}</strong> 得になります。`
-        : "この前提では、順序による税の差はほとんどありません。"}
-        順序は<button class="linklike" id="order-goto-settings" type="button">設定</button>の
-        「取り崩す口座の順序」で変更できます。</p>`;
-  }
-
-  // ④ 暴落シナリオ（退職直後の下落・出だしの不調）
+  // ③ 暴落シナリオ（退職直後の下落・出だしの不調）
   const rm = projMonthlyRate(a.baseRate);
   const retireM = Math.max(1, Math.round((a.retireAge - a.lp.age0) * 12));
   const scenarios = [
@@ -2702,7 +2658,7 @@ function renderStrategy() {
       ret: (m) => (m >= retireM && m < retireM + 60 ? projMonthlyRate(-0.03) : rm) },
   ];
   const scRows = scenarios.map((s) => {
-    const p = runPath(s.ret ? { ret: s.ret } : {});
+    const p = s.ret ? runPath({ ret: s.ret }) : curPath;
     return `<tr>
       <td>${escapeHtml(s.name)}</td>
       <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
@@ -2710,64 +2666,54 @@ function renderStrategy() {
     </tr>`;
   }).join("");
 
-  // ③ モンテカルロ（実際の保有の変動率で値動きを揺らして多数回試算）
+  // ④ モンテカルロ（設定中の方法で、実際の保有の変動率だけ揺らす）
   let mc = "";
   if (portfolioRisk) {
     const sdM = (portfolioRisk.annual_vol / 100) / Math.sqrt(12);   // 月次の標準偏差
     const N = 400;
-    const mcRows = methods.map((mth) => {
-      let ok = 0; const ends = [];
-      for (let i = 0; i < N; i++) {
-        const p = runPath({ method: mth, ret: () => randNorm(rm, sdM) });
-        if (p.depletionAge < 0) ok++;
-        ends.push(p.endBal);
-      }
-      ends.sort((x, y) => x - y);
-      const pct = (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))];
-      const rate = Math.round(ok / N * 100);
-      const cls = rate >= 90 ? "up" : rate >= 70 ? "warn" : "down";
-      return `<tr class="${mth === cur ? "strat-current" : ""}">
-        <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
-        <td class="num ${cls}"><b>${rate}%</b></td>
-        <td class="num">${yen(pct(0.1))}</td>
-        <td class="num">${yen(pct(0.5))}</td>
-      </tr>`;
-    }).join("");
+    let ok = 0; const ends = [];
+    for (let i = 0; i < N; i++) {
+      const p = runPath({ ret: () => randNorm(rm, sdM) });
+      if (p.depletionAge < 0) ok++;
+      ends.push(p.endBal);
+    }
+    ends.sort((x, y) => x - y);
+    const pct = (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))];
+    const rate = Math.round(ok / N * 100);
+    const cls = rate >= 90 ? "up" : rate >= 70 ? "warn" : "down";
     mc = `
-      <h3 class="strat-h">⑤ 値動きのブレを含めた成功確率（モンテカルロ ${N}回×3方式）</h3>
+      <h3 class="strat-h">④ 値動きのブレを含めた成功確率（${curLabel}・${N}回）</h3>
+      <div class="stat-row">
+        <div class="stat-tile"><span class="stat-label">100歳まで尽きない確率</span>
+          <b class="stat-value ${cls}">${rate}%</b></div>
+        <div class="stat-tile"><span class="stat-label">100歳時点（中央値）</span>
+          <b class="stat-value">${man(pct(0.5))}</b></div>
+        <div class="stat-tile"><span class="stat-label">100歳時点（下位10%）</span>
+          <b class="stat-value">${man(pct(0.1))}</b></div>
+      </div>
       <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
-        を使い、ブレ幅だけをお持ちの銘柄の実績から取った<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
-        （直近${Math.round(portfolioRisk.months / 12)}年・${portfolioRisk.months}ヶ月で推定）としています。
-        毎月の値動きをこのブレ幅で揺らし、<strong>100歳まで資産が尽きなかった割合</strong>を数えます。
+        を使い、ブレ幅だけを実際の保有から推定した<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
+        （直近${portfolioRisk.months}ヶ月）としています。
         <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
-        直近の相場に引きずられるため平均には使いません。</span></p>
-      <div class="csv-table-wrap"><table class="csv-table strat-table">
-        <thead><tr><th>取り崩し方法</th><th class="num">成功確率</th>
-          <th class="num">下位10%のとき<br>100歳時点</th><th class="num">中央値<br>100歳時点</th></tr></thead>
-        <tbody>${mcRows}</tbody></table></div>`;
+        直近の相場に引きずられるため平均には使いません。</span></p>`;
   } else {
-    mc = `<h3 class="strat-h">⑤ 値動きのブレを含めた成功確率</h3>
+    mc = `<h3 class="strat-h">④ 値動きのブレを含めた成功確率</h3>
       <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
         価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
   }
 
   box.innerHTML = `
-    <h3 class="strat-h">① 取り崩し方法の比較（同じ前提・利回りのブレなし）</h3>
+    <h3 class="strat-h">① 取り崩し方法の比較（利回りのブレなし）</h3>
     <div class="csv-table-wrap"><table class="csv-table strat-table">
-      <thead><tr><th>方法</th><th class="num">退職時の資産</th><th class="num">資産寿命</th>
+      <thead><tr><th>方法</th><th class="num">資産寿命</th>
         <th class="num">100歳時点</th><th class="num">生活費の下限<br><small>（今日の価値）</small></th></tr></thead>
       <tbody>${cmpRows}</tbody></table></div>
     <p class="hint">定率は枯渇しにくい代わりに<strong>生活費が下がりうる</strong>点に注目してください。
-      「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。</p>
+      「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。
+      退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>（3方式とも同じ）。</p>
 
-    <h3 class="strat-h">② 年齢ごとの取り崩し額（資産から引き出す額）</h3>
+    <h3 class="strat-h">② 年齢ごとの取り崩し額（${curLabel}）</h3>
     <div class="draw-ctrls">
-      <label class="draw-toggle">取り崩し方法
-        <select id="draw-method">
-          ${["fixed", "percent", "guardrail"].map((m) =>
-            `<option value="${m}"${m === drawTableMethod ? " selected" : ""}>${DRAW_LABELS[m]}${
-              m === cur ? "（設定中）" : ""}</option>`).join("")}
-        </select></label>
       <label class="draw-toggle">表示間隔
         <select id="draw-step">
           <option value="5"${drawTableStep === 5 ? " selected" : ""}>5年ごと</option>
@@ -2775,34 +2721,35 @@ function renderStrategy() {
         </select></label>
       <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
         今日の価値で表示する（インフレ分を除く）</label>
+      <span class="draw-unit">単位：円（上段＝月額／下段＝年額）</span>
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
       <thead><tr><th>年齢</th>${srcCols.map(([, label, c]) =>
         `<th class="num ${c}">${label}</th>`).join("")}</tr></thead>
       <tbody>${drawRows}</tbody></table></div>
-    <p class="hint">${drawTableReal
-      ? "インフレ分を除いた<strong>今日の価値</strong>で表示しています。定額なら毎年ほぼ同じ額に見えます。"
-      : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。
-         定額でも年齢が上がるほど金額は増えていきます。`}
+    <p class="hint"><strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
+      になるように並べています（「取り崩し計」は年金以外の小計＝資産から出る額）。
+      ${drawTableReal
+        ? "インフレ分を除いた<strong>今日の価値</strong>で表示中です。"
+        : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。</p>
-    <p class="hint">${drawFormula}</p>
-    <p class="hint">取り崩しは<strong>現金 → 債券 → 投信</strong>の順に行います。
-      ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
-      ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
-        ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと、現金も生活費に回ります。"
-        : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}
-      分配金や売却代金はいったん現金に入りますが、表では<strong>元の出どころ</strong>
-      （分配金・債券・投信）として数えています。</p>
-    <p class="hint">${drawTableStep === 5
-      ? "表の行は<strong>5年おきの抜粋</strong>です。金額は5年間据え置きではなく、"
-      : "金額は"}<strong>月単位で計算</strong>しており毎月変化します
-      （定額・ガードレールはインフレのぶん毎月少しずつ増え、定率は残高に連動します）。
-      各行の月額は、その年齢の12ヶ月を平均した額です。${drawTableStep === 5
-        ? "「表示間隔」を1年ごとにすると、途中の年も確認できます。" : ""}</p>
+    <details class="plan-help">
+      <summary>この表の細かい前提</summary>
+      <ul>
+        <li>取り崩しは<strong>現金 → 債券 → 投信</strong>の順。ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
+          ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
+            ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと現金も生活費に回ります。"
+            : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}</li>
+        <li><strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
+          「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。
+          その月に使い切らなかった分は現金として積み上がります（翌月以降は「現金」に数えます）。</li>
+        <li>分配金は<strong>利回り一定</strong>として運用資産に比例させています。設定の分配金カードの金額は<strong>今の保有額</strong>ベースです。</li>
+        <li>金額は<strong>月単位で計算</strong>しており毎月変化します（定額・ガードレールはインフレのぶん増え、定率は残高に連動）。
+          各行の月額は、その年齢の12ヶ月を平均した額です。</li>
+      </ul>
+    </details>
 
-    ${orderBlock}
-
-    <h3 class="strat-h">④ 暴落シナリオ（設定中の「${DRAW_LABELS[cur]}」で試算）</h3>
+    <h3 class="strat-h">③ 暴落シナリオ（${curLabel}で試算）</h3>
     <div class="csv-table-wrap"><table class="csv-table strat-table">
       <thead><tr><th>シナリオ</th><th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
       <tbody>${scRows}</tbody></table></div>
@@ -2811,22 +2758,14 @@ function renderStrategy() {
 
     ${mc}`;
 
-  // 「今日の価値で表示する」の切り替え（表だけ作り直す）
-  const realChk = $("draw-real");
-  if (realChk) realChk.addEventListener("change", (e) => {
-    drawTableReal = e.target.checked;
-    renderStrategy();
-  });
-  const goSet = $("order-goto-settings");
-  if (goSet) goSet.addEventListener("click", () => switchView("settings"));
   const stepSel = $("draw-step");
   if (stepSel) stepSel.addEventListener("change", (e) => {
     drawTableStep = Number(e.target.value) || 5;
     renderStrategy();
   });
-  const mthSel = $("draw-method");
-  if (mthSel) mthSel.addEventListener("change", (e) => {
-    drawTableMethod = e.target.value;
+  const realChk = $("draw-real");
+  if (realChk) realChk.addEventListener("change", (e) => {
+    drawTableReal = e.target.checked;
     renderStrategy();
   });
 }
@@ -2971,6 +2910,8 @@ function planLifePlan() {
 //   pctRate … 定率のときの年率（0.04 = 毎年 残高の4%）
 //   ret(m)  … その月のリターンを返す関数。省略時は想定年利から一定。
 //             暴落シナリオやモンテカルロは、ここに関数を渡して実現する。
+//   split   … 運用資産の口座別内訳 {taxV,taxB,nisaV,nisaB,taxRate,nisaRoom}。
+//             省略時は全額を特定口座（実効税率）として扱う。
 function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor, div, opts) {
   const o = opts || {};
   const method = o.method || "fixed";
@@ -2997,7 +2938,6 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   let nisaB = sp ? (sp.nisaB || 0) : 0;
   let nisaRoom = sp ? Math.max(0, sp.nisaRoom || 0) : 0;           // NISA生涯投資枠の残り（簿価）
   const tRate = sp ? (sp.taxRate || 0) : t;   // 特定口座にかかる税率（NISAは非課税）
-  const order = o.order || "taxable_first";
   let taxPaid = 0;                            // 取り崩しで払う譲渡益税の累計
 
   const fundV = () => taxV + nisaV;           // 運用資産の合計（税引前）
@@ -3025,23 +2965,13 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     if (nisaB < 0) nisaB = 0;
     return sell;
   };
-  // 設定した順序で運用資産から「手取り need 円」を取り崩す。手取りで得られた額を返す。
+  // 運用資産から「手取り need 円」を取り崩す。手取りで得られた額を返す。
+  // 順序は NISA温存（課税される特定口座から先に売り、非課税のNISAを最後まで運用する）で固定。
+  // 特定口座は税引後では想定利回りより遅く増えるため、先に使い切るのが生涯の税負担が最も軽い。
   const sellFund = (need) => {
     if (!(need > 0)) return 0;
-    let got = 0;
-    if (order === "nisa_first") {              // NISAから先に（非課税枠を先に使い切る）
-      got += sellNisa(need - got);
-      got += sellTaxable(need - got);
-    } else if (order === "proportional") {     // 按分（保有比率どおりに取り崩す）
-      const tot = fundV();
-      if (tot > 0) got += sellTaxable(need * (taxV / tot));
-      got += sellNisa(need - got);
-      got += sellTaxable(need - got);
-    } else {                                   // taxable_first（既定）：特定口座から先に＝NISA温存
-      got += sellTaxable(need - got);
-      got += sellNisa(need - got);
-    }
-    return got;
+    const got = sellTaxable(need);
+    return got + sellNisa(need - got);
   };
   // 投信の税引後評価額（いま全部売ったら手元に残る額）。NISA分は課税されない。
   const fundAT = () => (taxV - Math.max(0, taxV - taxB) * tRate) + nisaV;
@@ -3182,17 +3112,12 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
            taxTotal: Math.round(taxPaid + taxDeferred),
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
-           order, method };
+           method };
 }
 
 // NISAの生涯投資枠（簿価1,800万円）と年間投資枠（360万円）。積立の振り分けに使う。
 const NISA_LIFETIME_CAP = 18000000;
 const NISA_YEAR_CAP = 3600000;
-const ORDER_LABELS = {
-  taxable_first: "特定口座から先に（NISA温存）",
-  proportional: "按分（保有比率どおり）",
-  nisa_first: "NISAから先に",
-};
 
 // 指定した年齢の1年間に「資産から引き出す額」を集計する。
 // 定率のように月ごとに変わる方式でも実態に合うよう、その歳の各月を平均して月額を出す。
@@ -3216,7 +3141,6 @@ function drawOpts(extra) {
   return Object.assign({
     method: p.draw_method || "fixed",
     pctRate: (p.draw_rate != null ? p.draw_rate : 4) / 100,
-    order: p.draw_order || "taxable_first",
   }, extra || {});
 }
 const DRAW_LABELS = { fixed: "定額", percent: "定率", guardrail: "ガードレール" };
@@ -3601,8 +3525,8 @@ function renderLifeStages(o) {
   if (emFloor > 0) msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。`;
   // 口座の順序は税額に効くため、NISAを持っている場合だけ前提を明示する
   if ((split && split.nisaV > 0) && (split.taxV > 0)) {
-    msg += `運用資産の取り崩しは「${ORDER_LABELS[path.order] || ""}」の順で行い、`
-      + `売却時に特定口座の含み益へ課税する前提です（生涯で払う税 約 ${path.taxPaid.toLocaleString()} 円`
+    msg += "運用資産はNISAを温存し、課税される特定口座から先に取り崩す前提です"
+      + `（売却時に含み益へ課税。生涯で払う税 約 ${path.taxPaid.toLocaleString()} 円`
       + `＋最後まで売らずに残る含み益への税 約 ${path.taxDeferred.toLocaleString()} 円`
       + ` ＝ 合計 約 ${path.taxTotal.toLocaleString()} 円）。`;
   }
