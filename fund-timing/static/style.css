@@ -852,6 +852,20 @@ tr:hover .row-del { opacity: 1; }
   color: var(--accent); background: rgba(91,91,214,.12); border-radius: 999px; padding: 0 7px; }
 .strat-table .warn { color: var(--neutral); font-weight: 700; }
 
+/* 年齢ごとの取り崩し額（月額を主、年額を従で並べる） */
+.draw-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--ink-soft); cursor: pointer; margin: 2px 0 0; }
+.draw-toggle input { cursor: pointer; }
+.draw-table { min-width: 440px; }
+.draw-table td:first-child { white-space: nowrap; font-weight: 700; }
+.draw-cell { white-space: nowrap; }
+.draw-cell b { font-size: 14px; }
+.draw-year { display: block; font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+.draw-none { color: var(--ink-soft); }
+.draw-tag { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700;
+  color: var(--up-text); background: rgba(28,150,90,.12); border-radius: 999px; padding: 0 7px; }
+.draw-tag-gap { color: var(--ink-soft); background: rgba(128,128,150,.12); }
+
 /* ------------------------------------------------ 取引履歴CSVの取り込み */
 .csv-table-wrap { overflow-x: auto; margin: 12px 0 10px; }
 .csv-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 620px; }

@@ -2525,6 +2525,7 @@ $("strategy-goto-settings").addEventListener("click", () => switchView("settings
 let lastLifeArgs = null;      // 資産推移グラフと同じ前提（renderLifeStages が控える）
 let portfolioRisk = null;     // 実際の保有から推定した年率リターン・変動率
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
+let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2576,7 +2577,30 @@ function renderStrategy() {
       <td class="num">${yen(p.minLiving)}/月</td>
     </tr>`).join("");
 
-  // ② 暴落シナリオ（退職直後の下落・出だしの不調）
+  // ② 年齢ごとの取り崩し額（3方式を横並びで比べる）
+  // 退職後は「いくら引き出すことになるのか」が最大の関心事なので、月額と年額を年齢別に出す。
+  const retAge = Math.ceil(a.retireAge);
+  const ages = [];
+  for (let g = retAge; g <= 100; g += 5) ages.push(g);
+  const penAge = Math.ceil(a.lp.penAge);
+  if (penAge > retAge && penAge < 100 && !ages.includes(penAge)) {
+    ages.push(penAge); ages.sort((x, y) => x - y);
+  }
+  const drawCell = (p, g) => {
+    const d = drawAtAge(p, g);
+    if (!d) return '<td class="num draw-none">—</td>';
+    const mo = drawTableReal ? d.monthReal : d.month;
+    const yr = drawTableReal ? d.yearReal : d.year;
+    return `<td class="num draw-cell"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
+      + `<span class="draw-year">年 ${Math.round(yr).toLocaleString()} 円</span></td>`;
+  };
+  const drawRows = ages.map((g) => {
+    const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
+      : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
+    return `<tr><td>${g}歳${tag}</td>${cmp.map(({ p }) => drawCell(p, g)).join("")}</tr>`;
+  }).join("");
+
+  // ③ 暴落シナリオ（退職直後の下落・出だしの不調）
   const rm = projMonthlyRate(a.baseRate);
   const retireM = Math.max(1, Math.round((a.retireAge - a.lp.age0) * 12));
   const scenarios = [
@@ -2619,7 +2643,7 @@ function renderStrategy() {
       </tr>`;
     }).join("");
     mc = `
-      <h3 class="strat-h">③ 値動きのブレを含めた成功確率（モンテカルロ ${N}回×3方式）</h3>
+      <h3 class="strat-h">④ 値動きのブレを含めた成功確率（モンテカルロ ${N}回×3方式）</h3>
       <p class="hint">お持ちの銘柄の実績から <strong>年率リターン ${portfolioRisk.annual_return}％・
         変動率 ${portfolioRisk.annual_vol}％</strong>（直近${Math.round(portfolioRisk.months / 12)}年・${portfolioRisk.months}ヶ月で推定）。
         毎月の値動きをこのブレ幅で揺らし、<strong>100歳まで資産が尽きなかった割合</strong>を数えます。</p>
@@ -2628,7 +2652,7 @@ function renderStrategy() {
           <th class="num">下位10%のとき<br>100歳時点</th><th class="num">中央値<br>100歳時点</th></tr></thead>
         <tbody>${mcRows}</tbody></table></div>`;
   } else {
-    mc = `<h3 class="strat-h">③ 値動きのブレを含めた成功確率</h3>
+    mc = `<h3 class="strat-h">④ 値動きのブレを含めた成功確率</h3>
       <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
         価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
   }
@@ -2642,7 +2666,21 @@ function renderStrategy() {
     <p class="hint">定率は枯渇しにくい代わりに<strong>生活費が下がりうる</strong>点に注目してください。
       「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。</p>
 
-    <h3 class="strat-h">② 暴落シナリオ（設定中の「${DRAW_LABELS[cur]}」で試算）</h3>
+    <h3 class="strat-h">② 年齢ごとの取り崩し額（資産から引き出す額）</h3>
+    <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
+      今日の価値で表示する（インフレ分を除く）</label>
+    <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
+      <thead><tr><th>年齢</th>${cmp.map(({ mth }) =>
+        `<th class="num">${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</th>`).join("")}</tr></thead>
+      <tbody>${drawRows}</tbody></table></div>
+    <p class="hint">${drawTableReal
+      ? "インフレ分を除いた<strong>今日の価値</strong>で表示しています。定額なら毎年ほぼ同じ額に見えます。"
+      : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。
+         定額でも年齢が上がるほど金額は増えていきます。`}
+      年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
+      年額は同じ年齢の各月を平均して12倍したものです。</p>
+
+    <h3 class="strat-h">③ 暴落シナリオ（設定中の「${DRAW_LABELS[cur]}」で試算）</h3>
     <div class="csv-table-wrap"><table class="csv-table strat-table">
       <thead><tr><th>シナリオ</th><th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
       <tbody>${scRows}</tbody></table></div>
@@ -2650,6 +2688,13 @@ function renderStrategy() {
       退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。</p>
 
     ${mc}`;
+
+  // 「今日の価値で表示する」の切り替え（表だけ作り直す）
+  const realChk = $("draw-real");
+  if (realChk) realChk.addEventListener("change", (e) => {
+    drawTableReal = e.target.checked;
+    renderStrategy();
+  });
 }
 
 // --- 分配金・配当（インカム） ---
@@ -2829,6 +2874,9 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
+    // その月に資産から引き出す額。年齢ごとの取り崩し額を表示するために記録する。
+    // drawM=名目（その時に実際に引き出す額）／drawR=今日の価値に直した額。
+    let drawM = null, drawR = null;
     fund = fund * (1 + retOf(m));        // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     if (fund < 0) fund = 0;
     // 受取分配金：運用資産から出て、税引後は現金へ（グラフの現金の帯に反映）。
@@ -2879,6 +2927,9 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         w = living - pen;
       }
       if (inflF > 0) minLivingReal = Math.min(minLivingReal, living / inflF);
+      // 年金が生活費を上回る月（w<0）は取り崩しゼロとして記録する
+      drawM = Math.max(0, w);
+      drawR = inflF > 0 ? drawM / inflF : drawM;
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
@@ -2897,6 +2948,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       }
     }
     const pt = snap(age, dt);
+    if (drawM != null) { pt.draw = drawM; pt.drawReal = drawR; }
     pts.push(pt);
     if (pt.v <= 0) { depletionAge = age; break; }
   }
@@ -2906,6 +2958,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
            method };
+}
+
+// 指定した年齢の1年間に「資産から引き出す額」を集計する。
+// 定率のように月ごとに変わる方式でも実態に合うよう、その歳の各月を平均して月額を出す。
+// 枯渇後は月次データ自体が無いので null を返す（表では「—」と表示する）。
+function drawAtAge(path, age) {
+  const ms = (path.pts || []).filter((q) => q.draw != null && q.age >= age - 1e-6 && q.age < age + 1 - 1e-6);
+  if (!ms.length) return null;
+  const month = ms.reduce((s, q) => s + q.draw, 0) / ms.length;
+  const monthReal = ms.reduce((s, q) => s + q.drawReal, 0) / ms.length;
+  return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
