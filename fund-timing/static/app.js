@@ -2526,6 +2526,7 @@ let lastLifeArgs = null;      // 資産推移グラフと同じ前提（renderLi
 let portfolioRisk = null;     // 実際の保有から推定した年率リターン・変動率
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
+let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2581,7 +2582,7 @@ function renderStrategy() {
   // 退職後は「いくら引き出すことになるのか」が最大の関心事なので、月額と年額を年齢別に出す。
   const retAge = Math.ceil(a.retireAge);
   const ages = [];
-  for (let g = retAge; g <= 100; g += 5) ages.push(g);
+  for (let g = retAge; g <= 100; g += drawTableStep) ages.push(g);
   const penAge = Math.ceil(a.lp.penAge);
   if (penAge > retAge && penAge < 100 && !ages.includes(penAge)) {
     ages.push(penAge); ages.sort((x, y) => x - y);
@@ -2667,8 +2668,15 @@ function renderStrategy() {
       「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。</p>
 
     <h3 class="strat-h">② 年齢ごとの取り崩し額（資産から引き出す額）</h3>
-    <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
-      今日の価値で表示する（インフレ分を除く）</label>
+    <div class="draw-ctrls">
+      <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
+        今日の価値で表示する（インフレ分を除く）</label>
+      <label class="draw-toggle">表示間隔
+        <select id="draw-step">
+          <option value="5"${drawTableStep === 5 ? " selected" : ""}>5年ごと</option>
+          <option value="1"${drawTableStep === 1 ? " selected" : ""}>1年ごと</option>
+        </select></label>
+    </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
       <thead><tr><th>年齢</th>${cmp.map(({ mth }) =>
         `<th class="num">${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</th>`).join("")}</tr></thead>
@@ -2677,8 +2685,13 @@ function renderStrategy() {
       ? "インフレ分を除いた<strong>今日の価値</strong>で表示しています。定額なら毎年ほぼ同じ額に見えます。"
       : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。
          定額でも年齢が上がるほど金額は増えていきます。`}
-      年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
-      年額は同じ年齢の各月を平均して12倍したものです。</p>
+      年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。</p>
+    <p class="hint">${drawTableStep === 5
+      ? "表の行は<strong>5年おきの抜粋</strong>です。金額は5年間据え置きではなく、"
+      : "金額は"}<strong>月単位で計算</strong>しており毎月変化します
+      （定額・ガードレールはインフレのぶん毎月少しずつ増え、定率は残高に連動します）。
+      各行の月額は、その年齢の12ヶ月を平均した額です。${drawTableStep === 5
+        ? "「表示間隔」を1年ごとにすると、途中の年も確認できます。" : ""}</p>
 
     <h3 class="strat-h">③ 暴落シナリオ（設定中の「${DRAW_LABELS[cur]}」で試算）</h3>
     <div class="csv-table-wrap"><table class="csv-table strat-table">
@@ -2693,6 +2706,11 @@ function renderStrategy() {
   const realChk = $("draw-real");
   if (realChk) realChk.addEventListener("change", (e) => {
     drawTableReal = e.target.checked;
+    renderStrategy();
+  });
+  const stepSel = $("draw-step");
+  if (stepSel) stepSel.addEventListener("change", (e) => {
+    drawTableStep = Number(e.target.value) || 5;
     renderStrategy();
   });
 }

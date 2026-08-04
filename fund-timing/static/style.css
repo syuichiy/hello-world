@@ -853,9 +853,12 @@ tr:hover .row-del { opacity: 1; }
 .strat-table .warn { color: var(--neutral); font-weight: 700; }
 
 /* 年齢ごとの取り崩し額（月額を主、年額を従で並べる） */
+.draw-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin: 2px 0 0; }
 .draw-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
-  color: var(--ink-soft); cursor: pointer; margin: 2px 0 0; }
+  color: var(--ink-soft); cursor: pointer; }
 .draw-toggle input { cursor: pointer; }
+.draw-toggle select { font-size: 12px; padding: 3px 6px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--card); color: var(--ink); cursor: pointer; }
 .draw-table { min-width: 440px; }
 .draw-table td:first-child { white-space: nowrap; font-weight: 700; }
 .draw-cell { white-space: nowrap; }
