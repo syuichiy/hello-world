@@ -854,6 +854,8 @@ tr:hover .row-del { opacity: 1; }
 /* 取り崩し額の表：年金（収入）・小計・生活費（総計）を内訳と区別する */
 .draw-pen { background: rgba(28,150,90,.06); }
 .draw-div { background: rgba(202,138,4,.07); }
+/* 補足の但し書き（本文より一段控えめに） */
+.hint-sub { display: block; margin-top: 3px; font-size: 11.5px; opacity: .85; }
 .draw-sub { background: rgba(91,91,214,.04); }
 .draw-total { background: rgba(91,91,214,.09); }
 .draw-total b { color: var(--ink); }

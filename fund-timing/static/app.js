@@ -2735,9 +2735,12 @@ function renderStrategy() {
     }).join("");
     mc = `
       <h3 class="strat-h">⑤ 値動きのブレを含めた成功確率（モンテカルロ ${N}回×3方式）</h3>
-      <p class="hint">お持ちの銘柄の実績から <strong>年率リターン ${portfolioRisk.annual_return}％・
-        変動率 ${portfolioRisk.annual_vol}％</strong>（直近${Math.round(portfolioRisk.months / 12)}年・${portfolioRisk.months}ヶ月で推定）。
-        毎月の値動きをこのブレ幅で揺らし、<strong>100歳まで資産が尽きなかった割合</strong>を数えます。</p>
+      <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
+        を使い、ブレ幅だけをお持ちの銘柄の実績から取った<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
+        （直近${Math.round(portfolioRisk.months / 12)}年・${portfolioRisk.months}ヶ月で推定）としています。
+        毎月の値動きをこのブレ幅で揺らし、<strong>100歳まで資産が尽きなかった割合</strong>を数えます。
+        <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
+        直近の相場に引きずられるため平均には使いません。</span></p>
       <div class="csv-table-wrap"><table class="csv-table strat-table">
         <thead><tr><th>取り崩し方法</th><th class="num">成功確率</th>
           <th class="num">下位10%のとき<br>100歳時点</th><th class="num">中央値<br>100歳時点</th></tr></thead>
@@ -3134,13 +3137,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         w = living - pen;
       }
       if (inflF > 0) minLivingReal = Math.min(minLivingReal, living / inflF);
-      // 年金が生活費を上回る月（w<0）は取り崩しゼロとして記録する
-      drawM = Math.max(0, w);
       inflNow = inflF > 0 ? inflF : 1;
       // 年金が生活費を上回る月は、超過分を運用に回すので「生活費に充てた年金」は生活費と同額。
-      // これで 年金 ＋ 現金 ＋ 債券 ＋ 投信 ＝ 生活費 が常に成り立つ。
-      dLiving = living;
-      dPen = Math.max(0, living - drawM);
+      const want = Math.max(0, w);              // 資産から引き出したい額
+      dPen = Math.max(0, living - want);        // 年金のうち生活費に充てた分
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
@@ -3151,6 +3151,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       } else {              // 年金＞生活費の余剰は運用資産へ（原価扱い）。退職後なので特定口座に積む
         taxV -= w; taxB -= w;
       }
+      // 資産が尽きると要求額に届かないので、実際にまかなえた額を記録する。
+      // これで 年金 ＋ 現金 ＋ 債券 ＋ 分配金 ＋ 投信 ＝ 生活費 が最後の月まで成り立つ。
+      drawM = want - Math.max(0, w);
+      dLiving = dPen + drawM;
       // 生活防衛資金をインフレ後の水準まで現金で維持（不足分を債券→投信から少しずつ補充）
       if (cash < floorNow) {
         let need = floorNow - cash;
