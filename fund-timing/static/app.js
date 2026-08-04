@@ -2529,6 +2529,7 @@ let portfolioRisk = null;     // 実際の保有から推定した年率リタ�
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
+let drawTableMethod = "";     // 取り崩し額の表に出す方法（空なら設定中の方法を使う）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2590,27 +2591,25 @@ function renderStrategy() {
   if (penAge > retAge && penAge < 100 && !ages.includes(penAge)) {
     ages.push(penAge); ages.sort((x, y) => x - y);
   }
-  const drawCell = (p, g) => {
-    const d = drawAtAge(p, g);
+  // 表に出す方法はプルダウンで選ぶ（既定は設定中の方法）。①の比較で作った経路を使い回す。
+  if (!DRAW_LABELS[drawTableMethod]) drawTableMethod = cur;
+  const drawPath = (cmp.find(({ mth }) => mth === drawTableMethod) || cmp[0]).p;
+  // 出どころ（現金・債券・投信）と合計を横に並べる。現金には受け取った分配金・配当も入る。
+  const srcCols = [["cash", "現金"], ["bonds", "債券"], ["fund", "投信・株"], ["total", "合計"]];
+  const drawCell = (d, key) => {
     if (!d) return '<td class="num draw-none">—</td>';
-    const mo = drawTableReal ? d.monthReal : d.month;
-    const yr = drawTableReal ? d.yearReal : d.year;
-    return `<td class="num draw-cell"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
+    const v = d[key];
+    const mo = drawTableReal ? v.monthReal : v.month;
+    const yr = drawTableReal ? v.yearReal : v.year;
+    const cls = key === "total" ? "draw-cell draw-total" : "draw-cell";
+    return `<td class="num ${cls}"><b>${Math.round(mo).toLocaleString()}</b> 円/月`
       + `<span class="draw-year">年 ${Math.round(yr).toLocaleString()} 円</span></td>`;
   };
-  // 取り崩しの出どころ（生涯合計）。「現金は使わないのか」を確かめられるようにする。
-  const srcDefs = [
-    ["現金", "cash", "受け取った分配金・配当もここに入ります"],
-    ["債券", "bonds", ""],
-    ["投信・株", "fund", ""],
-  ];
-  const srcRows = srcDefs.map(([label, key, note]) => `
-    <tr><td>${label}${note ? `<span class="draw-year">${note}</span>` : ""}</td>
-      ${cmp.map(({ p }) => `<td class="num">${yen((p.src || {})[key] || 0)}</td>`).join("")}</tr>`).join("");
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
-    return `<tr><td>${g}歳${tag}</td>${cmp.map(({ p }) => drawCell(p, g)).join("")}</tr>`;
+    const d = drawAtAge(drawPath, g);
+    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k]) => drawCell(d, k)).join("")}</tr>`;
   }).join("");
 
   // ③ 取り崩す口座の順序（税効率）の比較
@@ -2733,42 +2732,41 @@ function renderStrategy() {
 
     <h3 class="strat-h">② 年齢ごとの取り崩し額（資産から引き出す額）</h3>
     <div class="draw-ctrls">
-      <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
-        今日の価値で表示する（インフレ分を除く）</label>
+      <label class="draw-toggle">取り崩し方法
+        <select id="draw-method">
+          ${["fixed", "percent", "guardrail"].map((m) =>
+            `<option value="${m}"${m === drawTableMethod ? " selected" : ""}>${DRAW_LABELS[m]}${
+              m === cur ? "（設定中）" : ""}</option>`).join("")}
+        </select></label>
       <label class="draw-toggle">表示間隔
         <select id="draw-step">
           <option value="5"${drawTableStep === 5 ? " selected" : ""}>5年ごと</option>
           <option value="1"${drawTableStep === 1 ? " selected" : ""}>1年ごと</option>
         </select></label>
+      <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
+        今日の価値で表示する（インフレ分を除く）</label>
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
-      <thead><tr><th>年齢</th>${cmp.map(({ mth }) =>
-        `<th class="num">${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</th>`).join("")}</tr></thead>
+      <thead><tr><th>年齢</th>${srcCols.map(([, label]) =>
+        `<th class="num">${label}</th>`).join("")}</tr></thead>
       <tbody>${drawRows}</tbody></table></div>
     <p class="hint">${drawTableReal
       ? "インフレ分を除いた<strong>今日の価値</strong>で表示しています。定額なら毎年ほぼ同じ額に見えます。"
       : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。
          定額でも年齢が上がるほど金額は増えていきます。`}
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。</p>
+    <p class="hint">取り崩しは<strong>現金 → 債券 → 投信</strong>の順に行います。
+      ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
+      ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
+        ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと、現金も生活費に回ります。"
+        : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}
+      受け取った分配金・配当は現金に入るので、「現金」の欄にはその分も含まれます。</p>
     <p class="hint">${drawTableStep === 5
       ? "表の行は<strong>5年おきの抜粋</strong>です。金額は5年間据え置きではなく、"
       : "金額は"}<strong>月単位で計算</strong>しており毎月変化します
       （定額・ガードレールはインフレのぶん毎月少しずつ増え、定率は残高に連動します）。
       各行の月額は、その年齢の12ヶ月を平均した額です。${drawTableStep === 5
         ? "「表示間隔」を1年ごとにすると、途中の年も確認できます。" : ""}</p>
-
-    <h4 class="strat-h4">この金額はどこから出ているか（生涯の合計）</h4>
-    <div class="csv-table-wrap"><table class="csv-table strat-table">
-      <thead><tr><th>出どころ</th>${cmp.map(({ mth }) =>
-        `<th class="num">${DRAW_LABELS[mth]}</th>`).join("")}</tr></thead>
-      <tbody>${srcRows}</tbody></table></div>
-    <p class="hint">上の表の金額は<strong>現金・債券・投信の合計</strong>で、
-      <strong>現金 → 債券 → 投信</strong>の順に取り崩します。
-      ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
-      ${(a.emFloor || 0) > 0 && (a.cash0 || 0) <= (a.emFloor || 0) + 1
-        ? "<strong>お手元の現金はすべて生活防衛資金にあたり、生活費には使いません</strong>（そのぶん投信からの取り崩しになります）。設定の「生活防衛資金（月数）」を減らすと、現金も生活費に回ります。"
-        : "現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。"}
-      受け取った分配金・配当は現金に入るので、「現金」の欄にはその分も含まれます。</p>
 
     ${orderBlock}
 
@@ -2792,6 +2790,11 @@ function renderStrategy() {
   const stepSel = $("draw-step");
   if (stepSel) stepSel.addEventListener("change", (e) => {
     drawTableStep = Number(e.target.value) || 5;
+    renderStrategy();
+  });
+  const mthSel = $("draw-method");
+  if (mthSel) mthSel.addEventListener("change", (e) => {
+    drawTableMethod = e.target.value;
     renderStrategy();
   });
 }
@@ -3015,16 +3018,14 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   // 生活水準の記録：その月に使える額（年金＋取り崩し）を、今日の価値に直して見る。
   // 定率やガードレールは枯渇しにくい代わりに生活費が下がるので、そのトレードオフを測る。
   let minLivingReal = Infinity, guardSpend = lp.spend, initRate = null;
-  // 生活費をどこから出したかの生涯合計（現金・債券・投信）。
-  // 「現金は使わない計算なのか」を表で確認できるようにする。
-  let srcCash = 0, srcBonds = 0, srcFund = 0;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
     const dt = addMonths(lastDate, m);
-    // その月に資産から引き出す額。年齢ごとの取り崩し額を表示するために記録する。
-    // drawM=名目（その時に実際に引き出す額）／drawR=今日の価値に直した額。
-    let drawM = null, drawR = null;
+    // その月に資産から引き出す額と、その出どころ（現金・債券・投信）。
+    // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
+    // 今日の価値に直すときは同じ月の inflNow で割る。
+    let drawM = null, dCash = 0, dBonds = 0, dFund = 0, inflNow = 1;
     const rM = retOf(m);                 // 運用資産のみ成長（原価は変わらない＝含み益が増える）
     taxV = Math.max(0, taxV * (1 + rM));
     nisaV = Math.max(0, nisaV * (1 + rM));
@@ -3084,15 +3085,15 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       if (inflF > 0) minLivingReal = Math.min(minLivingReal, living / inflF);
       // 年金が生活費を上回る月（w<0）は取り崩しゼロとして記録する
       drawM = Math.max(0, w);
-      drawR = inflF > 0 ? drawM / inflF : drawM;
+      inflNow = inflF > 0 ? inflF : 1;
       if (w >= 0) {
         // 生活防衛資金(floorNow)は現金に残す。
         // 取り崩し順：現金(floorNow超)→債券→投信→（最後の手段）生活防衛資金
         let take = Math.min(Math.max(0, cash - floorNow), w); cash -= take; w -= take;
-        srcCash += take;
-        if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; srcBonds += take; }
-        if (w > 0) { take = sellFund(w); w -= take; srcFund += take; }
-        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; srcCash += take; }   // 最後の手段：生活防衛資金
+        dCash += take;
+        if (w > 0) { take = Math.min(bonds, w); bonds -= take; w -= take; dBonds += take; }
+        if (w > 0) { take = sellFund(w); w -= take; dFund += take; }
+        if (w > 0) { take = Math.min(cash, w); cash -= take; w -= take; dCash += take; }   // 最後の手段：生活防衛資金
       } else {              // 年金＞生活費の余剰は運用資産へ（原価扱い）。退職後なので特定口座に積む
         taxV -= w; taxB -= w;
       }
@@ -3104,7 +3105,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       }
     }
     const pt = snap(age, dt);
-    if (drawM != null) { pt.draw = drawM; pt.drawReal = drawR; }
+    if (drawM != null) {
+      pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
+      pt.inflF = inflNow;
+    }
     pts.push(pt);
     if (pt.v <= 0) { depletionAge = age; break; }
   }
@@ -3117,8 +3121,6 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   return { pts, retireBal, penStartAge, depletionAge, endBal,
            taxPaid: Math.round(taxPaid), taxDeferred: Math.round(taxDeferred),
            taxTotal: Math.round(taxPaid + taxDeferred),
-           // 生活費の出どころ（生涯合計）。現金には受け取った分配金・配当も入る。
-           src: { cash: Math.round(srcCash), bonds: Math.round(srcBonds), fund: Math.round(srcFund) },
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
            order, method };
@@ -3139,9 +3141,13 @@ const ORDER_LABELS = {
 function drawAtAge(path, age) {
   const ms = (path.pts || []).filter((q) => q.draw != null && q.age >= age - 1e-6 && q.age < age + 1 - 1e-6);
   if (!ms.length) return null;
-  const month = ms.reduce((s, q) => s + q.draw, 0) / ms.length;
-  const monthReal = ms.reduce((s, q) => s + q.drawReal, 0) / ms.length;
-  return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
+  // 出どころ（現金・債券・投信）ごとに月額・年額を、名目と今日の価値の両方で出す
+  const of = (key) => {
+    const month = ms.reduce((s, q) => s + (q[key] || 0), 0) / ms.length;
+    const monthReal = ms.reduce((s, q) => s + (q[key] || 0) / (q.inflF || 1), 0) / ms.length;
+    return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
+  };
+  return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund") };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
