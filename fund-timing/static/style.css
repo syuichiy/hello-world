@@ -1021,6 +1021,9 @@ main > section { display: block; }
 .plan-input { padding: 10px 13px; border: 1.5px solid var(--line); border-radius: 10px;
   background: var(--card); color: var(--ink); font-size: 15px; width: 220px; text-align: right; }
 .plan-input-sm { width: 110px; }
+/* 入力欄の下に出す補足（計算結果や上限の注意） */
+.field-note { display: block; max-width: 340px; font-size: 11.5px; line-height: 1.6; color: var(--ink-soft); }
+.field-note-warn { color: var(--neutral); font-weight: 700; }
 .plan-input:focus { outline: none; border-color: var(--accent); }
 .plan-note, .plan-eta { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
 .plan-eta { font-weight: 700; color: var(--ink); }

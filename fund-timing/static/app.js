@@ -1962,6 +1962,7 @@ async function loadSettings() {
   $("set-near-term").value = fmtInt(pl.near_term || 0);
   $("set-draw-method").value = pl.draw_method || "fixed";
   $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
+  renderEmFloorNote();
 }
 
 function renderSettingsUI() {
@@ -2331,7 +2332,31 @@ function bindPremise(id, key, comma) {
     if (comma) { reformatCommaInput(e.target); v = parseIntComma(e.target.value); }
     else { v = parseFloat(e.target.value) || 0; }
     savePlan({ [key]: v });
+    renderEmFloorNote();   // 生活防衛資金は現金・生活費・月数のどれを変えても結果が変わる
   });
+}
+
+// 生活防衛資金は「生活費×月数」だが、手元現金が上限になる。
+// 現金で頭打ちになっていると月数を増やしても結果が変わらないため、その旨を明示する。
+function renderEmFloorNote() {
+  const el = $("em-floor-note");
+  if (!el) return;
+  const p = planData.plan || {};
+  const spend = p.spend_monthly || 0;
+  const months = (p.emergency_months != null) ? p.emergency_months : 6;
+  const cash = p.cash || 0;
+  const yen = (n) => Math.round(n).toLocaleString() + "円";
+  if (!(spend > 0)) { el.textContent = "退職後の生活費を入力すると金額を表示します。"; el.classList.remove("field-note-warn"); return; }
+  const want = spend * months;
+  if (want > cash) {
+    el.textContent = `${yen(spend)}×${months}ヶ月＝${yen(want)} ですが、`
+      + `手元現金 ${yen(cash)} が上限のため実際は ${yen(cash)}（現金の全額）です。`
+      + "月数を増やしても結果は変わりません。";
+    el.classList.add("field-note-warn");
+  } else {
+    el.textContent = `${yen(spend)}×${months}ヶ月＝${yen(want)} を現金で残します（手元現金 ${yen(cash)}）。`;
+    el.classList.remove("field-note-warn");
+  }
 }
 bindPremise("set-cash", "cash", true);
 bindPremise("set-bonds", "bonds", true);
@@ -3522,7 +3547,16 @@ function renderLifeStages(o) {
   msg += `退職時（${retireAge}歳）の想定資産 約 ${Math.round(path.retireBal).toLocaleString()} 円`;
   msg += reserve > 0 ? `（うち現金・債券 ${reserve.toLocaleString()} 円を含む）。` : "。";
   if (hasGap) msg += `退職〜年金開始（${penAge}歳）までは年金なしで、まず現金→次に債券から取り崩す前提です（グラフの現金・債券の帯がこの間に減っていきます）。`;
-  if (emFloor > 0) msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。`;
+  if (emFloor > 0) {
+    msg += `なお①生活防衛資金（現在価値 約 ${Math.round(emFloor).toLocaleString()} 円`
+      + `＝生活費${emMonths}ヶ月ぶん`;
+    // 生活費×月数が手元現金を超えると現金が上限になる。月数を増やしても変わらない理由を書く。
+    const want = (lp.spend || 0) * emMonths;
+    msg += (want > cash0)
+      ? `を想定しましたが、手元現金 ${Math.round(cash0).toLocaleString()} 円が上限のため現金の全額`
+      : "";
+    msg += "）は緊急時用に現金で残し、インフレに合わせて実質額を維持する前提です（不足分は運用資産から補充。年金受給後も維持）。";
+  }
   // 口座の順序は税額に効くため、NISAを持っている場合だけ前提を明示する
   if ((split && split.nisaV > 0) && (split.taxV > 0)) {
     msg += "運用資産はNISAを温存し、課税される特定口座から先に取り崩す前提です"
