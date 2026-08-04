@@ -1756,6 +1756,10 @@ def api_plan():
         if "draw_method" in data:
             m = str(data.get("draw_method") or "fixed")
             plan["draw_method"] = m if m in ("fixed", "percent", "guardrail") else "fixed"
+        # 取り崩す口座の順序（税効率）。既定は特定口座から先に売ってNISAを温存する。
+        if "draw_order" in data:
+            o = str(data.get("draw_order") or "taxable_first")
+            plan["draw_order"] = o if o in ("taxable_first", "proportional", "nisa_first") else "taxable_first"
         db.set_setting("plan", plan)
         return jsonify({"ok": True})
 

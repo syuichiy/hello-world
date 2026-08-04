@@ -990,6 +990,8 @@ main > section { display: block; }
 .plan-input { padding: 10px 13px; border: 1.5px solid var(--line); border-radius: 10px;
   background: var(--card); color: var(--ink); font-size: 15px; width: 220px; text-align: right; }
 .plan-input-sm { width: 110px; }
+/* 選択肢の文言が長い項目は幅を広げて折り返さずに読めるようにする */
+.plan-field-wide .plan-input { width: 320px; text-align: left; }
 .plan-input:focus { outline: none; border-color: var(--accent); }
 .plan-note, .plan-eta { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
 .plan-eta { font-weight: 700; color: var(--ink); }

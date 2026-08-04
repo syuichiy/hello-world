@@ -614,7 +614,18 @@
             <label class="plan-label" for="set-draw-rate">定率のときの取り崩し率（%）</label>
             <input id="set-draw-rate" type="number" step="0.1" min="0.5" max="20" class="plan-input plan-input-sm" placeholder="例）4">
           </div>
+          <div class="plan-field plan-field-wide">
+            <label class="plan-label" for="set-draw-order">取り崩す口座の順序（税効率）</label>
+            <select id="set-draw-order" class="plan-input">
+              <option value="taxable_first">特定口座から先に（NISA温存・推奨）</option>
+              <option value="proportional">按分（保有比率どおりに取り崩す）</option>
+              <option value="nisa_first">NISAから先に</option>
+            </select>
+          </div>
         </div>
+        <p class="hint">NISAの利益は<strong>非課税</strong>なので、課税される特定口座から先に取り崩すと、
+          NISAを非課税のまま長く運用でき<strong>生涯の税額が減ります</strong>。
+          効果の大きさは資産プランの「取り崩し戦略の比較」で試算できます。</p>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>
       </div>
 
