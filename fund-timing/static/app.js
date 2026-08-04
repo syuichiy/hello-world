@@ -2445,12 +2445,23 @@ function planReserve() {
 // 投信評価額
 function planFundValue() { return planData.total_value || 0; }
 
+// 現在の税引後総資産（NISAは非課税、特定口座は含み益に課税）。
+// 資産推移グラフの起点と同じ考え方にして、進捗ゲージと文言が食い違わないようにする。
+function planAfterTaxTotal() {
+  const p = planData.plan || {};
+  const baseTax = (p.tax != null ? p.tax : 20.315) / 100;
+  const taxV = planData.taxable_value || 0, taxI = planData.taxable_invested || 0;
+  return planReserve() + planFundValue() - Math.max(0, taxV - taxI) * baseTax;
+}
+
 // --- 目標・進捗 ---
-function renderPlanGoal() {
+// exactTotal を渡すと、資産推移グラフが実際に描いた現在値をそのまま使う（完全に一致させる）
+function renderPlanGoal(exactTotal) {
   const goal = planData.plan.goal || 0;
   const fund = planFundValue();
   const reserve = planReserve();
-  const cur = fund + reserve;   // 総資産で進捗を判定
+  // グラフ・達成予測と同じ「税引後」の総資産で進捗を判定する
+  const cur = (exactTotal != null) ? exactTotal : planAfterTaxTotal();
   const pct = goal > 0 ? (cur / goal * 100) : 0;
   $("fire-fill").style.width = Math.min(100, pct).toFixed(1) + "%";
   $("fire-pct").textContent = goal > 0 ? `達成率 ${pct.toFixed(1)}%` : "目標額を入力してください";
@@ -2460,8 +2471,12 @@ function renderPlanGoal() {
     : "";
   let note = "";
   if (goal > 0) {
-    note = `総資産 ${Math.round(cur).toLocaleString()} 円 ／ 目標 ${Math.round(goal).toLocaleString()} 円`;
-    if (reserve > 0) note += `（内訳：投信 ${Math.round(fund).toLocaleString()} 円`
+    // 内訳も cur から逆算して出す（評価額と税引後の値を混ぜると合計が合わなくなるため）
+    const fundAT = cur - reserve;       // 投信の税引後評価額
+    const tax = fund - fundAT;          // 含み益にかかる税（売却して手にする額との差）
+    note = `税引後の総資産 ${Math.round(cur).toLocaleString()} 円 ／ 目標 ${Math.round(goal).toLocaleString()} 円`;
+    if (reserve > 0) note += `（内訳：投信 ${Math.round(fundAT).toLocaleString()} 円`
+      + (tax > 0.5 ? `［評価額 ${Math.round(fund).toLocaleString()} 円 − 含み益への税 ${Math.round(tax).toLocaleString()} 円］` : "")
       + `＋現金 ${Math.round(planData.plan.cash || 0).toLocaleString()} 円`
       + `＋債券 ${Math.round(planData.plan.bonds || 0).toLocaleString()} 円）`;
   }
@@ -2608,7 +2623,10 @@ function renderStrategyPremise() {
     ["退職", `${lp.retire}歳`],
     ["年金", `${lp.penAge}歳〜 ${man(lp.pension)}/月`],
     ["生活費", `${man(lp.spend)}/月`],
-    ["想定年利", `${p.return_rate != null ? p.return_rate : 0}%`],
+    // 実際に計算へ使う年利を出す（AI予測をオンにしていると設定値ではなくAIの値になる）
+    ["想定年利", lastLifeArgs
+      ? `${(lastLifeArgs.baseRate * 100).toFixed(2)}%${lastLifeArgs.useAi ? "（AI予測）" : ""}`
+      : `${p.return_rate != null ? p.return_rate : 0}%`],
     ["インフレ", `${p.inflation != null ? p.inflation : 0}%`],
     ["売却順序", "NISA温存"],
   ];
@@ -3385,7 +3403,6 @@ function renderLifeStages(o) {
   const taxRate = o.taxRate || 0;
   const basis0 = (o.basis0 != null) ? o.basis0 : cur;
   const afterTax = (fundV, basisV) => reserve + fundV - Math.max(0, fundV - basisV) * taxRate;
-  const curTotal = afterTax(cur, basis0);            // 現在の税引後総資産
   // ①生活防衛資金（生活費×月数）は取り崩さず現金として残す下限。
   // 手元現金が足りなければ、退職後に債券→投信を売って現金に振り替えて確保する
   // （インフレで下限が上がる分も同じ方法で補充するので、扱いを揃えている）。
@@ -3400,8 +3417,12 @@ function renderLifeStages(o) {
                              taxRate, emFloor, div, drawOpts({ split }));
   // 比較・リスク検証カードから同じ前提で再計算できるよう、引数一式を控えておく
   lastLifeArgs = { cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
-                   taxRate, emFloor, div, split, retireAge: lp.retire };
+                   taxRate, emFloor, div, split, useAi, retireAge: lp.retire };
   const pts = path.pts;
+  // 現在の税引後総資産。目標判定も「現在」のマーカーもグラフと同じ経路の値を使い、
+  // 「グラフでは目標線を超えているのに文言は未達」といった食い違いが出ないようにする。
+  const curTotal = pts[0].v;
+  renderPlanGoal(curTotal);   // 進捗ゲージもグラフと同じ現在値にそろえる
   const fa = (a) => Math.round(a);
   const retireAge = lp.retire, penAge = lp.penAge;
   const hasGap = penAge > retireAge + 1e-6;
@@ -3409,13 +3430,14 @@ function renderLifeStages(o) {
   const endAge = depAge > 0 ? depAge : 100;
   const accMonths = Math.max(1, Math.round((retireAge - lp.age0) * 12));
   // 目標達成：税引後の総資産が目標に到達する月を求める
+  // 目標到達月は、単純な複利ではなくグラフと同じ月次経路から求める。
+  // （分配金の払い出し・NISAと特定口座の税の違いが反映され、グラフの目標線と一致する）
   let ach = -1;
   if (goal > 0) {
-    if (curTotal >= goal) ach = 0;
+    if (pts[0].v >= goal) ach = 0;
     else {
-      const rm = projMonthlyRate(baseRate); let v = cur, bs = basis0;
-      for (let m = 1; m <= accMonths; m++) { v = v * (1 + rm) + monthly; bs += monthly;
-        if (afterTax(v, bs) >= goal) { ach = m; break; } }
+      const lim = Math.min(accMonths, pts.length - 1);
+      for (let m = 1; m <= lim; m++) if (pts[m].v >= goal) { ach = m; break; }
     }
   }
   const achAge = ach > 0 ? lp.age0 + ach / 12 : -1;
