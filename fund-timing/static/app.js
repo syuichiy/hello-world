@@ -2623,7 +2623,11 @@ function renderStrategy() {
   const drawFormula = `<strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
     になるように並べています（「取り崩し計」は年金以外の小計＝<strong>資産から出る額</strong>）。
     <strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
-    「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。`
+    「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。
+    分配金の欄は<strong>その月に受け取った分のうち生活費に充てた額</strong>で、
+    使い切らなかった分は現金として積み上がります（翌月以降は「現金」に数えます）。
+    分配金は<strong>利回り一定</strong>として運用資産に比例させているため、積立や値上がりで
+    資産が増えれば分配金も増えます（設定の分配金カードの金額は<strong>今の保有額</strong>ベースです）。`
     + (drawTableMethod === "percent"
       ? `定率では<strong>「取り崩し計」＝その時の資産残高 × ${
            ((planData.plan || {}).draw_rate != null ? planData.plan.draw_rate : 4)}% ÷ 12</strong> と決まり、
@@ -2975,10 +2979,11 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   const dGrossM = (div && div.grossY ? div.grossY : 0) / 12;   // 受取分配（税引前・月率）
   const dNetM = (div && div.netY ? div.netY : 0) / 12;         // 受取分配（税引後・月率）
   let cash = cash0 || 0, bonds = bonds0 || 0;    // 現金・債券：据え置き・非課税
-  // 現金の中身を出どころ別に持つ。分配金や、生活防衛資金の補充で売った投信・債券の代金は
-  // いったん現金に入るため、そのまま使うと「現金から取り崩した」ように見えてしまう。
-  // 元をたどれるようにして、表では本来の出どころとして数える。
-  let cashDiv = 0, cashFromFund = 0, cashFromBonds = 0;
+  // 生活防衛資金の補充で売った投信・債券の代金はいったん現金に入るため、そのまま使うと
+  // 「現金から取り崩した」ように見えてしまう。元をたどれるようにして本来の出どころで数える。
+  // （分配金はその月に受け取った分だけを分配金として数える。月をまたいで貯まった分は
+  //   もう手元の現金なので「現金」として扱う。）
+  let cashFromFund = 0, cashFromBonds = 0;
   // 運用資産は「特定口座（課税）」と「NISA（非課税）」に分けて持つ。
   // どちらから先に売るかで生涯の税額が変わるため、口座ごとに評価額と取得原価を追う。
   // opts.split が無いときは全額を特定口座扱い＋実効税率とし、従来と同じ挙動になる。
@@ -3055,12 +3060,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
     // 今日の価値に直すときは同じ月の inflNow で割る。
     let drawM = null, dCash = 0, dBonds = 0, dFund = 0, dDiv = 0, inflNow = 1;
+    // その月に受け取った分配金・配当（税引後）のうち、まだ生活費に充てていない分。
+    // 月をまたいで残った分はもう手元の現金なので、翌月以降は「現金」として数える。
+    // （そうしないと積立期に貯まった分配金が退職直後にまとめて計上され、
+    //   その年の受取額を超える「分配金」が表示されてしまう。）
+    let divAvail = 0;
     let dPen = 0, dLiving = 0;   // 年金のうち生活費に充てた分／その月に使える生活費
     // 現金から amt を使う。分配金や売却代金に由来する分は、その出どころとして数える。
     const useCash = (amt) => {
       if (!(amt > 0)) return;
       let r = amt;
-      const d = Math.min(cashDiv, r); cashDiv -= d; r -= d; dDiv += d;
+      const d = Math.min(divAvail, r); divAvail -= d; r -= d; dDiv += d;
       const f = Math.min(cashFromFund, r); cashFromFund -= f; r -= f; dFund += f;
       const b = Math.min(cashFromBonds, r); cashFromBonds -= b; r -= b; dBonds += b;
       dCash += r;
@@ -3073,7 +3083,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 分配は売却ではないので譲渡益税はかからず、保有比率どおりに各口座から出る。
     if (dGrossM > 0 && fundV() > 0) {
       const net = fundV() * dNetM;               // 税引後（現金へ）
-      cash += net; cashDiv += net;               // 出どころは投信・株なので分配金として記録
+      cash += net; divAvail = net;               // 出どころは投信・株なので分配金として記録
       taxV -= taxV * dGrossM;
       nisaV -= nisaV * dGrossM;
     }
