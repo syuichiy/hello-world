@@ -2618,30 +2618,40 @@ function renderStrategy() {
   } else {
     const orders = ["taxable_first", "proportional", "nisa_first"];
     const runs = orders.map((od) => ({ od, p: runPath({ order: od }) }));
-    const best = runs.reduce((x, y) => (y.p.taxPaid < x.p.taxPaid ? y : x));
+    // 比較は「支払った税」だけでなく「残った含み益への税」も足した合計で行う。
+    // 特定口座を売らずに残せば支払は0円になるが、税が消えたわけではないため。
+    const best = runs.reduce((x, y) => (y.p.taxTotal < x.p.taxTotal ? y : x));
+    const worst = runs.reduce((x, y) => (y.p.taxTotal > x.p.taxTotal ? y : x));
     const orderRows = runs.map(({ od, p }) => `
       <tr class="${od === curOrder ? "strat-current" : ""}">
         <td>${ORDER_LABELS[od]}${od === curOrder ? '<span class="strat-badge">設定中</span>' : ""}</td>
         <td class="num">${yen(p.taxPaid)}</td>
-        <td class="num ${p.taxPaid > best.p.taxPaid ? "down" : ""}">${p.taxPaid > best.p.taxPaid
-          ? "+" + yen(p.taxPaid - best.p.taxPaid) : "—"}</td>
+        <td class="num">${yen(p.taxDeferred)}</td>
+        <td class="num"><b>${yen(p.taxTotal)}</b>${p.taxTotal > best.p.taxTotal
+          ? `<span class="draw-year down">最良より +${yen(p.taxTotal - best.p.taxTotal)}</span>` : ""}</td>
         <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
         <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
       </tr>`).join("");
-    const worst = runs.reduce((x, y) => (y.p.taxPaid > x.p.taxPaid ? y : x));
     orderBlock = `
       <h3 class="strat-h">③ 取り崩す口座の順序（税効率）</h3>
       <p class="hint">現在の内訳は <strong>特定口座 ${yen(sp0.taxV)}</strong> ／
         <strong>NISA ${yen(sp0.nisaV)}</strong>（グラフの現在値ベース）。
         NISAの利益は非課税なので、課税される特定口座を先に売るほど非課税運用が長く続きます。</p>
       <div class="csv-table-wrap"><table class="csv-table strat-table">
-        <thead><tr><th>取り崩す順序</th><th class="num">生涯の税額</th><th class="num">最良との差</th>
-          <th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
+        <thead><tr><th>取り崩す順序</th><th class="num">生涯で払う税<br><small>（売却時）</small></th>
+          <th class="num">残る含み益への税<br><small>（先送り分）</small></th>
+          <th class="num">税の合計</th>
+          <th class="num">資産寿命</th><th class="num">100歳時点<br><small>（税引後）</small></th></tr></thead>
         <tbody>${orderRows}</tbody></table></div>
-      <p class="hint">${worst.p.taxPaid > best.p.taxPaid
-        ? `この前提では <strong>「${ORDER_LABELS[best.od]}」</strong>がもっとも税額が少なく、
-           もっとも不利な「${ORDER_LABELS[worst.od]}」より <strong>${yen(worst.p.taxPaid - best.p.taxPaid)}</strong> 得になります。`
-        : "この前提では、順序による税額の差はほとんどありません（資産が尽きず売却額が小さいためです）。"}
+      <p class="hint"><strong>「生涯で払う税」だけで比べないでください。</strong>
+        特定口座を売り残すとその欄は小さく（0円にも）なりますが、含み益にかかる税が
+        <strong>先送りされているだけ</strong>で、売れば課税されます。日本では相続しても
+        取得価額が引き継がれるため、この税がなくなることはありません。
+        比べるべきは<strong>「税の合計」と「100歳時点（税引後）」</strong>です。</p>
+      <p class="hint">${worst.p.taxTotal > best.p.taxTotal
+        ? `この前提では <strong>「${ORDER_LABELS[best.od]}」</strong>がもっとも税の合計が少なく、
+           もっとも不利な「${ORDER_LABELS[worst.od]}」より <strong>${yen(worst.p.taxTotal - best.p.taxTotal)}</strong> 得になります。`
+        : "この前提では、順序による税の差はほとんどありません。"}
         順序は<button class="linklike" id="order-goto-settings" type="button">設定</button>の
         「取り崩す口座の順序」で変更できます。</p>`;
   }
@@ -3074,7 +3084,13 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   }
   if (retireBal === null) retireBal = fundAT() + cash + bonds;
   const endBal = pts[pts.length - 1].v;
-  return { pts, retireBal, penStartAge, depletionAge, endBal, taxPaid: Math.round(taxPaid),
+  // 最後まで売らずに残った特定口座の含み益にかかる税。まだ払っていないだけで、
+  // 売れば（相続で引き継いでも）いずれ課税される。順序の比較ではこれを含めないと、
+  // 「特定口座を売らなかった＝税0円」が有利に見えてしまう。
+  const taxDeferred = Math.max(0, taxV - taxB) * tRate;
+  return { pts, retireBal, penStartAge, depletionAge, endBal,
+           taxPaid: Math.round(taxPaid), taxDeferred: Math.round(taxDeferred),
+           taxTotal: Math.round(taxPaid + taxDeferred),
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
            order, method };
@@ -3492,7 +3508,9 @@ function renderLifeStages(o) {
   // 口座の順序は税額に効くため、NISAを持っている場合だけ前提を明示する
   if ((split && split.nisaV > 0) && (split.taxV > 0)) {
     msg += `運用資産の取り崩しは「${ORDER_LABELS[path.order] || ""}」の順で行い、`
-      + `売却時に特定口座の含み益へ課税する前提です（生涯の税額は 約 ${path.taxPaid.toLocaleString()} 円）。`;
+      + `売却時に特定口座の含み益へ課税する前提です（生涯で払う税 約 ${path.taxPaid.toLocaleString()} 円`
+      + `＋最後まで売らずに残る含み益への税 約 ${path.taxDeferred.toLocaleString()} 円`
+      + ` ＝ 合計 約 ${path.taxTotal.toLocaleString()} 円）。`;
   }
   if ((dv.receive_net || 0) > 0) msg += `また「受取」に設定した分配金・配当（現在の保有で税引後 約 ${Math.round(dv.receive_net).toLocaleString()} 円/年）を税引後キャッシュとして現金の帯に加え、取り崩し時の売却額を軽減しています。`;
   if (lp.spend <= 0) msg += " 退職後の生活費を設定すると、資産寿命の試算が表示されます。";
