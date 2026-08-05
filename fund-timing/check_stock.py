@@ -17,7 +17,8 @@ import sqlite3
 import db
 import fund_data
 import app as appmod
-from app import _cache_ttl_hours, _fresh_target, _prev_business_day
+from app import (_cache_ttl_hours, _fresh_target, _prev_business_day,
+                 _MARKET_CLOSE, _MARKET_SETTLED)
 
 
 def _cache_fetched_at(isin: str):
@@ -34,8 +35,19 @@ def _cache_fetched_at(isin: str):
 def probe(ticker: str) -> None:
     print(f"\n=== {ticker} ===")
     target = _fresh_target("stock")
+    now = dt.datetime.now()
+    if now.weekday() >= 5:
+        session = "休場（土日）"
+    elif now.time() < dt.time(9, 0):
+        session = "寄り前"
+    elif now.time() < _MARKET_CLOSE:
+        session = "場中"
+    else:
+        session = "取引終了後"
     print(f"目標（ここまで揃っていれば新しい）: {target}"
-          f"（今 {dt.datetime.now():%Y-%m-%d %H:%M}・前営業日 {_prev_business_day()}）")
+          f"（今 {now:%Y-%m-%d %H:%M}／{session}・前営業日 {_prev_business_day()}）")
+    print(f"  ※ 大引けは {_MARKET_CLOSE:%H:%M}。終値が確定するまで見て "
+          f"{_MARKET_SETTLED:%H:%M} 以降に当日分を取りにいきます。")
 
     for label, fn in (("Stooq", fund_data._fetch_stock_stooq),
                       ("yfinance", fund_data._fetch_stock_yfinance),

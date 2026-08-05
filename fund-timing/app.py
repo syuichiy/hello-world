@@ -144,20 +144,27 @@ def _prev_business_day(today=None):
     return d
 
 
+# 東証の立会時間。2024年11月から大引けが15:00→15:30に延長された。
+# 終値が確定してデータ提供側に反映されるまでの余裕を見て、15:45を「取引終了後」とする。
+_MARKET_OPEN = dt.time(9, 0)
+_MARKET_CLOSE = dt.time(15, 30)
+_MARKET_SETTLED = dt.time(15, 45)
+
+
 def _fresh_target(kind: str = "fund"):
     """「ここまで揃っていれば新しい」とみなす日付。
 
-    株は当日の終値が15時（大引け）以降に出るため、平日の夕方以降は当日を目標にする。
+    株は当日の終値が大引け（15:30）以降に出るため、取引終了後は当日を目標にする。
     投信の基準価額は当日中には公表されない（海外資産を含むものは翌営業日）ので、
     こちらは常に前営業日を目標にする。
     """
     now = dt.datetime.now()
-    if kind == "stock" and now.date().weekday() < 5 and now.hour >= 16:
+    if kind == "stock" and now.weekday() < 5 and now.time() >= _MARKET_SETTLED:
         return now.date()
     return _prev_business_day()
 
 
-# 株は場中に値が動くので、取引時間内はキャッシュを短くする。
+# 株は場中（9:00〜15:30）に値が動くので、取引時間内はキャッシュを短くする。
 # 投信の基準価額は1日1回なので12時間のままでよい。
 _STOCK_TTL_OPEN_MIN = 15
 # 取得に失敗したときに「最後に取れた値」で表示を続ける許容期間
@@ -169,7 +176,7 @@ def _cache_ttl_hours(kind: str = "fund") -> float:
     if kind != "stock":
         return db.CACHE_TTL_HOURS
     now = dt.datetime.now()
-    if now.weekday() < 5 and dt.time(9, 0) <= now.time() <= dt.time(15, 40):
+    if now.weekday() < 5 and _MARKET_OPEN <= now.time() <= _MARKET_SETTLED:
         return _STOCK_TTL_OPEN_MIN / 60
     return db.CACHE_TTL_HOURS
 
