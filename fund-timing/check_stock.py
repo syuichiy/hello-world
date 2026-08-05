@@ -91,6 +91,9 @@ def show_env() -> None:
              ("取得元を鮮度で切り替え", "want = _prev_business_day()" in
               open(os.path.join(here, "fund_data.py"), encoding="utf-8").read())]
     print("いま動かしているコード:")
+    print(f"  フォルダ : {here}")
+    print(f"  データ   : {db.DB_PATH}"
+          + ("" if os.path.exists(db.DB_PATH) else "  ← まだありません（アプリを一度起動してください）"))
     for name, ok in marks:
         print(f"  {'✅' if ok else '❌ 古いファイルです'} {name}")
     print("  ※ アプリ(app.py)を起動したままファイルを差し替えた場合は、"
