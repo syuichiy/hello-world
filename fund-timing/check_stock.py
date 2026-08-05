@@ -16,6 +16,7 @@ import sqlite3
 
 import db
 import fund_data
+import app as appmod
 from app import _cache_ttl_hours, _fresh_target, _prev_business_day
 
 
@@ -67,8 +68,37 @@ def probe(ticker: str) -> None:
     else:
         print("  [キャッシュ] なし")
 
+    # 実際にアプリが画面へ返す値。取得元・キャッシュが正しくても、ここが古ければ
+    # 表示側（範囲の切り出しなど）に原因がある。
+    for label, force in (("アプリの表示値", False), ("↻最新に更新と同じ", True)):
+        try:
+            s = appmod.load_series(ticker, "", "", force=force, kind="stock")
+            dates, nav = s.get("dates") or [], s.get("nav") or []
+            if dates:
+                print(f"  [{label}] 最終日 {dates[-1]} / 終値 {nav[-1]:,} 円"
+                      + ("" if dates[-1] >= target.isoformat() else "  ← 目標より古い"))
+            else:
+                print(f"  [{label}] データが空です")
+        except Exception as e:
+            print(f"  [{label}] 失敗 {type(e).__name__}: {e}")
+
+
+def show_env() -> None:
+    """実行しているコードが新しいかどうかを確かめる（アプリの再起動忘れ対策）。"""
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    marks = [("株の場中キャッシュ短縮", hasattr(appmod, "_cache_ttl_hours")),
+             ("取得元を鮮度で切り替え", "want = _prev_business_day()" in
+              open(os.path.join(here, "fund_data.py"), encoding="utf-8").read())]
+    print("いま動かしているコード:")
+    for name, ok in marks:
+        print(f"  {'✅' if ok else '❌ 古いファイルです'} {name}")
+    print("  ※ アプリ(app.py)を起動したままファイルを差し替えた場合は、"
+          "ターミナルで Ctrl+C → 起動し直してください。")
+
 
 def main() -> None:
+    show_env()
     db.init_db()
     if len(sys.argv) > 1:
         for t in sys.argv[1:]:
