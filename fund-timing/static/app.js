@@ -941,7 +941,10 @@ function renderShortTermBanner() {
           <span class="st-hint">（過熱気味／一部利益確定を検討できる水準）</span></span></div>
       <ul class="st-list">${list(sells, "sell")}</ul></div>`;
   }
-  html += `<div class="st-note">※ 口数・金額はシグナルの強さから算出した機械的な目安です（保有評価額に対する割合。税・手数料・分配金は未考慮）。投資助言ではありません。</div>`;
+  html += `<div class="st-note">※ ここは<strong>短期（〜1ヶ月）</strong>の指標（5日線・25日線・RSI・ボリンジャー）で選んでいます。
+    下の一覧の「判定」は<strong>中期</strong>（25日線・75日線・約60営業日のモメンタム）なので、
+    <strong>並ぶ銘柄は一致しません</strong>（短期は過熱・売られすぎ、中期はトレンドを見ています）。
+    口数・金額はシグナルの強さから算出した機械的な目安です（保有評価額に対する割合。税・手数料・分配金は未考慮）。投資助言ではありません。</div>`;
   el.innerHTML = html;
   el.hidden = false;
 }
@@ -1823,8 +1826,9 @@ document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
 });
 function updateSortHeaders() {
   document.querySelectorAll(".watch-table th.sortable").forEach((th) => {
-    const base = th.textContent.replace(/\s*[▲▼]\s*$/, "").trim();
-    th.textContent = base + (th.dataset.key === sortKey ? (sortDir < 0 ? " ▼" : " ▲") : "");
+    // 見出しは「判定<span>中期</span>」のようにタグを含むので、初回のHTMLを保存して使い回す
+    if (th.dataset.label == null) th.dataset.label = th.innerHTML;
+    th.innerHTML = th.dataset.label + (th.dataset.key === sortKey ? (sortDir < 0 ? " ▼" : " ▲") : "");
   });
 }
 
