@@ -3486,7 +3486,7 @@ function renderLifeStages(o) {
   });
   if (cash0 > 0) traces.push(area("cash", "現金", "#0e9488", "rgba(14,148,136,0.60)"));
   if (bonds0 > 0) traces.push(area("bonds", "債券", "#22c55e", "rgba(34,197,94,0.45)"));
-  traces.push(area("fund", "投信（税引後）", "#5b8def", "rgba(91,141,239,0.38)"));
+  traces.push(area("fund", "投信・株（税引後）", "#5b8def", "rgba(91,141,239,0.38)"));
 
   // 横軸：年齢の目盛り（区間境界＋10年刻み）。退職後は圧縮されて表示される。
   const bnd = [lp.age0, retireAge, endAge];
