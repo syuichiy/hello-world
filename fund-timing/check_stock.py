@@ -82,6 +82,37 @@ def probe(ticker: str) -> None:
         except Exception as e:
             print(f"  [{label}] 失敗 {type(e).__name__}: {e}")
 
+    # 直近の値動き。ここで「今日の値が昨日と同じ」なら、データ自体が動いていない。
+    try:
+        s = appmod.load_series(ticker, "", "", kind="stock")
+        dates, nav = s.get("dates") or [], s.get("nav") or []
+        if len(dates) >= 2:
+            print("  [直近の値動き]")
+            prev = None
+            for d, v in zip(dates[-6:], nav[-6:]):
+                diff = "" if prev is None else f"  前日比 {v - prev:+,.1f} 円"
+                print(f"      {d}  {v:>10,.1f} 円{diff}")
+                prev = v
+            if nav[-1] == nav[-2]:
+                print("      ※ 最新2日の終値が同じです。データ提供側が当日分を"
+                      "まだ確定していない可能性があります。")
+    except Exception:
+        pass
+
+    # 銘柄一覧の「基準価額」に出る数字そのもの（表示側の切り出しまで通した結果）
+    try:
+        row = next((w for w in db.list_watchlist()
+                    if (w["isin"] or "").upper() == ticker.upper()), None)
+        if row is not None:
+            summary = appmod._summarize_fund(row, "1y")
+            if summary.get("ok"):
+                print(f"  [銘柄一覧の表示] 基準価額 {summary.get('latest_price'):,} 円"
+                      f" / 騰落 {summary.get('change_pct')}%")
+            else:
+                print(f"  [銘柄一覧の表示] エラー: {summary.get('error')}")
+    except Exception as e:
+        print(f"  [銘柄一覧の表示] 確認できませんでした（{type(e).__name__}: {e}）")
+
 
 def show_env() -> None:
     """実行しているコードが新しいかどうかを確かめる（アプリの再起動忘れ対策）。"""
