@@ -144,13 +144,26 @@ def _prev_business_day(today=None):
     return d
 
 
-def _is_stale(cached) -> bool:
-    """キャッシュの最終日が前営業日より前なら、古いとみなす。"""
+def _fresh_target(kind: str = "fund"):
+    """「ここまで揃っていれば新しい」とみなす日付。
+
+    株は当日の終値が15時（大引け）以降に出るため、平日の夕方以降は当日を目標にする。
+    投信の基準価額は当日中には公表されない（海外資産を含むものは翌営業日）ので、
+    こちらは常に前営業日を目標にする。
+    """
+    now = dt.datetime.now()
+    if kind == "stock" and now.date().weekday() < 5 and now.hour >= 16:
+        return now.date()
+    return _prev_business_day()
+
+
+def _is_stale(cached, kind: str = "fund") -> bool:
+    """キャッシュの最終日が目標の日付より前なら、古いとみなす。"""
     dates = (cached or {}).get("dates") or []
     if not dates:
         return True
     try:
-        return dt.date.fromisoformat(dates[-1]) < _prev_business_day()
+        return dt.date.fromisoformat(dates[-1]) < _fresh_target(kind)
     except (ValueError, TypeError):
         return False
 
@@ -178,7 +191,7 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
                 cached["name"] = name
             # 前営業日にも届いていないキャッシュは、12時間を待たずに取り直す
             # （新しい基準価額が公表されているのに反映されない、を防ぐ）。
-            if not (_is_stale(cached)
+            if not (_is_stale(cached, kind)
                     and (time.time() - _stale_recheck.get(key, 0)) > _STALE_RECHECK_SEC):
                 return cached
             _stale_recheck[key] = time.time()

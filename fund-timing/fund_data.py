@@ -275,6 +275,14 @@ def set_stock_dividend_override(func):
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
 
+def _prev_business_day(today=None):
+    """前営業日（土日を除く）を返す。祝日は判定しない（そのぶんは呼び出し側の再確認で吸収する）。"""
+    d = (today or dt.date.today()) - dt.timedelta(days=1)
+    while d.weekday() >= 5:          # 5=土, 6=日
+        d -= dt.timedelta(days=1)
+    return d
+
+
 def _parse_stock_csv(text: str):
     """Stooq形式CSV（Date,Open,High,Low,Close,Volume）を (date, close) のリストに。"""
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
@@ -469,14 +477,24 @@ def get_stock_series(ticker: str, name: str = "") -> FundSeries:
         if not rows:
             raise FundDataError("有効な株価データが1件もありませんでした。")
     else:
+        # 取得元は「失敗したら次」だけでなく「古かったら次」も試す。
+        # Stooqは日本株の反映が1日ほど遅れることがあり、そこで打ち切ると
+        # Yahoo側に当日の終値があっても取り込めないため。
         rows = None
         errors = []
+        want = _prev_business_day()
         for fetcher in (_fetch_stock_stooq, _fetch_stock_yfinance, _fetch_stock_yahoo):
             try:
-                rows = fetcher(ticker)
-                break
+                got = fetcher(ticker)
             except FundDataError as e:
                 errors.append(str(e))
+                continue
+            if not got:
+                continue
+            if rows is None or max(r[0] for r in got) > max(r[0] for r in rows):
+                rows = got
+            if max(r[0] for r in rows) >= want:   # 前営業日まで揃っていれば十分
+                break
         if not rows:
             raise FundDataError("株価データを取得できませんでした（" + " / ".join(errors) + "）。"
                                 "時間をおいて「最新に更新」をお試しください。")
