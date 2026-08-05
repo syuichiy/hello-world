@@ -160,6 +160,8 @@ def _fresh_target(kind: str = "fund"):
 # 株は場中に値が動くので、取引時間内はキャッシュを短くする。
 # 投信の基準価額は1日1回なので12時間のままでよい。
 _STOCK_TTL_OPEN_MIN = 15
+# 取得に失敗したときに「最後に取れた値」で表示を続ける許容期間
+_STALE_FALLBACK_HOURS = 24 * 14
 
 
 def _cache_ttl_hours(kind: str = "fund") -> float:
@@ -219,6 +221,11 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
             return fresh
         failed = _fail_cache.get(key)
         if failed and (time.time() - failed[0]) < _FAIL_TTL_SEC:
+            stale = db.get_cached_series(isin, assoc, max_age_hours=_STALE_FALLBACK_HOURS)
+            if stale:
+                if name and not stale.get("name"):
+                    stale["name"] = name
+                return stale
             raise fund_data.FundDataError(failed[1])
     try:
         if kind == "stock":
@@ -227,6 +234,14 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
             series = fund_data.get_fund_series(isin, assoc, name)
     except fund_data.FundDataError as e:
         _fail_cache[key] = (time.time(), str(e))
+        # 期限切れでも手元にデータがあれば、それで表示を続ける。
+        # 株は有効期限を15分に縮めたので、一時的な取得失敗で値が消えないようにする。
+        if not force:
+            stale = db.get_cached_series(isin, assoc, max_age_hours=_STALE_FALLBACK_HOURS)
+            if stale:
+                if name and not stale.get("name"):
+                    stale["name"] = name
+                return stale
         raise
     _fail_cache.pop(key, None)
     d = series.to_dict()
