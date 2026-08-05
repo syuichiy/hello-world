@@ -12,9 +12,22 @@
 import sys
 import datetime as dt
 
+import sqlite3
+
 import db
 import fund_data
-from app import _fresh_target, _prev_business_day
+from app import _cache_ttl_hours, _fresh_target, _prev_business_day
+
+
+def _cache_fetched_at(isin: str):
+    """キャッシュを取得した日時を読む（get_cached_series は中身しか返さないため）。"""
+    try:
+        with sqlite3.connect(db.DB_PATH) as c:
+            r = c.execute("SELECT fetched_at FROM cache WHERE isin=? AND assoc_code=?",
+                          (isin, "")).fetchone()
+        return dt.datetime.fromisoformat(r[0]) if r and r[0] else None
+    except Exception:
+        return None
 
 
 def probe(ticker: str) -> None:
@@ -36,11 +49,21 @@ def probe(ticker: str) -> None:
         except Exception as e:
             print(f"  [失敗] {label:<9} {type(e).__name__}: {e}")
 
-    cached = db.get_cached_series(ticker, "")
+    # キャッシュは「最終日」だけでなく「いつ取得したか」も見る。
+    # 場中は日付が当日でも、取得が数時間前なら画面の株価は止まったままになる。
+    cached = db.get_cached_series(ticker, "", max_age_hours=24 * 365)
     if cached and cached.get("dates"):
         last = cached["dates"][-1]
-        print(f"  [キャッシュ] 最終日 {last} … "
-              + ("古いので自動で取り直します" if last < target.isoformat() else "最新です"))
+        fetched = _cache_fetched_at(ticker)
+        ttl = _cache_ttl_hours("stock")
+        state = "古いので自動で取り直します" if last < target.isoformat() else "日付は最新"
+        print(f"  [キャッシュ] 最終日 {last} … {state}")
+        if fetched:
+            age_min = (dt.datetime.now() - fetched).total_seconds() / 60
+            print(f"               取得したのは {fetched:%m/%d %H:%M}（{age_min:.0f}分前）"
+                  f"／有効期限 {ttl * 60:.0f}分 → "
+                  + ("期限切れなので次のアクセスで取り直します" if age_min > ttl * 60
+                     else "この間は同じ株価が表示されます"))
     else:
         print("  [キャッシュ] なし")
 

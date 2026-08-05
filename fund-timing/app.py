@@ -157,6 +157,21 @@ def _fresh_target(kind: str = "fund"):
     return _prev_business_day()
 
 
+# 株は場中に値が動くので、取引時間内はキャッシュを短くする。
+# 投信の基準価額は1日1回なので12時間のままでよい。
+_STOCK_TTL_OPEN_MIN = 15
+
+
+def _cache_ttl_hours(kind: str = "fund") -> float:
+    """キャッシュを何時間有効とみなすか。株の場中だけ短くする。"""
+    if kind != "stock":
+        return db.CACHE_TTL_HOURS
+    now = dt.datetime.now()
+    if now.weekday() < 5 and dt.time(9, 0) <= now.time() <= dt.time(15, 40):
+        return _STOCK_TTL_OPEN_MIN / 60
+    return db.CACHE_TTL_HOURS
+
+
 def _is_stale(cached, kind: str = "fund") -> bool:
     """キャッシュの最終日が目標の日付より前なら、古いとみなす。"""
     dates = (cached or {}).get("dates") or []
@@ -185,11 +200,11 @@ def load_series(isin: str, assoc: str, name: str = "", force: bool = False,
     assoc = (assoc or "").strip()
     key = (isin, assoc)
     if not force:
-        cached = db.get_cached_series(isin, assoc)
+        cached = db.get_cached_series(isin, assoc, max_age_hours=_cache_ttl_hours(kind))
         if cached:
             if name and not cached.get("name"):
                 cached["name"] = name
-            # 前営業日にも届いていないキャッシュは、12時間を待たずに取り直す
+            # 前営業日にも届いていないキャッシュは、有効期限を待たずに取り直す
             # （新しい基準価額が公表されているのに反映されない、を防ぐ）。
             if not (_is_stale(cached, kind)
                     and (time.time() - _stale_recheck.get(key, 0)) > _STALE_RECHECK_SEC):

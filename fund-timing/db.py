@@ -742,7 +742,7 @@ def trade_position(trades, kind: str = "fund") -> dict:
 
 
 # ------------------------------------------------------------------ cache
-def get_cached_series(isin: str, assoc_code: str, max_age_hours: int = CACHE_TTL_HOURS,
+def get_cached_series(isin: str, assoc_code: str, max_age_hours: float = CACHE_TTL_HOURS,
                       db_path: Optional[str] = None):
     with _conn(db_path) as c:
         r = c.execute(
