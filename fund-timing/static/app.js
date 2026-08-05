@@ -517,7 +517,8 @@ function renderPriceSkipped(skipped) {
     const why = (s.reasons || []).map((r) =>
       `<span class="${s.need_units || s.need_invested ? "skipped-need" : ""}">${escapeHtml(r)}</span>`
     ).join("・");
-    return `<li>${escapeHtml(s.name)}${bk}<span class="skipped-why">${why}</span></li>`;
+    const tag = s.stale ? '<span class="skipped-tag">更新が止まっています</span>' : "";
+    return `<li>${escapeHtml(s.name)}${bk}${tag}<span class="skipped-why">${why}</span></li>`;
   }).join("");
 }
 

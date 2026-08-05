@@ -125,6 +125,28 @@ def probe(ticker: str) -> None:
     except Exception as e:
         print(f"  [銘柄一覧の表示] 確認できませんでした（{type(e).__name__}: {e}）")
 
+    # 価格推移の表は「評価額の履歴(amount_history)」で作る。銘柄一覧が最新でも、
+    # ここが更新されていないと表の右端が「—」になる。
+    try:
+        row = next((w for w in db.list_watchlist()
+                    if (w["isin"] or "").upper() == ticker.upper()), None)
+        if row is not None:
+            hists = db.get_all_amount_histories()
+            mine = hists.get(row["watch_id"]) or {}
+            allmax = max((max(h.keys()) for h in hists.values() if h), default=None)
+            mymax = max(mine.keys(), default=None)
+            units = float(row["units"] or 0)
+            inv = float(row["invested"] or 0)
+            print(f"  [価格推移の表] この銘柄の最終日 {mymax or 'なし'}"
+                  f" ／ 表の最終列 {allmax or 'なし'}"
+                  + ("  ← 欠けています" if (mymax and allmax and mymax < allmax) else ""))
+            print(f"                 口数 {units:,.0f} ／ 投資金額 {inv:,.0f} 円"
+                  + ("  ← 口数が0だと株価から補完されません" if units <= 0 else ""))
+            print(f"                 実額記録の最終日 {appmod._RECORDED_MAX_DATE or 'なし'}"
+                  "（この日までは実額の記録が優先され、株価では埋めません）")
+    except Exception as e:
+        print(f"  [価格推移の表] 確認できませんでした（{type(e).__name__}: {e}）")
+
 
 def show_env() -> None:
     """実行しているコードが新しいかどうかを確かめる（アプリの再起動忘れ対策）。"""

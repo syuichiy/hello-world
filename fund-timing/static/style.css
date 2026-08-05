@@ -842,6 +842,8 @@ tr:hover .row-del { opacity: 1; }
 .skipped-broker { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
 .skipped-why { font-size: 11.5px; color: var(--ink-soft); margin-left: 8px; }
 .skipped-need { color: var(--down-text); font-weight: 700; }
+.skipped-tag { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700;
+  color: var(--neutral); background: rgba(202,138,4,.14); border-radius: 999px; padding: 1px 8px; }
 
 /* ------------------------------------------------ 取り崩し戦略の検証 */
 /* 検証に使った前提をチップで一覧する */

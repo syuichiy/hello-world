@@ -1280,6 +1280,28 @@ def api_actual_history():
     graph_dates = sorted(set().union(*[set(h["dates"]) for h in result])) if result else []
     excel_dates = sorted(excel_dates)
 
+    # 表の最終列に追いついていない保有を知らせる（黙って「—」にしない）。
+    # 口数が未入力だと株価から評価額を計算できず、その銘柄だけ更新が止まる。
+    table_last = excel_dates[-1] if excel_dates else None
+    if table_last:
+        by_id = {it["watch_id"]: it for it in holdings}
+        for h in result:
+            own_last = h["dates"][-1] if h["dates"] else None
+            if own_last and own_last >= table_last:
+                continue
+            it = by_id.get(h["id"], {})
+            units = float(it.get("units") or 0)
+            reasons = []
+            if units <= 0:
+                reasons.append("口数が未入力のため、最新の評価額を計算できません")
+            else:
+                reasons.append("価格を取得できず、最新の評価額を計算できません")
+            skipped.append({"watch_id": h["id"], "name": h["name"], "broker": h["broker"],
+                            "reasons": reasons + [f"最終 {own_last}（表は {table_last}）"],
+                            "need_units": units <= 0,
+                            "need_invested": float(it.get("invested") or 0) <= 0,
+                            "stale": True})
+
     total_inv = sum(float(it.get("invested") or 0) for it in holdings)
     # 合計は各保有の「その日以前の最新値」を積み上げる（当日更新で一部だけ更新されても
     # 合計が欠けないようにする＝キャリーフォワード）
