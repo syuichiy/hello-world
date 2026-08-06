@@ -1280,13 +1280,20 @@ def api_actual_history():
     graph_dates = sorted(set().union(*[set(h["dates"]) for h in result])) if result else []
     excel_dates = sorted(excel_dates)
 
-    # 表の最終列に追いついていない保有を知らせる（黙って「—」にしない）。
+    # 更新が止まっている保有を知らせる（黙って「—」にしない）。
     # 口数が未入力だと株価から評価額を計算できず、その銘柄だけ更新が止まる。
-    table_last = excel_dates[-1] if excel_dates else None
-    if table_last:
+    #
+    # 「止まっている」の基準は表の最終列ではなく、商品の種類ごとの目標日にする。
+    # 投信の基準価額は当日中には公表されないため、株が当日分を持っていて表の右端が
+    # 当日になっても、投信が前営業日どまりなのは正常（表の最終列と比べると全件が
+    # 「止まっている」と出てしまう）。さらに、どの保有も持っていない日付は要求しない
+    # ようにして、祝日などで目標日だけが先に進むのを防ぐ。
+    all_last = max((h["dates"][-1] for h in result if h["dates"]), default=None)
+    if all_last:
         by_id = {it["watch_id"]: it for it in holdings}
         for h in result:
             own_last = h["dates"][-1] if h["dates"] else None
+            table_last = min(_fresh_target(h["kind"]).isoformat(), all_last)
             if own_last and own_last >= table_last:
                 continue
             it = by_id.get(h["id"], {})
@@ -1297,7 +1304,7 @@ def api_actual_history():
             else:
                 reasons.append("価格を取得できず、最新の評価額を計算できません")
             skipped.append({"watch_id": h["id"], "name": h["name"], "broker": h["broker"],
-                            "reasons": reasons + [f"最終 {own_last}（表は {table_last}）"],
+                            "reasons": reasons + [f"最終 {own_last or 'なし'}（本来は {table_last} まで）"],
                             "need_units": units <= 0,
                             "need_invested": float(it.get("invested") or 0) <= 0,
                             "stale": True})
