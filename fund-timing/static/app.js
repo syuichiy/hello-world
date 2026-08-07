@@ -2579,6 +2579,7 @@ let portfolioRisk = null;     // 実際の保有から推定した年率リタ�
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
+let concKeep = 1;             // 集中している銘柄をどれだけ残すか（1＝現状のまま）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2639,6 +2640,9 @@ function renderStrategyPremise() {
     `<span class="premise-chip"><span class="premise-key">${k}</span>${escapeHtml(String(v))}</span>`).join("");
 }
 
+// 取り崩し戦略の画面は、決める材料を2つ（取り崩し方法・集中銘柄を残す割合）にしぼり、
+// 結果を「① 年齢ごとの取り崩し額」と「② 値動きのブレを含めた成功確率」の2つに集約する。
+// 方法ごと・残す割合ごとの比較は②の中に畳んである。
 function renderStrategy() {
   const box = $("strategy-body");
   const a = lastLifeArgs;
@@ -2648,20 +2652,16 @@ function renderStrategy() {
   const ageOf = (p) => p.depletionAge > 0 ? `${Math.floor(p.depletionAge)}歳で枯渇` : "100歳まで持続";
   const cur = (planData.plan || {}).draw_method || "fixed";
   const curLabel = DRAW_LABELS[cur];
+  const rm = projMonthlyRate(a.baseRate);
 
-  // ① 取り崩し方法の比較（同じ前提・同じ利回りで方法だけ変える）
-  const methods = ["fixed", "percent", "guardrail"];
-  const cmp = methods.map((mth) => ({ mth, p: runPath({ method: mth }) }));
-  const curPath = (cmp.find(({ mth }) => mth === cur) || cmp[0]).p;
-  const cmpRows = cmp.map(({ mth, p }) => `
-    <tr class="${mth === cur ? "strat-current" : ""}">
-      <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
-      <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
-      <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
-      <td class="num">${yen(p.minLiving)}/月</td>
-    </tr>`).join("");
+  // 集中している銘柄があれば「どれだけ残すか」がもう1つの前提になる
+  const cp = concentrationPlan(a, rm);
+  if (cp && !cp.targets.includes(concKeep)) concKeep = 1;
+  const keepOpts = cp ? cp.optsFor(concKeep) : {};
+  const path = (extra) => runPath(Object.assign({}, keepOpts, extra));
+  const curPath = path({ method: cur });
 
-  // ② 年齢ごとの取り崩し額（設定中の方法で、出どころ別に表示）
+  // ── ① 年齢ごとの取り崩し額 ─────────────────────────────────────────
   const retAge = Math.ceil(a.retireAge);
   const penAge = Math.ceil(a.lp.penAge);
   const ages = [];
@@ -2695,75 +2695,13 @@ function renderStrategy() {
     return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}</tr>`;
   }).join("");
 
-  // ③ 暴落シナリオ（退職直後の下落・出だしの不調）
-  const rm = projMonthlyRate(a.baseRate);
-  const retireM = Math.max(1, Math.round((a.retireAge - a.lp.age0) * 12));
-  const scenarios = [
-    { name: "想定どおり（ブレなし）", ret: null },
-    { name: "退職直後に −30%", ret: (m) => (m === retireM ? -0.30 : rm) },
-    { name: "退職直後に −50%", ret: (m) => (m === retireM ? -0.50 : rm) },
-    { name: "退職後の5年が不調（年−3%）",
-      ret: (m) => (m >= retireM && m < retireM + 60 ? projMonthlyRate(-0.03) : rm) },
-  ];
-  const scRows = scenarios.map((s) => {
-    const p = s.ret ? runPath({ ret: s.ret }) : curPath;
-    return `<tr>
-      <td>${escapeHtml(s.name)}</td>
-      <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
-      <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
-    </tr>`;
-  }).join("");
-
-  // ④ モンテカルロ（設定中の方法で、実際の保有の変動率だけ揺らす）
-  let mc = "";
-  if (portfolioRisk) {
-    const sdM = (portfolioRisk.annual_vol / 100) / Math.sqrt(12);   // 月次の標準偏差
-    const N = 400;
-    let ok = 0; const ends = [];
-    for (let i = 0; i < N; i++) {
-      const p = runPath({ ret: () => randNorm(rm, sdM) });
-      if (p.depletionAge < 0) ok++;
-      ends.push(p.endBal);
-    }
-    ends.sort((x, y) => x - y);
-    const pct = (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))];
-    const rate = Math.round(ok / N * 100);
-    const cls = rate >= 90 ? "up" : rate >= 70 ? "warn" : "down";
-    mc = `
-      <h3 class="strat-h">④ 値動きのブレを含めた成功確率（${curLabel}・${N}回）</h3>
-      <div class="stat-row">
-        <div class="stat-tile"><span class="stat-label">100歳まで尽きない確率</span>
-          <b class="stat-value ${cls}">${rate}%</b></div>
-        <div class="stat-tile"><span class="stat-label">100歳時点（中央値）</span>
-          <b class="stat-value">${man(pct(0.5))}</b></div>
-        <div class="stat-tile"><span class="stat-label">100歳時点（下位10%）</span>
-          <b class="stat-value">${man(pct(0.1))}</b></div>
-      </div>
-      <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
-        を使い、ブレ幅だけを実際の保有から推定した<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
-        （直近${portfolioRisk.months}ヶ月）としています。
-        <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
-        直近の相場に引きずられるため平均には使いません。</span></p>`;
-  } else {
-    mc = `<h3 class="strat-h">④ 値動きのブレを含めた成功確率</h3>
-      <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
-        価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
-  }
-
-  // ⑤ 1銘柄に偏っているとき「持ち続ける」と「売って分散する」を比べる
-  const conc = renderConcentration(a, curLabel, rm, man, yen);
+  // ── ② 値動きのブレを含めた成功確率 ────────────────────────────────
+  const succ = renderSuccess(a, cur, rm, cp, path, man, yen, ageOf);
 
   box.innerHTML = `
-    <h3 class="strat-h">① 取り崩し方法の比較（利回りのブレなし）</h3>
-    <div class="csv-table-wrap"><table class="csv-table strat-table">
-      <thead><tr><th>方法</th><th class="num">資産寿命</th>
-        <th class="num">100歳時点</th><th class="num">生活費の下限<br><small>（今日の価値）</small></th></tr></thead>
-      <tbody>${cmpRows}</tbody></table></div>
-    <p class="hint">定率は枯渇しにくい代わりに<strong>生活費が下がりうる</strong>点に注目してください。
-      「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。
-      退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>（3方式とも同じ）。</p>
+    ${renderLevers(cp, curLabel)}
 
-    <h3 class="strat-h">② 年齢ごとの取り崩し額（${curLabel}）</h3>
+    <h3 class="strat-h">① 年齢ごとの取り崩し額（${curLabel}${cp ? "・" + cp.label(concKeep) : ""}）</h3>
     <div class="draw-ctrls">
       <label class="draw-toggle">表示間隔
         <select id="draw-step">
@@ -2783,33 +2721,31 @@ function renderStrategy() {
       ${drawTableReal
         ? "インフレ分を除いた<strong>今日の価値</strong>で表示中です。"
         : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
-      年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。</p>
+      年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
+      退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>、
+      資産寿命は<strong>${ageOf(curPath)}</strong>（値動きのブレなし）です。</p>
     <details class="plan-help">
       <summary>この表の細かい前提</summary>
       <ul>
-        <li>取り崩しは<strong>現金 → 債券 → 投信</strong>の順。ただし<strong>①生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
+        <li>取り崩しは<strong>現金 → 債券 → 投信</strong>の順。ただし<strong>生活防衛資金（${yen(a.emFloor || 0)}）は使わずに現金で残す</strong>ため、
           現金のうち生活防衛資金を超えるぶんだけが生活費に回ります。
           ${(a.emFloor || 0) > (a.cash0 || 0) + 1
             ? `手元現金（${yen(a.cash0 || 0)}）では足りないぶんは、<strong>債券→投信を売って現金に振り替えます</strong>。この振替は生活費ではないので表には現れませんが、そのぶん投信は減ります。`
             : ""}</li>
+        <li>売る口座の順序は<strong>NISA温存</strong>（課税される特定口座から先に売る）で固定しています。</li>
         <li><strong>分配金・配当は投信・株から出たお金</strong>なので、現金ではなくこの欄に数えています。
           「投信・株（売却）」が0円でも、分配金を受け取っていれば商品はそのぶん目減りします。
           その月に使い切らなかった分は現金として積み上がります（翌月以降は「現金」に数えます）。</li>
         <li>分配金は<strong>利回り一定</strong>として運用資産に比例させています。設定の分配金カードの金額は<strong>今の保有額</strong>ベースです。</li>
         <li>金額は<strong>月単位で計算</strong>しており毎月変化します（定額・ガードレールはインフレのぶん増え、定率は残高に連動）。
           各行の月額は、その年齢の12ヶ月を平均した額です。</li>
+        ${cp ? `<li>${escapeHtml(cp.cc.name)}は<strong>${cp.label(concKeep)}</strong>の前提で、
+          売った代金は使わず<strong>同額を分散資産に買い直します</strong>（NISAの残り枠 ${yen(cp.room)} を先に使用）。
+          売却益には ${Math.round(cp.gain * 100)}％ の含み益として課税しています。</li>` : ""}
       </ul>
     </details>
 
-    <h3 class="strat-h">③ 暴落シナリオ（${curLabel}で試算）</h3>
-    <div class="csv-table-wrap"><table class="csv-table strat-table">
-      <thead><tr><th>シナリオ</th><th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
-      <tbody>${scRows}</tbody></table></div>
-    <p class="hint">同じ平均リターンでも、<strong>暴落が来る時期</strong>で結果は大きく変わります。
-      退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。</p>
-
-    ${mc}
-    ${conc}`;
+    ${succ}`;
 
   const stepSel = $("draw-step");
   if (stepSel) stepSel.addEventListener("change", (e) => {
@@ -2821,6 +2757,252 @@ function renderStrategy() {
     drawTableReal = e.target.checked;
     renderStrategy();
   });
+  const keepSel = $("conc-keep");
+  if (keepSel) keepSel.addEventListener("change", (e) => {
+    concKeep = Number(e.target.value);
+    renderStrategy();
+  });
+}
+
+// 画面上部の「決める材料」。取り崩し方法は設定タブの値をそのまま使い、
+// 集中銘柄を残す割合だけはここで切り替える（設定に置き場所が無い前提のため）。
+function renderLevers(cp, curLabel) {
+  if (!cp) {
+    return `<p class="hint strat-lever">この画面はすべて<strong>取り崩し方法＝${curLabel}</strong>
+      （設定タブで変更）の前提で計算しています。</p>`;
+  }
+  const opts = cp.targets.map((t) =>
+    `<option value="${t}"${t === concKeep ? " selected" : ""}>${cp.label(t)}</option>`).join("");
+  return `
+    <div class="strat-lever">
+      <span class="strat-lever-label">決める材料</span>
+      <label class="draw-toggle"><span class="premise-key">${escapeHtml(cp.cc.name)}を</span>
+        <select id="conc-keep">${opts}</select></label>
+      <span class="strat-lever-note">これと<strong>取り崩し方法（${curLabel}／設定タブで変更）</strong>の2つで、
+        下の表と成功確率がすべて決まります。</span>
+    </div>`;
+}
+
+// ② 値動きのブレを含めた成功確率。
+// 選んでいる組み合わせの結果に加えて、「残す割合を変えたら」「方法を変えたら」を
+// それぞれ1本の表にして畳んでおく。すべて同じ乱数列で走らせるので差は前提の違いだけ。
+function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
+  if (!portfolioRisk) {
+    return `<h3 class="strat-h">② 値動きのブレを含めた成功確率</h3>
+      <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
+        価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
+  }
+  const N = 300;
+  const HORIZON = 600;
+  const draws = [];
+  for (let i = 0; i < N; i++) {
+    const row = new Float64Array(HORIZON + 2);
+    for (let m = 0; m < row.length; m++) row[m] = randNorm(0, 1);
+    draws.push(row);
+  }
+  const flatSd = (portfolioRisk.annual_vol / 100) / Math.sqrt(12);
+  // 集中銘柄があるときは、残す割合に応じた合成の変動率を月ごとに使う
+  const sdAt = (target, m) => (cp ? cp.volAt(cp.wAt(target, m)) / Math.sqrt(12) : flatSd);
+
+  const run = (method, target) => {
+    const opts = cp ? cp.optsFor(target) : {};
+    const det = path(Object.assign({ method }, opts));
+    let ok = 0; const ends = [];
+    for (let i = 0; i < N; i++) {
+      const z = draws[i];
+      const p = runPath(Object.assign({ method }, opts, {
+        ret: (m) => rm + z[Math.min(m, HORIZON + 1)] * sdAt(target, m),
+      }));
+      if (p.depletionAge < 0) ok++;
+      ends.push(p.endBal);
+    }
+    ends.sort((x, y) => x - y);
+    return { det, rate: Math.round(ok / N * 100), ends,
+             pct: (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))] };
+  };
+
+  const here = run(cur, concKeep);
+  const cls = (r) => (r >= 90 ? "up" : r >= 70 ? "warn" : "down");
+
+  // 残す割合を振る（取り崩し方法は設定中のまま）
+  let keepTable = "";
+  if (cp) {
+    const rows = cp.targets.map((t) => ({ t, r: t === concKeep ? here : run(cur, t) }));
+    const full = rows[0].r;
+    keepTable = `
+      <details class="plan-help" open>
+        <summary>${escapeHtml(cp.cc.name)}を残す割合を変えると（取り崩し方法は${DRAW_LABELS[cur]}のまま）</summary>
+        <div class="csv-table-wrap"><table class="csv-table strat-table">
+          <thead><tr><th>残す割合</th><th class="num">全体の<br>変動率</th>
+            <th class="num">そこまで<br>下げるのに</th><th class="num">尽きない<br>確率</th>
+            <th class="num">100歳時点<br>（中央値）</th><th class="num">100歳時点<br>（下位10%）</th></tr></thead>
+          <tbody>${rows.map(({ t, r }) => `
+            <tr class="${t === concKeep ? "strat-current" : ""}">
+              <td>${cp.label(t)}${t === concKeep ? '<span class="strat-badge">選択中</span>' : ""}
+                ${t >= 1 ? "" : `<span class="draw-year">約 ${man(t * cp.poolAt(0))}</span>`}</td>
+              <td class="num">${(cp.volAt(t >= 1 ? cp.share : t) * 100).toFixed(1)}%</td>
+              <td class="num">${cp.reachOf(t) >= 0 ? cp.reachOf(t).toFixed(1) + "年" : "—"}</td>
+              <td class="num ${cls(r.rate)}">${r.rate}%</td>
+              <td class="num">${man(r.pct(0.5))}</td>
+              <td class="num">${man(r.pct(0.1))}</td>
+            </tr>`).join("")}</tbody></table></div>
+        <p class="hint">${escapeHtml(cp.cc.name)}の変動率は年<strong>${cp.cc.vol}％</strong>、
+          それ以外の保有は年<strong>${cp.cc.rest_vol}％</strong>（相関 ${cp.cc.corr}）。
+          1銘柄の比率が高いほど全体のブレが大きくなり、取り崩し中は<strong>下がった年に売る</strong>ことに
+          なるため、同じ平均リターンでも手元に残る額が減ります。
+          <span class="hint-sub">売却は「使う」のではなく<strong>同額を分散資産に買い直す</strong>前提です。
+          <strong>勤務先の株なら、給与・退職金も同じ会社に依存している</strong>ぶん、
+          ここに出るより実質のリスクは大きくなります（在職中はさらに抑えめが無難）。
+          1銘柄・自社株の一般的な目安は金融資産の5〜10%以内とされます。</span></p>
+      </details>`;
+  }
+
+  // 取り崩し方法を振る（残す割合は選択中のまま）
+  const methods = ["fixed", "percent", "guardrail"];
+  const mRows = methods.map((mth) => ({ mth, r: mth === cur ? here : run(mth, concKeep) }));
+  const methodTable = `
+    <details class="plan-help">
+      <summary>取り崩し方法を変えると${cp
+        ? `（${escapeHtml(cp.cc.name)}は「${cp.label(concKeep)}」のまま）` : ""}</summary>
+      <div class="csv-table-wrap"><table class="csv-table strat-table">
+        <thead><tr><th>方法</th><th class="num">資産寿命<br><small>（ブレなし）</small></th>
+          <th class="num">尽きない<br>確率</th><th class="num">100歳時点<br>（中央値）</th>
+          <th class="num">100歳時点<br>（下位10%）</th>
+          <th class="num">生活費の下限<br><small>（今日の価値）</small></th></tr></thead>
+        <tbody>${mRows.map(({ mth, r }) => `
+          <tr class="${mth === cur ? "strat-current" : ""}">
+            <td>${DRAW_LABELS[mth]}${mth === cur ? '<span class="strat-badge">設定中</span>' : ""}</td>
+            <td class="num ${r.det.depletionAge > 0 ? "down" : "up"}">${ageOf(r.det)}</td>
+            <td class="num ${cls(r.rate)}">${r.rate}%</td>
+            <td class="num">${man(r.pct(0.5))}</td>
+            <td class="num">${man(r.pct(0.1))}</td>
+            <td class="num">${yen(r.det.minLiving)}/月</td>
+          </tr>`).join("")}</tbody></table></div>
+      <p class="hint">定率は枯渇しにくい代わりに<strong>生活費が下がりうる</strong>点に注目してください。
+        「生活費の下限」が設定した生活費より低ければ、その分だけ生活水準を落とす前提の計算です。
+        方法は<strong>設定タブ</strong>で変更します。</p>
+    </details>`;
+
+  // 決め打ちの暴落シナリオ（ブレの平均ではなく、最悪のタイミングを見る）
+  const retireM = Math.max(1, Math.round((a.retireAge - a.lp.age0) * 12));
+  const scenarios = [
+    { name: "退職直後に −30%", ret: (m) => (m === retireM ? -0.30 : rm) },
+    { name: "退職直後に −50%", ret: (m) => (m === retireM ? -0.50 : rm) },
+    { name: "退職後の5年が不調（年−3%）",
+      ret: (m) => (m >= retireM && m < retireM + 60 ? projMonthlyRate(-0.03) : rm) },
+  ];
+  const scRows = [{ name: "想定どおり（ブレなし）", p: here.det }]
+    .concat(scenarios.map((s) => ({ name: s.name, p: path({ method: cur, ret: s.ret }) })))
+    .map(({ name, p }) => `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
+      <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
+    </tr>`).join("");
+
+  return `
+    <h3 class="strat-h">② 値動きのブレを含めた成功確率（${DRAW_LABELS[cur]}${cp ? "・" + cp.label(concKeep) : ""}・${N}回）</h3>
+    <div class="stat-row">
+      <div class="stat-tile"><span class="stat-label">100歳まで尽きない確率</span>
+        <b class="stat-value ${cls(here.rate)}">${here.rate}%</b></div>
+      <div class="stat-tile"><span class="stat-label">100歳時点（中央値）</span>
+        <b class="stat-value">${man(here.pct(0.5))}</b></div>
+      <div class="stat-tile"><span class="stat-label">100歳時点（下位10%）</span>
+        <b class="stat-value">${man(here.pct(0.1))}</b></div>
+    </div>
+    <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
+      を使い、ブレ幅だけを実際の保有から推定した<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
+      （直近${portfolioRisk.months}ヶ月）としています。
+      <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
+      直近の相場に引きずられるため平均には使いません。すべての条件を<strong>同じ乱数列</strong>で
+      走らせているので、表の行どうしの差は前提の違いだけによるものです。
+      ${N}回の試行なので、成功確率は数pt程度ぶれます。</span></p>
+    ${keepTable}
+    ${methodTable}
+    <details class="plan-help">
+      <summary>暴落が特定の時期に来た場合（決め打ち）</summary>
+      <div class="csv-table-wrap"><table class="csv-table strat-table">
+        <thead><tr><th>シナリオ</th><th class="num">資産寿命</th><th class="num">100歳時点</th></tr></thead>
+        <tbody>${scRows}</tbody></table></div>
+      <p class="hint">同じ平均リターンでも、<strong>暴落が来る時期</strong>で結果は大きく変わります。
+        退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。
+        上の成功確率は毎月ランダムに揺らした平均像なので、この表と合わせて見てください。</p>
+    </details>`;
+}
+
+// 集中している銘柄の「残す割合」ごとの売却計画。無ければ null。
+// 決定的な計算では売れば税を払うぶん不利になるので、差が出るのは値動きのブレを入れたとき。
+// 残す割合 w に応じた合成の変動率
+//   σ = √( w²σ銘柄² + (1-w)²σその他² + 2w(1-w)ρσ銘柄σその他 )
+// を月ごとに使う。
+function concentrationPlan(a, rm) {
+  const cc = portfolioRisk && portfolioRisk.concentration;
+  if (!cc || cc.share < CONC_MIN_SHARE || cc.account_type === "nisa") return null;
+
+  const tRate = a.split ? a.split.taxRate : a.taxRate;
+  const gain = cc.gain_frac || 0;
+  const keep = Math.max(0.01, 1 - gain * tRate);       // 1円売って手元に残る割合
+  const room = a.split ? Math.max(0, a.split.nisaRoom) : 0;
+  const monthCap = NISA_YEAR_CAP / 12;
+  const nisaMonths = room > 0 ? Math.ceil(room / monthCap) : 0;
+  const nisaGross = nisaMonths > 0 ? (room / nisaMonths) / keep : 0;
+  const HORIZON = 600;
+
+  // 比率の分母になる運用資産の推移は、組み替えなしの経路で代用する。
+  // 集中銘柄の評価額も、比率(share)から投影の土俵に載せ直す
+  // （/api/portfolio-risk は価格×口数、投影は評価額の履歴が元で桁が食い違いうるため）。
+  const pool0 = runPath({});
+  const poolAt = (m) => {
+    const p = pool0.pts[Math.min(m, pool0.pts.length - 1)];
+    return p && p.fund > 0 ? p.fund : 1;
+  };
+  const share = cc.share / 100;
+  const concV = share * poolAt(0);
+
+  // target … 残しておきたい割合（0＝全部売る、1＝現状のまま）
+  // これからのNISA枠は、どの案でも集中銘柄を売って埋める（いまの方針どおり）。
+  // そうしないと「多く残す案ほどNISAを使えない」という別の差が混ざってしまう。
+  const cache = new Map();
+  const schedule = (target) => {
+    if (cache.has(target)) return cache.get(target);
+    const sell = [], bal = [];
+    let s = concV;
+    for (let m = 0; m <= HORIZON; m++) {
+      bal.push(s);
+      const fill = m < nisaMonths ? Math.min(s, nisaGross) : 0;
+      const want = target >= 1 ? Infinity : target * poolAt(m);
+      const trim = Math.max(0, Math.min(s - want, monthCap / keep));
+      const g = Math.max(fill, trim);
+      sell.push(g);
+      s = Math.max(0, (s - g) * (1 + rm));
+    }
+    const r = { sell, bal };
+    cache.set(target, r);
+    return r;
+  };
+  // 枠を埋めるだけで無くなる規模なら、どの割合を選んでも同じ計画になる
+  if ((schedule(1).bal[Math.min(nisaMonths + 1, HORIZON)] || 0) <= 1) return null;
+
+  const ss = (cc.vol || 0) / 100, sr = (cc.rest_vol || 0) / 100, rho = cc.corr || 0;
+  return {
+    cc, room, gain, share, poolAt,
+    targets: [0, 0.05, 0.10, 0.15, 0.20, 1],
+    label: (t) => (t >= 1 ? "現状のまま持ち続ける"
+      : t === 0 ? "全部売る" : `${Math.round(t * 100)}% 残す`),
+    volAt: (w) => Math.sqrt(Math.max(0,
+      w * w * ss * ss + (1 - w) * (1 - w) * sr * sr + 2 * w * (1 - w) * rho * ss * sr)),
+    wAt: (target, m) => Math.max(0, Math.min(1,
+      (schedule(target).bal[Math.min(m, HORIZON)] || 0) / poolAt(m))),
+    optsFor: (target) => ({ restructure: (m) => schedule(target).sell[m] || 0,
+                            restructureGain: gain }),
+    reachOf: (target) => {
+      const sch = schedule(target);
+      for (let m = 0; m <= HORIZON; m++) {
+        const w = (sch.bal[m] || 0) / poolAt(m);
+        if (w <= (target >= 1 ? 1 : target) + 0.005) return m / 12;
+      }
+      return -1;
+    },
+  };
 }
 
 // --- 分配金・配当（インカム） ---
@@ -3207,169 +3389,6 @@ const NISA_YEAR_CAP = 3600000;
 
 // これ以上の比率を1銘柄が占めていたら「集中している」として比較を出す
 const CONC_MIN_SHARE = 15;
-
-// 1銘柄に偏っているとき、「持ち続ける」と「売って分散する」を生涯で比べる。
-//
-// 決定的な計算（ブレなし）では、売れば税を払うぶん必ず持ち続けたほうが有利になる。
-// 差が出るのは値動きのブレを入れたときで、1銘柄はポートフォリオ全体より変動が大きく、
-// 下振れたときの落ち込みが深くなる。そこで、集中銘柄の比率に応じて合成の変動率
-//   σ = √( w²σ銘柄² + (1-w)²σその他² + 2w(1-w)ρσ銘柄σその他 )
-// を月ごとに作り、同じ取り崩し方法で成功確率と100歳時点の資産を比べる。
-function renderConcentration(a, curLabel, rm, man, yen) {
-  const cc = portfolioRisk && portfolioRisk.concentration;
-  const poolV = portfolioRisk && portfolioRisk.total_value;
-  if (!cc || !poolV || cc.share < CONC_MIN_SHARE) return "";
-  if (cc.account_type === "nisa") {
-    // NISAの中なら売っても課税されない。「税を払ってでも分散するか」という比較にならないので、
-    // 迷う要素が無いことだけ伝える。
-    return `
-      <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}が資産の${cc.share}%を占めています</h3>
-      <p class="hint">この保有は<strong>NISA（非課税）</strong>なので、分散のために売り替えても
-        譲渡益税はかかりません。<strong>税を払ってでも分散すべきか</strong>という比較にはならないため、
-        ここでは試算を出していません。変動率は年${cc.vol}％で、それ以外の保有（年${cc.rest_vol}％）より
-        ${cc.vol > cc.rest_vol ? "大きく" : "小さく"}なっています。</p>`;
-  }
-
-  const tRate = a.split ? a.split.taxRate : a.taxRate;
-  const gain = cc.gain_frac || 0;
-  const keep = Math.max(0.01, 1 - gain * tRate);        // 1円売って手元に残る割合
-  const room = a.split ? Math.max(0, a.split.nisaRoom) : 0;
-  const monthCap = NISA_YEAR_CAP / 12;
-  // NISAの残り枠を年360万ペースで埋めるのに何ヶ月かかるか（＝両案に共通の期間）
-  const nisaMonths = room > 0 ? Math.ceil(room / monthCap) : 0;
-  const nisaGross = nisaMonths > 0 ? (room / nisaMonths) / keep : 0;
-  const HORIZON = 600;
-
-  // 集中銘柄の残高の推移と、その月に売る額。
-  //   target … 運用資産に対して残しておきたい割合（0＝全部売る）。1以上なら「現状維持」。
-  //   pool   … 運用資産の推移（残す割合を決めるのに要る）。省略時は売らない前提で置く。
-  // これからのNISA枠は、どの案でも集中銘柄を売って埋める（いまの方針どおり）。
-  // そうしないと「多く残す案ほどNISAを使えない」という別の差が混ざってしまう。
-  const schedule = (target, pool, start) => {
-    const sell = [], bal = [];
-    let s = start;
-    for (let m = 0; m <= HORIZON; m++) {
-      bal.push(s);
-      const fill = m < nisaMonths ? Math.min(s, nisaGross) : 0;
-      const want = target >= 1 ? Infinity : target * (pool ? pool(m) : s);
-      const trim = Math.max(0, Math.min(s - want, monthCap / keep));
-      const g = Math.max(fill, trim);
-      sell.push(g);
-      s = Math.max(0, (s - g) * (1 + rm));
-    }
-    return { sell, bal };
-  };
-
-  const ss = (cc.vol || 0) / 100, sr = (cc.rest_vol || 0) / 100, rho = cc.corr || 0;
-  const volAt = (w) => Math.sqrt(Math.max(0,
-    w * w * ss * ss + (1 - w) * (1 - w) * sr * sr + 2 * w * (1 - w) * rho * ss * sr));
-
-  // 集中銘柄の評価額は、資産プランの投影と同じ土俵に載せ直す。
-  // /api/portfolio-risk は「価格×口数」、投影は評価額の履歴が元なので、
-  // 絶対額をそのまま混ぜると桁が食い違うことがある。比率（share）は共通なのでこれを使う。
-  const pool0 = runPath({});                     // 組み替えなしの経路（比率の分母）
-  const poolAt = (m) => {
-    const p = pool0.pts[Math.min(m, pool0.pts.length - 1)];
-    return p && p.fund > 0 ? p.fund : 1;
-  };
-  const concV = (cc.share / 100) * poolAt(0);
-
-  // 枠を埋めるだけで集中銘柄が無くなるなら、どの案も同じ計画になる（比べる意味がない）
-  if ((schedule(1, poolAt, concV).bal[Math.min(nisaMonths + 1, HORIZON)] || 0) <= 1) {
-    return `
-      <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}が資産の${cc.share}%を占めています</h3>
-      <p class="hint">NISAの残り枠（${yen(room)}）を埋めるだけでこの保有は無くなる見込みなので、
-        「持ち続ける／売って分散する」の比較は出していません。
-        いまの方針をそのまま続ければ、${Math.max(1, Math.round(nisaMonths / 12))}年ほどで集中は解消します。</p>`;
-  }
-
-  const N = 300;
-  // すべての案で同じ乱数列を使う（共通乱数）。別々に引くと、似た内容の案どうしでも
-  // 数ptの差が乱数のブレだけで出てしまい、方針の差なのか判別できない。
-  const draws = [];
-  for (let i = 0; i < N; i++) {
-    const row = new Float64Array(HORIZON + 2);
-    for (let m = 0; m < row.length; m++) row[m] = randNorm(0, 1);
-    draws.push(row);
-  }
-  const run = (target) => {
-    const sch = schedule(target, poolAt, concV);
-    const base = { restructure: (m) => sch.sell[m] || 0, restructureGain: gain };
-    const det = runPath(Object.assign({}, base));       // ブレなし（期待値の比較用）
-    const wAt = (m) => Math.max(0, Math.min(1,
-      (sch.bal[Math.min(m, HORIZON)] || 0) / poolAt(m)));
-    let ok = 0; const ends = [];
-    for (let i = 0; i < N; i++) {
-      const z = draws[i];
-      const p = runPath(Object.assign({
-        ret: (m) => rm + z[Math.min(m, HORIZON + 1)] * volAt(wAt(m)) / Math.sqrt(12),
-      }, base));
-      if (p.depletionAge < 0) ok++;
-      ends.push(p.endBal);
-    }
-    ends.sort((x, y) => x - y);
-    // その割合まで下がるのに何年かかるか
-    let reach = -1;
-    for (let m = 0; m <= HORIZON; m++) {
-      if (wAt(m) <= (target >= 1 ? 1 : target) + 0.005) { reach = m / 12; break; }
-    }
-    return { det, sch, wAt, reach, rate: Math.round(ok / N * 100), ends,
-             pct: (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))] };
-  };
-
-  const TARGETS = [0, 0.05, 0.10, 0.15, 0.20, 1];
-  const rows = TARGETS.map((t) => ({ t, r: run(t) }));
-  const full = rows[0].r;                       // 全部売る場合（比較の基準）
-  const stay = rows[rows.length - 1].r;         // 現状維持
-  const label = (t) => (t >= 1 ? "現状のまま持ち続ける"
-    : t === 0 ? "全部売る" : `${Math.round(t * 100)}% 残す`);
-  const row = ({ t, r }) => `
-    <tr class="${t >= 1 ? "" : t === 0.1 ? "strat-current" : ""}">
-      <td>${label(t)}${t >= 1 ? "" : `<span class="draw-year">約 ${man(t * poolAt(0))}</span>`}</td>
-      <td class="num">${(volAt(t >= 1 ? cc.share / 100 : t) * 100).toFixed(1)}%</td>
-      <td class="num">${r.reach >= 0 ? `${r.reach.toFixed(1)}年` : "—"}</td>
-      <td class="num ${r.rate >= 90 ? "up" : r.rate >= 70 ? "warn" : "down"}">${r.rate}%</td>
-      <td class="num">${man(r.pct(0.5))}</td>
-      <td class="num">${man(r.pct(0.1))}</td>
-      <td class="num">${t === 0 ? "—" : (r.rate - full.rate).toFixed(0) + "pt"}</td>
-    </tr>`;
-
-  // 「全部売る」との差が1pt以内に収まる、いちばん多く残せる水準＝実質ただで残せる量
-  const cheap = rows.filter((x) => x.t < 1 && full.rate - x.r.rate <= 1).pop();
-  return `
-    <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}をどれだけ残すか（${curLabel}・各${N}回）</h3>
-    <div class="csv-table-wrap"><table class="csv-table strat-table">
-      <thead><tr><th>方針</th><th class="num">全体の<br>変動率</th>
-        <th class="num">そこまで<br>下げるのに</th>
-        <th class="num">100歳まで<br>尽きない確率</th><th class="num">100歳時点<br>（中央値）</th>
-        <th class="num">100歳時点<br>（下位10%）</th>
-        <th class="num">全部売る<br>場合との差</th></tr></thead>
-      <tbody>${rows.map(row).join("")}</tbody></table></div>
-    <p class="hint">
-      ${escapeHtml(cc.name)}の変動率は年<strong>${cc.vol}％</strong>、それ以外の保有は年
-      <strong>${cc.rest_vol}％</strong>（相関 ${cc.corr}）です。1銘柄の比率が高いほど全体のブレが
-      大きくなり、取り崩し中は<strong>下がった年に売る</strong>ことになるため、
-      同じ平均リターンでも手元に残る額が減ります。
-      ${cheap
-        ? `この前提では、<strong>${label(cheap.t)}</strong>までなら全部売る場合との差は
-           成功確率で ${(full.rate - cheap.r.rate).toFixed(0)}pt、
-           100歳時点の下位10%で ${man(Math.abs(full.pct(0.1) - cheap.r.pct(0.1)))} にとどまります。`
-        : "この前提では、少しでも残すと成功確率が目に見えて下がります。"}
-      <strong>現状のまま持ち続ける</strong>場合は、全部売る場合より成功確率が
-      ${(full.rate - stay.rate).toFixed(0)}pt 低く、100歳時点の下位10%では
-      <strong>${man(full.pct(0.1) - stay.pct(0.1))}</strong> の違いになります。
-      <span class="hint-sub">※ 売却は「使う」のではなく<strong>同額を分散資産に買い直す</strong>前提です
-      （NISAの残り枠 ${yen(room)} はどの案でも先に使い、そのあとは年360万ペースで特定口座へ）。
-      含み益は売却額の ${Math.round(gain * 100)}％として課税しています。
-      すべての案を<strong>同じ乱数列</strong>で走らせているので、差は方針の違いだけによるものです。
-      平均リターンはどの案も設定の想定年利で、1銘柄に高いリターンは見込んでいません
-      （分散で減るのはブレであって、期待リターンではないため）。
-      <strong>勤務先の株の場合は、給与・退職金もその会社に依存している</strong>ぶん、
-      ここに出るより実質のリスクは大きくなります（在職中はさらに抑えめが無難です）。
-      「10% 残す」に目印を付けているのは、1銘柄・自社株の一般的な目安が
-      金融資産の5〜10%以内とされるためで、この計算が推奨しているわけではありません。
-      比率は値動きのブレなしの経路からの概算です。</span></p>`;
-}
 
 // 指定した年齢の1年間に「資産から引き出す額」を集計する。
 // 定率のように月ごとに変わる方式でも実態に合うよう、その歳の各月を平均して月額を出す。

@@ -855,6 +855,15 @@ tr:hover .row-del { opacity: 1; }
   border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
 .premise-key { font-size: 10.5px; font-weight: 700; color: var(--ink-soft); }
 .strat-actions { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; }
+/* 結果を左右する「決める材料」だけをまとめた行 */
+.strat-lever { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  background: var(--chip-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; margin: 0 0 6px; font-size: 12.5px; }
+.strat-lever-label { font-size: 11px; font-weight: 700; color: var(--ink-soft);
+  letter-spacing: .04em; }
+.strat-lever-note { font-size: 11.5px; color: var(--ink-soft); }
+.strat-lever .draw-toggle { background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 10px; }
 
 /* 節見出し：番号つきで区切りを分かりやすくする */
 .strat-h { font-size: 14px; font-weight: 700; margin: 26px 0 8px; color: var(--ink);
