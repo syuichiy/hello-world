@@ -2750,6 +2750,9 @@ function renderStrategy() {
         価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
   }
 
+  // ⑤ 1銘柄に偏っているとき「持ち続ける」と「売って分散する」を比べる
+  const conc = renderConcentration(a, curLabel, rm, man, yen);
+
   box.innerHTML = `
     <h3 class="strat-h">① 取り崩し方法の比較（利回りのブレなし）</h3>
     <div class="csv-table-wrap"><table class="csv-table strat-table">
@@ -2805,7 +2808,8 @@ function renderStrategy() {
     <p class="hint">同じ平均リターンでも、<strong>暴落が来る時期</strong>で結果は大きく変わります。
       退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。</p>
 
-    ${mc}`;
+    ${mc}
+    ${conc}`;
 
   const stepSel = $("draw-step");
   if (stepSel) stepSel.addEventListener("change", (e) => {
@@ -3024,6 +3028,34 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   };
   // 投信の税引後評価額（いま全部売ったら手元に残る額）。NISA分は課税されない。
   const fundAT = () => (taxV - Math.max(0, taxV - taxB) * tRate) + nisaV;
+  // 口座の組み替え：特定口座の一部を売って、そのまま買い直す（集中銘柄→分散資産）。
+  // 生活費に使うわけではないので資産は市場に残るが、売った時点で含み益に課税されるため
+  // 税のぶんだけ運用資産が減る。代わりに取得原価は買値まで上がるので、以後の税は軽くなる。
+  // 買い直し先はNISAの枠が残っていればNISA（非課税）、無ければ特定口座。
+  let nisaMonthLeft = 0;          // その月にNISAへ入れられる残り（年360万を12等分）
+  let restructTax = 0;            // 組み替えで払った税の累計
+  // gainOverride … 売るのが特定口座の平均ではなく特定の銘柄のとき、その含み益の割合。
+  //                 集中銘柄は口座平均より含み益が大きいことが多く、税額が変わるため。
+  const restructure = (gross, gainOverride) => {
+    if (!(gross > 0) || !(taxV > 0)) return;
+    const sell = Math.min(taxV, gross);
+    const gainFr = (gainOverride != null && gainOverride >= 0 && gainOverride <= 1)
+      ? gainOverride : Math.max(0, taxV - taxB) / taxV;
+    const paid = sell * gainFr * tRate;
+    taxB -= Math.min(taxB, sell * (1 - gainFr));
+    taxV -= sell;
+    if (taxV < 0) taxV = 0;
+    if (taxB < 0) taxB = 0;
+    const net = sell - paid;
+    const toNisa = Math.min(net, nisaRoom, nisaMonthLeft);
+    if (toNisa > 0) {
+      nisaV += toNisa; nisaB += toNisa; nisaRoom -= toNisa; nisaMonthLeft -= toNisa;
+    }
+    const toTax = net - toNisa;
+    if (toTax > 0) { taxV += toTax; taxB += toTax; }
+    restructTax += paid;
+    taxPaid += paid;
+  };
   const snap = (age, dt) => {
     const fa = fundAT();
     return { age, date: dt, cash: Math.round(cash), bonds: Math.round(bonds),
@@ -3069,11 +3101,14 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       taxV -= taxV * dGrossM;
       nisaV -= nisaV * dGrossM;
     }
+    // 集中銘柄の売り替えは、積立や取り崩しより先に済ませる（同じ年間枠を取り合うため）。
+    nisaMonthLeft = NISA_YEAR_CAP / 12;
+    if (typeof o.restructure === "function") restructure(o.restructure(m), o.restructureGain);
     if (age < lp.retire) {
       // 積立はNISAの生涯投資枠（簿価1,800万円・年360万円）を使い切るまでNISAへ。
       // 枠を超えたぶんは特定口座に積み立てる。
-      const toNisa = Math.min(monthly, nisaRoom, NISA_YEAR_CAP / 12);
-      if (toNisa > 0) { nisaV += toNisa; nisaB += toNisa; nisaRoom -= toNisa; }
+      const toNisa = Math.min(monthly, nisaRoom, nisaMonthLeft);
+      if (toNisa > 0) { nisaV += toNisa; nisaB += toNisa; nisaRoom -= toNisa; nisaMonthLeft -= toNisa; }
       const toTax = monthly - toNisa;
       if (toTax > 0) { taxV += toTax; taxB += toTax; }
     } else {
@@ -3159,6 +3194,8 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   return { pts, retireBal, penStartAge, depletionAge, endBal,
            taxPaid: Math.round(taxPaid), taxDeferred: Math.round(taxDeferred),
            taxTotal: Math.round(taxPaid + taxDeferred),
+           restructTax: Math.round(restructTax),
+           nisaRoomLeft: Math.round(nisaRoom),
            // 生活費の下限（今日の価値）。定額なら生活費そのもの、定率・ガードレールでは下がりうる
            minLiving: Number.isFinite(minLivingReal) ? Math.round(minLivingReal) : Math.round(lp.spend),
            method };
@@ -3167,6 +3204,149 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
 // NISAの生涯投資枠（簿価1,800万円）と年間投資枠（360万円）。積立の振り分けに使う。
 const NISA_LIFETIME_CAP = 18000000;
 const NISA_YEAR_CAP = 3600000;
+
+// これ以上の比率を1銘柄が占めていたら「集中している」として比較を出す
+const CONC_MIN_SHARE = 15;
+
+// 1銘柄に偏っているとき、「持ち続ける」と「売って分散する」を生涯で比べる。
+//
+// 決定的な計算（ブレなし）では、売れば税を払うぶん必ず持ち続けたほうが有利になる。
+// 差が出るのは値動きのブレを入れたときで、1銘柄はポートフォリオ全体より変動が大きく、
+// 下振れたときの落ち込みが深くなる。そこで、集中銘柄の比率に応じて合成の変動率
+//   σ = √( w²σ銘柄² + (1-w)²σその他² + 2w(1-w)ρσ銘柄σその他 )
+// を月ごとに作り、同じ取り崩し方法で成功確率と100歳時点の資産を比べる。
+function renderConcentration(a, curLabel, rm, man, yen) {
+  const cc = portfolioRisk && portfolioRisk.concentration;
+  const poolV = portfolioRisk && portfolioRisk.total_value;
+  if (!cc || !poolV || cc.share < CONC_MIN_SHARE) return "";
+  if (cc.account_type === "nisa") {
+    // NISAの中なら売っても課税されない。「税を払ってでも分散するか」という比較にならないので、
+    // 迷う要素が無いことだけ伝える。
+    return `
+      <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}が資産の${cc.share}%を占めています</h3>
+      <p class="hint">この保有は<strong>NISA（非課税）</strong>なので、分散のために売り替えても
+        譲渡益税はかかりません。<strong>税を払ってでも分散すべきか</strong>という比較にはならないため、
+        ここでは試算を出していません。変動率は年${cc.vol}％で、それ以外の保有（年${cc.rest_vol}％）より
+        ${cc.vol > cc.rest_vol ? "大きく" : "小さく"}なっています。</p>`;
+  }
+
+  const tRate = a.split ? a.split.taxRate : a.taxRate;
+  const gain = cc.gain_frac || 0;
+  const keep = Math.max(0.01, 1 - gain * tRate);        // 1円売って手元に残る割合
+  const room = a.split ? Math.max(0, a.split.nisaRoom) : 0;
+  const monthCap = NISA_YEAR_CAP / 12;
+  // NISAの残り枠を年360万ペースで埋めるのに何ヶ月かかるか（＝両案に共通の期間）
+  const nisaMonths = room > 0 ? Math.ceil(room / monthCap) : 0;
+  const nisaGross = nisaMonths > 0 ? (room / nisaMonths) / keep : 0;
+  const HORIZON = 600;
+
+  // 集中銘柄の残高の推移と、その月に売る額。keepGoing=false なら枠を使い切ったら止める。
+  const schedule = (keepGoing) => {
+    const sell = [], bal = [];
+    let s = cc.value;
+    for (let m = 0; m <= HORIZON; m++) {
+      bal.push(s);
+      let g = 0;
+      if (m < nisaMonths) g = Math.min(s, nisaGross);
+      else if (keepGoing) g = Math.min(s, monthCap / keep);
+      sell.push(g);
+      s = Math.max(0, (s - g) * (1 + rm));
+    }
+    return { sell, bal };
+  };
+
+  const ss = (cc.vol || 0) / 100, sr = (cc.rest_vol || 0) / 100, rho = cc.corr || 0;
+  const volAt = (w) => Math.sqrt(Math.max(0,
+    w * w * ss * ss + (1 - w) * (1 - w) * sr * sr + 2 * w * (1 - w) * rho * ss * sr));
+
+  // 枠を埋めるだけで集中銘柄が無くなるなら、AもBも同じ計画になる（比べる意味がない）
+  if ((schedule(false).bal[Math.min(nisaMonths + 1, HORIZON)] || 0) <= 1) {
+    return `
+      <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}が資産の${cc.share}%を占めています</h3>
+      <p class="hint">NISAの残り枠（${yen(room)}）を埋めるだけでこの保有は無くなる見込みなので、
+        「持ち続ける／売って分散する」の比較は出していません。
+        いまの方針をそのまま続ければ、${Math.max(1, Math.round(nisaMonths / 12))}年ほどで集中は解消します。</p>`;
+  }
+
+  const N = 400;
+  // 両案で同じ乱数列を使う（共通乱数）。別々に引くと、同じ内容の計画どうしでも
+  // 数ptの差が乱数のブレだけで出てしまい、方針の差なのか判別できない。
+  const draws = [];
+  for (let i = 0; i < N; i++) {
+    const row = new Float64Array(HORIZON + 2);
+    for (let m = 0; m < row.length; m++) row[m] = randNorm(0, 1);
+    draws.push(row);
+  }
+  const run = (keepGoing) => {
+    const sch = schedule(keepGoing);
+    const base = { restructure: (m) => sch.sell[m] || 0, restructureGain: gain };
+    const det = runPath(Object.assign({}, base));       // ブレなし（期待値の比較用）
+    // 運用資産の推移はブレなしの経路で代用し、集中銘柄の比率 w を月ごとに求める
+    const wAt = (m) => {
+      const p = det.pts[Math.min(m, det.pts.length - 1)];
+      const pool = p && p.fund > 0 ? p.fund : 1;
+      return Math.max(0, Math.min(1, (sch.bal[Math.min(m, HORIZON)] || 0) / pool));
+    };
+    let ok = 0; const ends = [];
+    for (let i = 0; i < N; i++) {
+      const z = draws[i];
+      const p = runPath(Object.assign({
+        ret: (m) => rm + z[Math.min(m, HORIZON + 1)] * volAt(wAt(m)) / Math.sqrt(12),
+      }, base));
+      if (p.depletionAge < 0) ok++;
+      ends.push(p.endBal);
+    }
+    ends.sort((x, y) => x - y);
+    return { det, sch, wAt, rate: Math.round(ok / N * 100), ends,
+             pct: (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))] };
+  };
+
+  const A = run(false);      // 枠を使い切ったら、あとは持ち続ける
+  const B = run(true);       // その後も特定口座で売って分散を続ける
+  const endShare = (r) => r.wAt(r.det.pts.length - 1) * 100;
+  const win = B.rate - A.rate;
+  const row = (label, r, extra) => `
+    <tr>
+      <td>${label}</td>
+      <td class="num">${Math.round(endShare(r))}%</td>
+      <td class="num ${r.rate >= 90 ? "up" : r.rate >= 70 ? "warn" : "down"}">${r.rate}%</td>
+      <td class="num">${man(r.pct(0.5))}</td>
+      <td class="num">${man(r.pct(0.1))}</td>
+      <td class="num">${man(r.det.endBal)}</td>
+      ${extra || ""}
+    </tr>`;
+
+  return `
+    <h3 class="strat-h">⑤ ${escapeHtml(cc.name)}を持ち続ける場合と、売って分散する場合（${curLabel}・各${N}回）</h3>
+    <div class="csv-table-wrap"><table class="csv-table strat-table">
+      <thead><tr><th>方針</th><th class="num">100歳時点の<br>この銘柄の比率</th>
+        <th class="num">100歳まで<br>尽きない確率</th><th class="num">100歳時点<br>（中央値）</th>
+        <th class="num">100歳時点<br>（下位10%）</th>
+        <th class="num">ブレなしの場合</th></tr></thead>
+      <tbody>
+        ${row("A 持ち続ける", A)}
+        ${row("B 売って分散する", B)}
+      </tbody></table></div>
+    <p class="hint">
+      <strong>ブレなしの計算ではAが有利です</strong>（売れば譲渡益税を払うぶん資産が減るため。
+      Bで余分に払う税は <strong>${yen(Math.max(0, B.det.taxPaid - A.det.taxPaid))}</strong>）。
+      差が出るのは<strong>値動きのブレを入れたとき</strong>で、
+      ${escapeHtml(cc.name)}の変動率は年<strong>${cc.vol}％</strong>、
+      それ以外の保有は年<strong>${cc.rest_vol}％</strong>（相関 ${cc.corr}）です。
+      ${win > 0
+        ? `分散したほうが、100歳まで尽きない確率が <strong class="up">${win}pt 高く</strong>なりました。`
+        : win < 0
+        ? `この前提では、分散しても成功確率は <strong class="down">${-win}pt 低い</strong>結果でした。
+           税の負担がブレの縮小より大きいということです。`
+        : "この前提では、成功確率に差は出ませんでした。"}
+      <span class="hint-sub">※ 売却は「使う」のではなく<strong>同額を分散資産に買い直す</strong>前提です
+      （NISAの残り枠 ${yen(room)} を先に使い、そのあとは年360万ペースで特定口座へ）。
+      集中銘柄の含み益は売却額の ${Math.round(gain * 100)}％として課税しています。
+      両案は<strong>同じ乱数列</strong>で走らせているので、差は方針の違いだけによるものです。
+      平均リターンは両案とも設定の想定年利で、1銘柄に高いリターンは見込んでいません
+      （分散で減るのはブレであって、期待リターンではないため）。
+      比率は値動きのブレなしの経路から求めた概算です。</span></p>`;
+}
 
 // 指定した年齢の1年間に「資産から引き出す額」を集計する。
 // 定率のように月ごとに変わる方式でも実態に合うよう、その歳の各月を平均して月額を出す。

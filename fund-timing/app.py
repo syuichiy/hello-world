@@ -1369,6 +1369,7 @@ def api_portfolio_risk():
     """
     years = max(1.0, min(20.0, float(request.args.get("years", 5) or 5)))
     per_fund, weights, series = [], {}, {}
+    items = {}
     for it in db.list_watchlist():
         units = float(it.get("units") or 0)
         if units <= 0:
@@ -1388,6 +1389,7 @@ def api_portfolio_risk():
         value = p * units / (1.0 if kind == "stock" else 10000.0)
         weights[it["watch_id"]] = value
         series[it["watch_id"]] = dict(rets)
+        items[it["watch_id"]] = it
         sd = _stdev([r for _, r in rets])
         per_fund.append({"name": it.get("name"), "value": round(value),
                          "months": len(rets),
@@ -1421,7 +1423,68 @@ def api_portfolio_risk():
         "monthly_vol": round(sd * 100, 3),
         "total_value": round(total),
         "funds": sorted(per_fund, key=lambda x: -x["value"]),
+        "concentration": _concentration(weights, series, items, months, total),
     })
+
+
+def _concentration(weights, series, items, months, total):
+    """一番大きい保有と、それ以外に分けて変動率を推定する。
+
+    1銘柄に偏っているとき、「持ち続ける」と「売って分散する」で将来のブレ幅が
+    どれだけ変わるかを試算するために使う。合成の分散を出すには、集中している銘柄の
+    変動率・それ以外の変動率に加えて、両者の相関が要る。
+    """
+    if len(weights) < 2:
+        return None
+    top = max(weights, key=lambda w: weights[w])
+    rest_w = {k: v for k, v in weights.items() if k != top}
+    a, b = [], []
+    for m in months:
+        tr = series[top].get(m)
+        if tr is None:
+            continue
+        num = wsum = 0.0
+        for wid, w in rest_w.items():
+            r = series[wid].get(m)
+            if r is not None:
+                num += w * r
+                wsum += w
+        if wsum > 0:
+            a.append(tr)
+            b.append(num / wsum)
+    if len(a) < 13:
+        return None
+    it = items.get(top) or {}
+    invested = float(it.get("invested") or 0)
+    value = weights[top]
+    return {
+        "watch_id": top,
+        "name": it.get("name") or "",
+        "kind": it.get("kind") or "fund",
+        "account_type": it.get("account_type") or "taxable",
+        "value": round(value),
+        "invested": round(invested),
+        "share": round(value / total * 100, 1) if total else 0,
+        "gain_frac": round(max(0.0, (value - invested) / value), 4) if value > 0 else 0,
+        "vol": round(_stdev(a) * math.sqrt(12) * 100, 2),
+        "rest_vol": round(_stdev(b) * math.sqrt(12) * 100, 2),
+        "corr": round(_corr(a, b), 3),
+        "months": len(a),
+    }
+
+
+def _corr(xs, ys):
+    """2系列の相関係数。片方が動かない場合は0を返す。"""
+    n = min(len(xs), len(ys))
+    if n < 2:
+        return 0.0
+    mx, my = _mean(xs[:n]), _mean(ys[:n])
+    sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    sxx = sum((xs[i] - mx) ** 2 for i in range(n))
+    syy = sum((ys[i] - my) ** 2 for i in range(n))
+    if sxx <= 0 or syy <= 0:
+        return 0.0
+    return sxy / math.sqrt(sxx * syy)
 
 
 def _mean(xs):
