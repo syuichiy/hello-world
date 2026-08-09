@@ -1805,6 +1805,90 @@ def api_ai_advice():
     return jsonify({"ok": True, "model": model_key, "advice": data})
 
 
+_AI_STRATEGY_PROMPT = (
+    "あなたは日本の個人投資家の「退職後の取り崩し計画」を見て、方針を助言するアシスタントです。\n"
+    "入力は、その人の前提（年齢・退職・年金・生活費・インフレ・想定年利）と、"
+    "アプリが計算した試算結果です。試算は月次のシミュレーションで、"
+    "取り崩し方法（定額／定率／ガードレール）ごとの資産寿命と、"
+    "値動きのブレを乱数で入れたモンテカルロの結果（100歳まで尽きない確率・"
+    "100歳時点の中央値と下位10%）、決め打ちの暴落シナリオを含みます。\n"
+    "1銘柄に集中している場合は、その銘柄を売って分散資産に買い替える案も含まれます"
+    "（売ると譲渡益に約20.315%課税されるため、ブレの無い計算では必ず持ち続けたほうが有利になります。"
+    "差が出るのは値動きのブレを入れたときです）。\n\n"
+    "次をJSONで返してください。\n"
+    "- recommendation: 一番よいと思う方針を、取り崩し方法と集中銘柄の扱いの両方について"
+    "言い切る（2〜3文・180字以内）。数字の根拠を1つは入れる。\n"
+    "- why: そう考える理由（3〜4項目・各60字以内）。試算の数字を引用する。\n"
+    "- tradeoff: 逆の選択をした場合に何を得て何を失うかを説明する（2〜3文・160字以内）。\n"
+    "- watch: 見落としやすい注意点（2〜3項目・各60字以内）。"
+    "勤務先の株なら給与・退職金も同じ会社に依存する点、"
+    "モンテカルロは正規分布なので現実の暴落を過小評価しがちな点など。\n\n"
+    "守ること：断定的な将来予測をしない。"
+    "特定の銘柄の買い推奨をしない。数字はすべて入力にあるものだけを使い、自分で作らない。"
+    "「投資助言ではない」と毎項目に書く必要はない（画面に注記がある）。"
+    "日本語で、専門用語には短い言い換えを添える。"
+)
+
+_AI_STRATEGY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "recommendation": {"type": "string"},
+        "why": {"type": "array", "items": {"type": "string"}},
+        "tradeoff": {"type": "string"},
+        "watch": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["recommendation", "why", "tradeoff", "watch"],
+    "additionalProperties": False,
+}
+
+
+@app.route("/api/ai-strategy", methods=["POST"])
+def api_ai_strategy():
+    """画面で計算した取り崩しの試算結果をClaudeに渡し、方針の助言を返す。
+
+    試算そのものはブラウザ側（同じ月次シミュレーション）で行い、ここは要約を渡すだけ。
+    サーバで計算し直すと画面の数字とずれるため、あえて受け取る形にしている。
+    """
+    state = _settings_state()
+    model_key = state["ai_model"]
+    if model_key == "off":
+        return jsonify({"ok": False, "disabled": True,
+                        "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
+    if not _HAS_ANTHROPIC:
+        return jsonify({"ok": False, "error":
+                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
+    key = _ai_api_key()
+    if not key:
+        return jsonify({"ok": False, "error":
+                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
+
+    ctx = request.get_json(force=True, silent=True) or {}
+    if not ctx.get("methods"):
+        return jsonify({"ok": False, "error": "試算結果がありません。先に「再計算」を実行してください。"})
+
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model=_AI_MODELS[model_key],
+            max_tokens=4000,
+            system=[{"type": "text", "text": _AI_STRATEGY_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content":
+                       "次の取り崩し計画の試算結果をもとに助言してください。\n"
+                       + json.dumps(ctx, ensure_ascii=False)}],
+            output_config={"format": {"type": "json_schema", "schema": _AI_STRATEGY_SCHEMA}},
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        data = json.loads(text) if text else {}
+    except json.JSONDecodeError:
+        return jsonify({"ok": False, "error":
+                        "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
+    except Exception as e:
+        return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
+
+    return jsonify({"ok": True, "model": model_key, "advice": data})
+
+
 # ================================================================== 資産プラン
 def _dividend_effective_mode(s, annual):
     """分配金の受け取り方を確定する。手動設定が無ければ自動判定：
@@ -1888,7 +1972,7 @@ def api_plan():
                   "current_age", "retire_age", "pension_age",
                   "pension_monthly", "spend_monthly", "inflation",
                   "cash", "bonds", "tax", "emergency_months", "near_term",
-                  "draw_rate"):
+                  "draw_rate", "conc_keep"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)

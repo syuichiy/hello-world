@@ -1967,7 +1967,9 @@ async function loadSettings() {
   $("set-near-term").value = fmtInt(pl.near_term || 0);
   $("set-draw-method").value = pl.draw_method || "fixed";
   $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
+  $("set-conc-keep").value = pl.conc_keep != null ? pl.conc_keep : 100;
   renderEmFloorNote();
+  renderConcKeepNote();
 }
 
 function renderSettingsUI() {
@@ -2338,7 +2340,35 @@ function bindPremise(id, key, comma) {
     else { v = parseFloat(e.target.value) || 0; }
     savePlan({ [key]: v });
     renderEmFloorNote();   // 生活防衛資金は現金・生活費・月数のどれを変えても結果が変わる
+    renderConcKeepNote();
   });
+}
+
+// 「集中している銘柄を残す割合」の補足。対象の銘柄名と、いまの設定で何が起きるかを示す。
+function renderConcKeepNote() {
+  const el = $("conc-keep-note");
+  if (!el) return;
+  const p = planData.plan || {};
+  const pct = p.conc_keep != null ? p.conc_keep : 100;
+  const cc = portfolioRisk && portfolioRisk.concentration;
+  el.classList.remove("field-note-warn");
+  if (!cc || cc.share < CONC_MIN_SHARE) {
+    el.textContent = "1銘柄が資産の15%以上を占めているとき、その銘柄を売って分散資産に"
+      + "買い替える前提で取り崩し戦略を計算します。100%＝売らずにそのまま保有。"
+      + "（いまは対象になる銘柄がありません。取り崩し戦略タブを開くと判定します。）";
+    return;
+  }
+  const yen = (n) => Math.round(n).toLocaleString() + "円";
+  const head = `対象は「${cc.name}」（資産の ${cc.share}%）。`;
+  if (pct >= cc.share) {
+    el.textContent = head + "いまの設定では売らずにそのまま保有する前提です。"
+      + "減らす場合は、残したい割合（例：10）を入れてください。";
+    el.classList.add("field-note-warn");
+  } else {
+    el.textContent = head + `資産の ${Math.round(pct)}%（約 ${yen(cc.value * pct / cc.share)}）まで`
+      + "年360万円ペースで売り、同額を分散資産に買い直す前提で計算します"
+      + "（NISAの残り枠を先に使います）。売却益には課税されます。";
+  }
 }
 
 // 生活防衛資金は「生活費×月数」だが、手元現金が上限になる。
@@ -2375,6 +2405,7 @@ bindPremise("set-tax", "tax", false);
 bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
 bindPremise("set-draw-rate", "draw_rate", false);
+bindPremise("set-conc-keep", "conc_keep", false);
 $("set-draw-method").addEventListener("change", (e) => savePlan({ draw_method: e.target.value }));
 
 // ============================================================ 資産プラン
@@ -2579,7 +2610,6 @@ let portfolioRisk = null;     // 実際の保有から推定した年率リタ�
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
-let concKeep = 1;             // 集中している銘柄をどれだけ残すか（1＝現状のまま）
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -2606,11 +2636,15 @@ async function runStrategy() {
     portfolioRisk = r.ok ? r : null;
   } catch (_) { portfolioRisk = null; }
   strategyShown = true;
+  const aiBox = $("strategy-ai");
+  if (aiBox) { aiBox.hidden = true; aiBox.innerHTML = ""; }   // 前提が変われば古い助言は消す
+  renderConcKeepNote();      // 設定タブの補足は、集中銘柄が分かってから書き直す
   renderStrategyPremise();
   renderStrategy();
   setStrategyStatus("");
 }
 $("strategy-run").addEventListener("click", runStrategy);
+$("strategy-ai-run").addEventListener("click", loadStrategyAi);
 
 // 検証に使う前提をチップで並べる。どの設定で計算しているのかを一目で分かるようにする。
 function renderStrategyPremise() {
@@ -2636,6 +2670,13 @@ function renderStrategyPremise() {
     ["インフレ", `${p.inflation != null ? p.inflation : 0}%`],
     ["売却順序", "NISA温存"],
   ];
+  // 1銘柄に偏っているときは「どれだけ残すか」も結果を左右するので前提として並べる
+  const cc = portfolioRisk && portfolioRisk.concentration;
+  if (cc && cc.share >= CONC_MIN_SHARE) {
+    const pct = p.conc_keep != null ? p.conc_keep : 100;
+    chips.push([`${cc.name}（現在 ${cc.share}%）`,
+                pct >= cc.share ? "そのまま保有" : `${Math.round(pct)}%まで減らす`]);
+  }
   el.innerHTML = chips.map(([k, v]) =>
     `<span class="premise-chip"><span class="premise-key">${k}</span>${escapeHtml(String(v))}</span>`).join("");
 }
@@ -2654,10 +2695,9 @@ function renderStrategy() {
   const curLabel = DRAW_LABELS[cur];
   const rm = projMonthlyRate(a.baseRate);
 
-  // 集中している銘柄があれば「どれだけ残すか」がもう1つの前提になる
+  // 集中している銘柄を「どれだけ残すか」は設定タブの値を使う（100%＝売らずに現状のまま）
   const cp = concentrationPlan(a, rm);
-  if (cp && !cp.targets.includes(concKeep)) concKeep = 1;
-  const keepOpts = cp ? cp.optsFor(concKeep) : {};
+  const keepOpts = cp ? cp.optsFor(cp.target) : {};
   const path = (extra) => runPath(Object.assign({}, keepOpts, extra));
   const curPath = path({ method: cur });
 
@@ -2699,9 +2739,7 @@ function renderStrategy() {
   const succ = renderSuccess(a, cur, rm, cp, path, man, yen, ageOf);
 
   box.innerHTML = `
-    ${renderLevers(cp, curLabel)}
-
-    <h3 class="strat-h">① 年齢ごとの取り崩し額（${curLabel}${cp ? "・" + cp.label(concKeep) : ""}）</h3>
+    <h3 class="strat-h">① 年齢ごとの取り崩し額（${curLabel}${cp ? "・" + cp.label(cp.target) : ""}）</h3>
     <div class="draw-ctrls">
       <label class="draw-toggle">表示間隔
         <select id="draw-step">
@@ -2739,7 +2777,7 @@ function renderStrategy() {
         <li>分配金は<strong>利回り一定</strong>として運用資産に比例させています。設定の分配金カードの金額は<strong>今の保有額</strong>ベースです。</li>
         <li>金額は<strong>月単位で計算</strong>しており毎月変化します（定額・ガードレールはインフレのぶん増え、定率は残高に連動）。
           各行の月額は、その年齢の12ヶ月を平均した額です。</li>
-        ${cp ? `<li>${escapeHtml(cp.cc.name)}は<strong>${cp.label(concKeep)}</strong>の前提で、
+        ${cp ? `<li>${escapeHtml(cp.cc.name)}は<strong>${cp.label(cp.target)}</strong>の前提で、
           売った代金は使わず<strong>同額を分散資産に買い直します</strong>（NISAの残り枠 ${yen(cp.room)} を先に使用）。
           売却益には ${Math.round(cp.gain * 100)}％ の含み益として課税しています。</li>` : ""}
       </ul>
@@ -2757,30 +2795,6 @@ function renderStrategy() {
     drawTableReal = e.target.checked;
     renderStrategy();
   });
-  const keepSel = $("conc-keep");
-  if (keepSel) keepSel.addEventListener("change", (e) => {
-    concKeep = Number(e.target.value);
-    renderStrategy();
-  });
-}
-
-// 画面上部の「決める材料」。取り崩し方法は設定タブの値をそのまま使い、
-// 集中銘柄を残す割合だけはここで切り替える（設定に置き場所が無い前提のため）。
-function renderLevers(cp, curLabel) {
-  if (!cp) {
-    return `<p class="hint strat-lever">この画面はすべて<strong>取り崩し方法＝${curLabel}</strong>
-      （設定タブで変更）の前提で計算しています。</p>`;
-  }
-  const opts = cp.targets.map((t) =>
-    `<option value="${t}"${t === concKeep ? " selected" : ""}>${cp.label(t)}</option>`).join("");
-  return `
-    <div class="strat-lever">
-      <span class="strat-lever-label">決める材料</span>
-      <label class="draw-toggle"><span class="premise-key">${escapeHtml(cp.cc.name)}を</span>
-        <select id="conc-keep">${opts}</select></label>
-      <span class="strat-lever-note">これと<strong>取り崩し方法（${curLabel}／設定タブで変更）</strong>の2つで、
-        下の表と成功確率がすべて決まります。</span>
-    </div>`;
 }
 
 // ② 値動きのブレを含めた成功確率。
@@ -2821,49 +2835,33 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
              pct: (q) => ends[Math.min(ends.length - 1, Math.floor(ends.length * q))] };
   };
 
-  const here = run(cur, concKeep);
+  const here = run(cur, cp ? cp.target : 1);
   const cls = (r) => (r >= 90 ? "up" : r >= 70 ? "warn" : "down");
 
-  // 残す割合を振る（取り崩し方法は設定中のまま）
-  let keepTable = "";
-  if (cp) {
-    const rows = cp.targets.map((t) => ({ t, r: t === concKeep ? here : run(cur, t) }));
-    const full = rows[0].r;
-    keepTable = `
-      <details class="plan-help" open>
-        <summary>${escapeHtml(cp.cc.name)}を残す割合を変えると（取り崩し方法は${DRAW_LABELS[cur]}のまま）</summary>
-        <div class="csv-table-wrap"><table class="csv-table strat-table">
-          <thead><tr><th>残す割合</th><th class="num">全体の<br>変動率</th>
-            <th class="num">そこまで<br>下げるのに</th><th class="num">尽きない<br>確率</th>
-            <th class="num">100歳時点<br>（中央値）</th><th class="num">100歳時点<br>（下位10%）</th></tr></thead>
-          <tbody>${rows.map(({ t, r }) => `
-            <tr class="${t === concKeep ? "strat-current" : ""}">
-              <td>${cp.label(t)}${t === concKeep ? '<span class="strat-badge">選択中</span>' : ""}
-                ${t >= 1 ? "" : `<span class="draw-year">約 ${man(t * cp.poolAt(0))}</span>`}</td>
-              <td class="num">${(cp.volAt(t >= 1 ? cp.share : t) * 100).toFixed(1)}%</td>
-              <td class="num">${cp.reachOf(t) >= 0 ? cp.reachOf(t).toFixed(1) + "年" : "—"}</td>
-              <td class="num ${cls(r.rate)}">${r.rate}%</td>
-              <td class="num">${man(r.pct(0.5))}</td>
-              <td class="num">${man(r.pct(0.1))}</td>
-            </tr>`).join("")}</tbody></table></div>
-        <p class="hint">${escapeHtml(cp.cc.name)}の変動率は年<strong>${cp.cc.vol}％</strong>、
-          それ以外の保有は年<strong>${cp.cc.rest_vol}％</strong>（相関 ${cp.cc.corr}）。
-          1銘柄の比率が高いほど全体のブレが大きくなり、取り崩し中は<strong>下がった年に売る</strong>ことに
-          なるため、同じ平均リターンでも手元に残る額が減ります。
-          <span class="hint-sub">売却は「使う」のではなく<strong>同額を分散資産に買い直す</strong>前提です。
-          <strong>勤務先の株なら、給与・退職金も同じ会社に依存している</strong>ぶん、
-          ここに出るより実質のリスクは大きくなります（在職中はさらに抑えめが無難）。
-          1銘柄・自社株の一般的な目安は金融資産の5〜10%以内とされます。</span></p>
-      </details>`;
-  }
+  // 残す割合は設定タブで決めるので、ここでは「いまの設定だとどうなるか」だけを説明する
+  const keepNote = cp ? `
+    <p class="hint">${escapeHtml(cp.cc.name)}は資産の ${cp.cc.share}% を占めています。
+      設定の<strong>「集中している銘柄を残す割合」＝${cp.label(cp.target)}</strong>で計算しており、
+      この銘柄の変動率は年<strong>${cp.cc.vol}％</strong>、それ以外の保有は年
+      <strong>${cp.cc.rest_vol}％</strong>（相関 ${cp.cc.corr}）です。
+      残す割合に応じた<strong>合成の変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
+      （いま）でブレを作っています。
+      ${cp.reachOf(cp.target) > 0
+        ? `その水準まで下げるのに <strong>約${cp.reachOf(cp.target).toFixed(1)}年</strong>かかる計算です。` : ""}
+      <span class="hint-sub">売却は「使う」のではなく<strong>同額を分散資産に買い直す</strong>前提で、
+      NISAの残り枠 ${yen(cp.room)} を先に使います。
+      <strong>勤務先の株なら、給与・退職金も同じ会社に依存している</strong>ぶん、
+      ここに出るより実質のリスクは大きくなります（在職中はさらに抑えめが無難）。
+      1銘柄・自社株の一般的な目安は金融資産の5〜10%以内とされます。</span></p>` : "";
 
   // 取り崩し方法を振る（残す割合は選択中のまま）
   const methods = ["fixed", "percent", "guardrail"];
-  const mRows = methods.map((mth) => ({ mth, r: mth === cur ? here : run(mth, concKeep) }));
+  const keepT = cp ? cp.target : 1;
+  const mRows = methods.map((mth) => ({ mth, r: mth === cur ? here : run(mth, keepT) }));
   const methodTable = `
     <details class="plan-help">
       <summary>取り崩し方法を変えると${cp
-        ? `（${escapeHtml(cp.cc.name)}は「${cp.label(concKeep)}」のまま）` : ""}</summary>
+        ? `（${escapeHtml(cp.cc.name)}は「${cp.label(cp.target)}」のまま）` : ""}</summary>
       <div class="csv-table-wrap"><table class="csv-table strat-table">
         <thead><tr><th>方法</th><th class="num">資産寿命<br><small>（ブレなし）</small></th>
           <th class="num">尽きない<br>確率</th><th class="num">100歳時点<br>（中央値）</th>
@@ -2891,16 +2889,59 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
     { name: "退職後の5年が不調（年−3%）",
       ret: (m) => (m >= retireM && m < retireM + 60 ? projMonthlyRate(-0.03) : rm) },
   ];
-  const scRows = [{ name: "想定どおり（ブレなし）", p: here.det }]
-    .concat(scenarios.map((s) => ({ name: s.name, p: path({ method: cur, ret: s.ret }) })))
-    .map(({ name, p }) => `<tr>
+  const scList = [{ name: "想定どおり（ブレなし）", p: here.det }]
+    .concat(scenarios.map((s) => ({ name: s.name, p: path({ method: cur, ret: s.ret }) })));
+  const scRows = scList.map(({ name, p }) => `<tr>
       <td>${escapeHtml(name)}</td>
       <td class="num ${p.depletionAge > 0 ? "down" : "up"}">${ageOf(p)}</td>
       <td class="num">${p.depletionAge > 0 ? "—" : yen(p.endBal)}</td>
     </tr>`).join("");
 
+  // AIに渡す事実だけを控えておく（画面に出している数字と必ず一致させるため、
+  // サーバで計算し直すのではなくここで作った値をそのまま送る）。
+  const p = planData.plan || {};
+  lastStrategyFacts = {
+    前提: {
+      現在年齢: a.lp.age0, 退職年齢: a.lp.retire, 年金開始年齢: a.lp.penAge,
+      年金_月額: Math.round(a.lp.pension), 生活費_月額: Math.round(a.lp.spend),
+      インフレ率: a.lp.infl, 想定年利: a.baseRate,
+      取り崩し方法: DRAW_LABELS[cur],
+      定率のときの率: p.draw_rate != null ? p.draw_rate : 4,
+      生活防衛資金: Math.round(a.emFloor || 0),
+      現金: Math.round(a.cash0 || 0), 債券: Math.round(a.bonds0 || 0),
+      運用資産: Math.round(a.cur || 0),
+      売却順序: "NISA温存（特定口座から先に売る）",
+      全体の変動率_年率: portfolioRisk.annual_vol,
+    },
+    集中銘柄: cp ? {
+      銘柄: cp.cc.name, 資産に占める割合: cp.cc.share,
+      含み益の割合: Math.round(cp.gain * 100),
+      この銘柄の変動率: cp.cc.vol, それ以外の変動率: cp.cc.rest_vol, 相関: cp.cc.corr,
+      設定した方針: cp.label(cp.target),
+      その水準まで下げるのにかかる年数: cp.reachOf(cp.target) >= 0
+        ? Number(cp.reachOf(cp.target).toFixed(1)) : null,
+      NISA生涯枠の残り: Math.round(cp.room),
+    } : null,
+    methods: mRows.map(({ mth, r }) => ({
+      方法: DRAW_LABELS[mth], 設定中: mth === cur,
+      資産寿命: r.det.depletionAge > 0 ? `${Math.floor(r.det.depletionAge)}歳で枯渇` : "100歳まで持続",
+      尽きない確率: r.rate,
+      百歳時点_中央値: Math.round(r.pct(0.5)),
+      百歳時点_下位10: Math.round(r.pct(0.1)),
+      生活費の下限_月額: Math.round(r.det.minLiving),
+      取り崩しで払う税_累計: Math.round(r.det.taxPaid),
+    })),
+    暴落シナリオ: scList.map(({ name, p: q }) => ({
+      シナリオ: name,
+      資産寿命: q.depletionAge > 0 ? `${Math.floor(q.depletionAge)}歳で枯渇` : "100歳まで持続",
+      百歳時点: q.depletionAge > 0 ? 0 : Math.round(q.endBal),
+    })),
+    試行回数: N,
+  };
+  renderStrategyAiButton();
+
   return `
-    <h3 class="strat-h">② 値動きのブレを含めた成功確率（${DRAW_LABELS[cur]}${cp ? "・" + cp.label(concKeep) : ""}・${N}回）</h3>
+    <h3 class="strat-h">② 値動きのブレを含めた成功確率（${DRAW_LABELS[cur]}${cp ? "・" + cp.label(cp.target) : ""}・${N}回）</h3>
     <div class="stat-row">
       <div class="stat-tile"><span class="stat-label">100歳まで尽きない確率</span>
         <b class="stat-value ${cls(here.rate)}">${here.rate}%</b></div>
@@ -2916,7 +2957,7 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
       直近の相場に引きずられるため平均には使いません。すべての条件を<strong>同じ乱数列</strong>で
       走らせているので、表の行どうしの差は前提の違いだけによるものです。
       ${N}回の試行なので、成功確率は数pt程度ぶれます。</span></p>
-    ${keepTable}
+    ${keepNote}
     ${methodTable}
     <details class="plan-help">
       <summary>暴落が特定の時期に来た場合（決め打ち）</summary>
@@ -2927,6 +2968,67 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
         退職直後の下落に耐えられるかが、取り崩し計画のいちばんの勘所です。
         上の成功確率は毎月ランダムに揺らした平均像なので、この表と合わせて見てください。</p>
     </details>`;
+}
+
+// ── 取り崩し戦略のAI相談 ────────────────────────────────────────────
+// 試算はブラウザ側で終わっているので、AIには「画面に出ている数字」だけを渡す。
+// サーバで計算し直すと画面と食い違うため、あえて事実を送る形にしている。
+let lastStrategyFacts = null;
+
+function renderStrategyAiButton() {
+  const b = $("strategy-ai-run");
+  if (!b) return;
+  b.hidden = (aiSettings.ai_model === "off") || !lastStrategyFacts;
+}
+
+async function loadStrategyAi() {
+  const box = $("strategy-ai");
+  if (!box || !lastStrategyFacts) return;
+  box.hidden = false;
+  box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> AIが方針を検討中… ⏳</div>';
+  try {
+    const r = await fetch("/api/ai-strategy", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lastStrategyFacts),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIに相談できませんでした")}</div>`;
+      return;
+    }
+    renderStrategyAi(d.advice, d.model);
+  } catch (_) {
+    box.innerHTML = '<div class="ai-head ai-err"><span class="ai-ico">🤖</span> AI呼び出しに失敗しました</div>';
+  }
+}
+
+function renderStrategyAi(advice, model) {
+  const box = $("strategy-ai");
+  if (!box) return;
+  const v = advice || {};
+  const list = (xs) => (xs || []).map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
+  let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>取り崩し方針の相談</b>`
+    + `<span class="ai-model">${modelLabel(model)}</span></div>`;
+  if (v.recommendation) {
+    html += `<div class="ai-block"><div class="ai-block-t">おすすめの方針</div>`
+      + `<div class="ai-block-b">${escapeHtml(v.recommendation)}</div></div>`;
+  }
+  if ((v.why || []).length) {
+    html += `<div class="ai-block"><div class="ai-block-t">その理由</div>`
+      + `<ul class="ai-block-b ai-list">${list(v.why)}</ul></div>`;
+  }
+  if (v.tradeoff) {
+    html += `<div class="ai-block"><div class="ai-block-t">逆を選んだ場合</div>`
+      + `<div class="ai-block-b">${escapeHtml(v.tradeoff)}</div></div>`;
+  }
+  if ((v.watch || []).length) {
+    html += `<div class="ai-block"><div class="ai-block-t">見落としやすい点</div>`
+      + `<ul class="ai-block-b ai-list">${list(v.watch)}</ul></div>`;
+  }
+  html += '<div class="ai-foot">※ 画面に出ている試算値だけをもとにしたコメントです。'
+    + '前提を変えれば結論も変わります。投資助言ではありません。</div>';
+  box.innerHTML = html;
+  box.hidden = false;
 }
 
 // 集中している銘柄の「残す割合」ごとの売却計画。無ければ null。
@@ -2983,10 +3085,12 @@ function concentrationPlan(a, rm) {
   if ((schedule(1).bal[Math.min(nisaMonths + 1, HORIZON)] || 0) <= 1) return null;
 
   const ss = (cc.vol || 0) / 100, sr = (cc.rest_vol || 0) / 100, rho = cc.corr || 0;
+  // 設定タブの「集中している銘柄を残す割合（%）」。100（既定）は売らずに現状のまま。
+  const pctSet = (planData.plan || {}).conc_keep;
+  const target = Math.min(1, Math.max(0, (pctSet != null ? pctSet : 100) / 100));
   return {
-    cc, room, gain, share, poolAt,
-    targets: [0, 0.05, 0.10, 0.15, 0.20, 1],
-    label: (t) => (t >= 1 ? "現状のまま持ち続ける"
+    cc, room, gain, share, poolAt, target,
+    label: (t) => (t >= share ? "現状のまま持ち続ける"
       : t === 0 ? "全部売る" : `${Math.round(t * 100)}% 残す`),
     volAt: (w) => Math.sqrt(Math.max(0,
       w * w * ss * ss + (1 - w) * (1 - w) * sr * sr + 2 * w * (1 - w) * rho * ss * sr)),

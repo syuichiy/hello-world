@@ -492,8 +492,10 @@
         <div class="strat-premise" id="strategy-premise"></div>
         <div class="strat-actions">
           <button id="strategy-run" type="button" class="ghost-btn">↻ 再計算</button>
+          <button id="strategy-ai-run" type="button" class="ghost-btn" hidden>🤖 AIに方針を相談</button>
           <span id="strategy-status" class="ai-test-status"></span>
         </div>
+        <div class="ai-banner" id="strategy-ai" hidden></div>
         <div id="strategy-body"></div>
         <details class="plan-help">
           <summary>3つの取り崩し方法と、共通の前提</summary>
@@ -619,6 +621,11 @@
           <div class="plan-field">
             <label class="plan-label" for="set-draw-rate">定率のときの取り崩し率（%）</label>
             <input id="set-draw-rate" type="number" step="0.1" min="0.5" max="20" class="plan-input plan-input-sm" placeholder="例）4">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-conc-keep">集中している銘柄を残す割合（%）</label>
+            <input id="set-conc-keep" type="number" step="1" min="0" max="100" class="plan-input plan-input-sm" placeholder="例）10">
+            <span class="field-note" id="conc-keep-note"></span>
           </div>
         </div>
         <p class="hint">保有現金・債券は<strong>総資産（目標への進捗・資産推移グラフの起点）に加算</strong>します。値上がりを見込まない安定資産として扱い、退職後は生活費の不足分をまずこの現金・債券から取り崩します。生活費・年金はインフレ率で毎年増加する前提で計算します。</p>
