@@ -2806,12 +2806,15 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
       <p class="empty-watch">変動率を推定できませんでした。銘柄一覧で<strong>口数</strong>を入力し、
         価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
   }
-  const N = 300;
+  const N = 400;
   const HORIZON = 600;
+  // 種を固定しておく。すべての案が同じ乱数列を共有するので、案どうしの差は前提の違いだけ。
+  // 描き直しても同じ結果になるため、設定を変えたときの変化だけを見ればよくなる。
+  const rand = makeRng(20260807);
   const draws = [];
   for (let i = 0; i < N; i++) {
     const row = new Float64Array(HORIZON + 2);
-    for (let m = 0; m < row.length; m++) row[m] = randNorm(0, 1);
+    for (let m = 0; m < row.length; m++) row[m] = normFrom(rand);
     draws.push(row);
   }
   const flatSd = (portfolioRisk.annual_vol / 100) / Math.sqrt(12);
@@ -2836,6 +2839,9 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
   };
 
   const here = run(cur, cp ? cp.target : 1);
+  // AI相談では「他の割合ならどうか」も要る。表には出さないが同じ乱数列で回せるようにしておく
+  lastStrategyRun = run;
+  lastStrategyCp = cp;
   const cls = (r) => (r >= 90 ? "up" : r >= 70 ? "warn" : "down");
 
   // 残す割合は設定タブで決めるので、ここでは「いまの設定だとどうなるか」だけを説明する
@@ -2956,7 +2962,9 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
       <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
       直近の相場に引きずられるため平均には使いません。すべての条件を<strong>同じ乱数列</strong>で
       走らせているので、表の行どうしの差は前提の違いだけによるものです。
-      ${N}回の試行なので、成功確率は数pt程度ぶれます。</span></p>
+      乱数の種は固定しているので、<strong>同じ前提なら何度計算しても同じ結果</strong>になります
+      （変化したときは前提が変わったときだけです）。${N}回の試行なので、
+      成功確率の絶対値には数pt程度の誤差が残ります。</span></p>
     ${keepNote}
     ${methodTable}
     <details class="plan-help">
@@ -2974,6 +2982,8 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
 // 試算はブラウザ側で終わっているので、AIには「画面に出ている数字」だけを渡す。
 // サーバで計算し直すと画面と食い違うため、あえて事実を送る形にしている。
 let lastStrategyFacts = null;
+let lastStrategyRun = null;   // (方法, 残す割合) => 試算結果。②と同じ乱数列で回る
+let lastStrategyCp = null;    // 集中銘柄の売却計画（無ければ null）
 
 function renderStrategyAiButton() {
   const b = $("strategy-ai-run");
@@ -2981,15 +2991,46 @@ function renderStrategyAiButton() {
   b.hidden = (aiSettings.ai_model === "off") || !lastStrategyFacts;
 }
 
+// 集中銘柄をどれだけ残すかは、いまの設定ぶんしか画面に出していない。
+// それだけを渡すとAIは比べようがなく、設定を変えるたびに結論が動いてしまうので、
+// 相談のときだけ他の割合も同じ乱数列で試算して、横並びの材料として渡す。
+function buildStrategyAiFacts() {
+  const facts = Object.assign({}, lastStrategyFacts);
+  const cp = lastStrategyCp;
+  if (!cp || !lastStrategyRun) return facts;
+  const cur = (planData.plan || {}).draw_method || "fixed";
+  const targets = [0, 0.05, 0.10, 0.15, 0.20, 1];
+  if (!targets.includes(cp.target)) targets.push(cp.target);
+  targets.sort((x, y) => x - y);
+  facts.残す割合ごとの結果 = targets.map((t) => {
+    const r = lastStrategyRun(cur, t);
+    return {
+      方針: cp.label(t),
+      いまの設定: Math.abs(t - cp.target) < 1e-9,
+      全体の変動率: Number((cp.volAt(t >= cp.share ? cp.share : t) * 100).toFixed(1)),
+      その水準まで下げるのにかかる年数: cp.reachOf(t) >= 0 ? Number(cp.reachOf(t).toFixed(1)) : null,
+      尽きない確率: r.rate,
+      百歳時点_中央値: Math.round(r.pct(0.5)),
+      百歳時点_下位10: Math.round(r.pct(0.1)),
+      組み替えで払う税: Math.round(r.det.restructTax || 0),
+    };
+  });
+  return facts;
+}
+
 async function loadStrategyAi() {
   const box = $("strategy-ai");
   if (!box || !lastStrategyFacts) return;
   box.hidden = false;
+  box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> 方針ごとの試算をそろえています… ⏳</div>';
+  // 追加の試算は重いので、先に画面を描き直してから走らせる
+  await new Promise((res) => setTimeout(res, 30));
+  const facts = buildStrategyAiFacts();
   box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> AIが方針を検討中… ⏳</div>';
   try {
     const r = await fetch("/api/ai-strategy", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lastStrategyFacts),
+      body: JSON.stringify(facts),
     });
     const d = await r.json();
     if (!d.ok) {
@@ -3519,6 +3560,27 @@ function drawOpts(extra) {
   }, extra || {});
 }
 const DRAW_LABELS = { fixed: "定額", percent: "定率", guardrail: "ガードレール" };
+
+// 決まった種から同じ順番で乱数を作る（mulberry32）。
+// Math.random() のままだと、同じ前提でも描き直すたびに成功確率が数pt動いてしまい、
+// 「設定を変えたから変わったのか、乱数がぶれただけなのか」が区別できない。
+// 取り崩し戦略のモンテカルロはこちらを使い、同じ前提なら必ず同じ結果にする。
+function makeRng(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// 標準正規分布（平均0・標準偏差1）を1つ返す（Box-Muller法）
+function normFrom(rand) {
+  let u = 0, v = 0;
+  while (u === 0) u = rand();
+  while (v === 0) v = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
 
 // 正規分布の乱数（Box-Muller法）。モンテカルロで月々のリターンを揺らすのに使う。
 function randNorm(mean, sd) {
