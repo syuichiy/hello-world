@@ -865,6 +865,29 @@ tr:hover .row-del { opacity: 1; }
 .strat-lever .draw-toggle { background: var(--card); border: 1px solid var(--line);
   border-radius: 999px; padding: 3px 10px; }
 
+/* ガードレール運用の現在地：帯のどこにいるかを1本のバーで示す */
+.guard-rail { margin: 14px 0 18px; }
+.guard-bar { position: relative; height: 14px; border-radius: 999px; overflow: hidden;
+  background: var(--chip-bg); border: 1px solid var(--line); }
+.guard-zone { position: absolute; top: 0; bottom: 0; }
+.guard-zone-lo { left: 0; background: rgba(22,163,74,.20); }    /* 増額できる側 */
+.guard-zone-ok { background: rgba(128,128,150,.14); }            /* 据え置きの帯 */
+.guard-zone-hi { background: rgba(220,38,38,.20); }              /* 減額の側 */
+.guard-tick { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink-soft);
+  transform: translateX(-1px); }
+.guard-now { position: absolute; top: -3px; width: 12px; height: 20px; border-radius: 3px;
+  background: var(--ink); border: 2px solid var(--card); transform: translateX(-6px); }
+.guard-now.up { background: var(--up-text); }
+.guard-now.down { background: var(--down-text); }
+.guard-marks { position: relative; height: 15px; margin-top: 5px; }
+.guard-marks span { position: absolute; transform: translateX(-50%); white-space: nowrap;
+  font-size: 10.5px; color: var(--ink-soft); }
+.guard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 4px; }
+.guard-checked { font-size: 11.5px; color: var(--ink-soft); }
+.guard-due { color: var(--neutral); font-weight: 700; }
+.stat-sub { display: block; margin-top: 3px; font-size: 10.5px; color: var(--ink-soft);
+  line-height: 1.4; }
+
 /* 節見出し：番号つきで区切りを分かりやすくする */
 .strat-h { font-size: 14px; font-weight: 700; margin: 26px 0 8px; color: var(--ink);
   padding-top: 16px; border-top: 1px solid var(--line); }

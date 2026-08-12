@@ -1982,7 +1982,9 @@ def api_plan():
                   "current_age", "retire_age", "pension_age",
                   "pension_monthly", "spend_monthly", "inflation",
                   "cash", "bonds", "tax", "emergency_months", "near_term",
-                  "draw_rate", "conc_keep"):
+                  "draw_rate", "conc_keep",
+                  # ガードレール運用の記録：基準の引出率(%)と、いま採用している生活費(月額)
+                  "guard_base_rate", "guard_spend"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
@@ -1992,6 +1994,9 @@ def api_plan():
         if "draw_method" in data:
             m = str(data.get("draw_method") or "fixed")
             plan["draw_method"] = m if m in ("fixed", "percent", "guardrail") else "fixed"
+        # 前回いつ見直したか（YYYY-MM）。年1回の見直しを促すために持つ
+        if "guard_checked" in data:
+            plan["guard_checked"] = str(data.get("guard_checked") or "")[:7]
         db.set_setting("plan", plan)
         return jsonify({"ok": True})
 

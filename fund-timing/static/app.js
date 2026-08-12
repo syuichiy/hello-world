@@ -2739,6 +2739,8 @@ function renderStrategy() {
   const succ = renderSuccess(a, cur, rm, cp, path, man, yen, ageOf);
 
   box.innerHTML = `
+    ${cur === "guardrail" ? renderGuardStatus(a, curPath, yen, man) : ""}
+
     <h3 class="strat-h">① 年齢ごとの取り崩し額（${curLabel}${cp ? "・" + cp.label(cp.target) : ""}）</h3>
     <div class="draw-ctrls">
       <label class="draw-toggle">表示間隔
@@ -2795,6 +2797,150 @@ function renderStrategy() {
     drawTableReal = e.target.checked;
     renderStrategy();
   });
+  const nowMonth = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const baseBtn = $("guard-base-set");
+  if (baseBtn) baseBtn.addEventListener("click", () => {
+    const g = guardState(a, curPath);
+    // 基準は「設定した生活費といまの資産」で決める（採用中の生活費ではなく元の水準）
+    const rate = g.assets > 0 ? Math.max(0, (g.spendSet - g.pension) * 12) / g.assets : 0;
+    if (!(rate > 0)) { toast("資産か生活費が未入力のため決められません", "error"); return; }
+    savePlan({ guard_base_rate: Number((rate * 100).toFixed(3)), guard_checked: nowMonth() });
+    toast(`基準の引出率を ${(rate * 100).toFixed(2)}% にしました`);
+    renderStrategy();
+  });
+  const applyBtn = $("guard-apply");
+  if (applyBtn) applyBtn.addEventListener("click", () => {
+    const g = guardState(a, curPath);
+    if (g.verdict === "keep") return;
+    savePlan({ guard_spend: Math.round(g.next), guard_checked: nowMonth() });
+    toast(`生活費を ${Math.round(g.next).toLocaleString()} 円/月に変更しました`);
+    renderStrategy();
+  });
+}
+
+// ── ガードレール運用の現在地 ────────────────────────────────────────
+// 試算とは別に、「いま実際にどのあたりにいるのか」を運用の指針として出す。
+// 判定式は buildLifePath の中と同じにしてある（片方だけ直すとズレるので注意）。
+//   引出率 =（採用中の生活費 − 年金）× 12 ÷ 税引後の総資産
+//   上のレール＝基準×1.2（超えたら生活費を10%減）／下のレール＝基準×0.8（下回ったら10%増）
+//   生活費は設定額の70%〜125%の範囲に収める
+const GUARD_UP = 1.2, GUARD_DOWN = 0.8, GUARD_STEP = 0.1;
+const GUARD_MIN = 0.7, GUARD_MAX = 1.25;
+
+function guardState(a, curPath) {
+  const p = planData.plan || {};
+  const assets = curPath.pts[0] ? curPath.pts[0].v : 0;      // 税引後の総資産（グラフと同じ値）
+  const spendSet = a.lp.spend;                                // 設定した生活費
+  const spend = (p.guard_spend > 0) ? p.guard_spend : spendSet;   // いま採用している生活費
+  const pension = a.lp.pension;
+  const excess = Math.max(0, (spend - pension) * 12);          // 資産から抜く年額
+  const rate = assets > 0 ? excess / assets : 0;
+  // 基準の引出率。決めていなければ「設定の生活費といまの資産」から自動で置く
+  const autoBase = assets > 0 ? Math.max(0, (spendSet - pension) * 12) / assets : 0;
+  const base = (p.guard_base_rate > 0) ? p.guard_base_rate / 100 : autoBase;
+  const up = base * GUARD_UP, down = base * GUARD_DOWN;
+  const clamp = (v) => Math.min(spendSet * GUARD_MAX, Math.max(spendSet * GUARD_MIN, v));
+  // レールに当たる資産額（生活費が同じままなら、資産がここまで動くと判定が変わる）
+  const cutAt = up > 0 ? excess / up : 0;      // これを下回ると減額
+  const raiseAt = down > 0 ? excess / down : 0;  // これを上回ると増額
+  let verdict = "keep";
+  if (base > 0 && rate > up) verdict = "cut";
+  else if (base > 0 && rate < down) verdict = "raise";
+  const next = verdict === "cut" ? clamp(spend * (1 - GUARD_STEP))
+             : verdict === "raise" ? clamp(spend * (1 + GUARD_STEP)) : spend;
+  return { assets, spendSet, spend, pension, excess, rate, base, up, down,
+           cutAt, raiseAt, verdict, next, saved: p.guard_base_rate > 0,
+           checked: p.guard_checked || "", retired: a.lp.age0 >= a.lp.retire };
+}
+
+function renderGuardStatus(a, curPath, yen, man) {
+  const g = guardState(a, curPath);
+  if (!(g.base > 0) || !(g.assets > 0)) {
+    return `<h3 class="strat-h">🚦 ガードレールの現在地</h3>
+      <p class="empty-watch">設定で生活費・年金・退職年齢を入力すると、いまの引出率と
+        レールまでの余裕を表示します。</p>`;
+  }
+  const pct = (v) => (v * 100).toFixed(2) + "%";
+  // 目盛りは下のレールの0.8倍〜上のレールの1.2倍を描く
+  const lo = g.down * 0.8, hi = g.up * 1.2;
+  const at = (v) => Math.min(100, Math.max(0, (v - lo) / (hi - lo) * 100));
+  const tone = g.verdict === "cut" ? "down" : g.verdict === "raise" ? "up" : "";
+  const label = g.verdict === "cut" ? "⬇️ 減額の水準です"
+              : g.verdict === "raise" ? "⬆️ 増額できる水準です" : "✅ 帯の中（据え置き）";
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const dueYear = g.checked ? Number(g.checked.slice(0, 4)) + 1 : null;
+  const due = dueYear ? `${dueYear}年${g.checked.slice(5, 7)}月` : "未記録";
+  const overdue = dueYear && (now.getFullYear() > dueYear
+    || (now.getFullYear() === dueYear && now.getMonth() + 1 >= Number(g.checked.slice(5, 7))));
+
+  return `
+    <h3 class="strat-h">🚦 ガードレールの現在地</h3>
+    ${g.retired ? "" : `<p class="hint">※ まだ退職前なので、これは<strong>いまの資産で退職した場合</strong>の目安です。
+      基準は退職時に決め直してください。</p>`}
+    <div class="stat-row">
+      <div class="stat-tile"><span class="stat-label">基準の引出率</span>
+        <b class="stat-value">${pct(g.base)}</b>
+        <span class="stat-sub">${g.saved ? "記録済み" : "いまの設定から自動計算"}</span></div>
+      <div class="stat-tile"><span class="stat-label">いまの引出率</span>
+        <b class="stat-value ${tone}">${pct(g.rate)}</b>
+        <span class="stat-sub">（${man(g.spend)}−${man(g.pension)}）×12 ÷ ${man(g.assets)}</span></div>
+      <div class="stat-tile"><span class="stat-label">判定</span>
+        <b class="stat-value ${tone}">${label}</b>
+        <span class="stat-sub">${g.verdict === "keep" ? "生活費はそのまま"
+          : `生活費 ${man(g.spend)} → ${man(g.next)}`}</span></div>
+    </div>
+
+    <div class="guard-rail">
+      <div class="guard-bar">
+        <span class="guard-zone guard-zone-lo" style="width:${at(g.down)}%"></span>
+        <span class="guard-zone guard-zone-ok" style="left:${at(g.down)}%;width:${at(g.up) - at(g.down)}%"></span>
+        <span class="guard-zone guard-zone-hi" style="left:${at(g.up)}%;width:${100 - at(g.up)}%"></span>
+        <span class="guard-tick" style="left:${at(g.base)}%"></span>
+        <span class="guard-now ${tone}" style="left:${at(g.rate)}%"></span>
+      </div>
+      <div class="guard-marks">
+        <span style="left:${at(g.down)}%">下のレール ${pct(g.down)}</span>
+        <span style="left:${at(g.base)}%">基準 ${pct(g.base)}</span>
+        <span style="left:${at(g.up)}%">上のレール ${pct(g.up)}</span>
+      </div>
+    </div>
+
+    <div class="csv-table-wrap"><table class="csv-table strat-table">
+      <thead><tr><th>次に判定が変わるのは</th><th class="num">総資産がこの額になったとき</th>
+        <th class="num">いまとの差</th><th class="num">そのときの生活費</th></tr></thead>
+      <tbody>
+        <tr><td>⬇️ 減額（生活費を10%下げる）</td>
+          <td class="num">${yen(g.cutAt)}</td>
+          <td class="num ${g.assets > g.cutAt ? "" : "down"}">${g.assets > g.cutAt
+            ? `あと ${man(g.assets - g.cutAt)} 減ると` : "すでに超えています"}</td>
+          <td class="num">${man(Math.min(g.spendSet * GUARD_MAX, Math.max(g.spendSet * GUARD_MIN, g.spend * 0.9)))}/月</td></tr>
+        <tr><td>⬆️ 増額（生活費を10%上げる）</td>
+          <td class="num">${yen(g.raiseAt)}</td>
+          <td class="num ${g.assets < g.raiseAt ? "" : "up"}">${g.assets < g.raiseAt
+            ? `あと ${man(g.raiseAt - g.assets)} 増えると` : "すでに超えています"}</td>
+          <td class="num">${man(Math.min(g.spendSet * GUARD_MAX, Math.max(g.spendSet * GUARD_MIN, g.spend * 1.1)))}/月</td></tr>
+      </tbody></table></div>
+
+    <div class="guard-actions">
+      <button id="guard-base-set" type="button" class="ghost-btn">基準をいまの資産で決め直す</button>
+      <button id="guard-apply" type="button" class="ghost-btn"${g.verdict === "keep" ? " disabled" : ""}>
+        ${g.verdict === "keep" ? "いまは変更なし"
+          : `判定を反映する（生活費を ${man(g.next)} にする）`}</button>
+      <span class="guard-checked ${overdue ? "guard-due" : ""}">前回の見直し ${g.checked || "未記録"}
+        ／ 次回 ${due}${overdue ? "（時期です）" : ""}</span>
+    </div>
+    <p class="hint">生活費の増減は<strong>年1回だけ</strong>判定します。相場が動くたびに追随すると、
+      生活費が落ち着かないためです。生活費は設定額の
+      <strong>${Math.round(GUARD_MIN * 100)}%〜${Math.round(GUARD_MAX * 100)}%</strong>
+      （${man(g.spendSet * GUARD_MIN)}〜${man(g.spendSet * GUARD_MAX)}）の範囲を超えません。
+      <span class="hint-sub">※ 引出率の分母は<strong>税引後の総資産</strong>（投信・株＋現金＋債券）で、
+      資産推移グラフの現在値と同じです。年金は受給開始前でも式に含めます
+      （長い目で見た水準を基準にするため。受給開始までは実際にはこの率より多く取り崩します）。
+      判定式は①②の試算と同じものを使っています。</span></p>`;
 }
 
 // ② 値動きのブレを含めた成功確率。
@@ -3292,6 +3438,8 @@ function planLifePlan() {
 //             暴落シナリオやモンテカルロは、ここに関数を渡して実現する。
 //   split   … 運用資産の口座別内訳 {taxV,taxB,nisaV,nisaB,taxRate,nisaRoom}。
 //             省略時は全額を特定口座（実効税率）として扱う。
+//   guardSpend     … ガードレールで実際に採用している生活費（月額）。省略時は設定の生活費。
+//   guardBaseRate  … ガードレールの基準の引出率（小数）。省略時は退職時点から決める。
 function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0, tax, emFloor, div, opts) {
   const o = opts || {};
   const method = o.method || "fixed";
@@ -3392,7 +3540,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   let depletionAge = -1, penStartAge = -1, retireBal = null;
   // 生活水準の記録：その月に使える額（年金＋取り崩し）を、今日の価値に直して見る。
   // 定率やガードレールは枯渇しにくい代わりに生活費が下がるので、そのトレードオフを測る。
-  let minLivingReal = Infinity, guardSpend = lp.spend, initRate = null;
+  // ガードレールの出発点。実際に増減させた後なら、その額から続きを計算する
+  // （画面の「現在地」と試算がズレないように、同じ値を使う）。
+  let minLivingReal = Infinity, initRate = null;
+  let guardSpend = (o.guardSpend > 0) ? o.guardSpend : lp.spend;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
     const age = lp.age0 + m / 12;
@@ -3448,7 +3599,9 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       if (retireBal === null) {
         retireBal = bal;                           // 退職時点の税引後資産
         // ガードレールの基準：退職時点の「年間引出額 ÷ 資産」を初期の引出率とする
-        initRate = balReal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / balReal : 0;
+        // 基準の引出率。運用中に記録していればそれを使い、無ければ退職時点から決める
+        initRate = (o.guardBaseRate > 0) ? o.guardBaseRate
+          : (balReal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / balReal : 0);
       }
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
@@ -3557,6 +3710,9 @@ function drawOpts(extra) {
   return Object.assign({
     method: p.draw_method || "fixed",
     pctRate: (p.draw_rate != null ? p.draw_rate : 4) / 100,
+    // ガードレールを実際に運用して増減させている場合は、その値から試算を続ける
+    guardSpend: p.guard_spend > 0 ? p.guard_spend : 0,
+    guardBaseRate: p.guard_base_rate > 0 ? p.guard_base_rate / 100 : 0,
   }, extra || {});
 }
 const DRAW_LABELS = { fixed: "定額", percent: "定率", guardrail: "ガードレール" };
