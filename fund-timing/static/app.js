@@ -2814,9 +2814,15 @@ function renderStrategy() {
   const applyBtn = $("guard-apply");
   if (applyBtn) applyBtn.addEventListener("click", () => {
     const g = guardState(a, curPath);
-    if (g.verdict === "keep") return;
-    savePlan({ guard_spend: Math.round(g.next), guard_checked: nowMonth() });
-    toast(`生活費を ${Math.round(g.next).toLocaleString()} 円/月に変更しました`);
+    // 据え置きの年でも「見直した」こと自体は記録する。そうしないと次回の時期が
+    // 更新されず、確認済みなのに「時期です」と出続けてしまう。
+    if (g.verdict === "keep") {
+      savePlan({ guard_checked: nowMonth() });
+      toast("見直しを記録しました（生活費は据え置き）");
+    } else {
+      savePlan({ guard_spend: Math.round(g.next), guard_checked: nowMonth() });
+      toast(`生活費を ${Math.round(g.next).toLocaleString()} 円/月に変更しました`);
+    }
     renderStrategy();
   });
 }
@@ -2927,8 +2933,8 @@ function renderGuardStatus(a, curPath, yen, man) {
 
     <div class="guard-actions">
       <button id="guard-base-set" type="button" class="ghost-btn">基準をいまの資産で決め直す</button>
-      <button id="guard-apply" type="button" class="ghost-btn"${g.verdict === "keep" ? " disabled" : ""}>
-        ${g.verdict === "keep" ? "いまは変更なし"
+      <button id="guard-apply" type="button" class="ghost-btn">
+        ${g.verdict === "keep" ? "見直したことを記録する（生活費は据え置き）"
           : `判定を反映する（生活費を ${man(g.next)} にする）`}</button>
       <span class="guard-checked ${overdue ? "guard-due" : ""}">前回の見直し ${g.checked || "未記録"}
         ／ 次回 ${due}${overdue ? "（時期です）" : ""}</span>
