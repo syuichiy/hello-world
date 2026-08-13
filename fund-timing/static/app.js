@@ -2365,7 +2365,11 @@ function renderConcKeepNote() {
       + "減らす場合は、残したい割合（例：10）を入れてください。";
     el.classList.add("field-note-warn");
   } else {
-    el.textContent = head + `資産の ${Math.round(pct)}%（約 ${yen(cc.value * pct / cc.share)}）まで`
+    // 金額は「比率 × 運用資産」で出す。/api/portfolio-risk の評価額（価格×口数）を
+    // そのまま使うと、資産プラン側の評価額と桁が食い違うことがあるため。
+    const pool = planData.total_value || 0;
+    const amount = pool > 0 ? `（約 ${yen(pool * pct / 100)}）` : "";
+    el.textContent = head + `資産の ${Math.round(pct)}%${amount}まで`
       + "年360万円ペースで売り、同額を分散資産に買い直す前提で計算します"
       + "（NISAの残り枠を先に使います）。売却益には課税されます。";
   }
@@ -2647,8 +2651,8 @@ async function runStrategy() {
   const aiBox = $("strategy-ai");
   if (aiBox) { aiBox.hidden = true; aiBox.innerHTML = ""; }   // 前提が変われば古い助言は消す
   renderConcKeepNote();      // 設定タブの補足は、集中銘柄が分かってから書き直す
-  renderStrategyPremise();
-  renderStrategy();
+  renderStrategy();          // ここで集中銘柄の売却計画が確定する
+  renderStrategyPremise();   // チップはその計画に合わせて描く
   setStrategyStatus("");
 }
 $("strategy-run").addEventListener("click", runStrategy);
@@ -2678,12 +2682,13 @@ function renderStrategyPremise() {
     ["インフレ", `${p.inflation != null ? p.inflation : 0}%`],
     ["売却順序", "NISA温存"],
   ];
-  // 1銘柄に偏っているときは「どれだけ残すか」も結果を左右するので前提として並べる
-  const cc = portfolioRisk && portfolioRisk.concentration;
-  if (cc && cc.share >= CONC_MIN_SHARE) {
+  // 1銘柄に偏っているときは「どれだけ残すか」も結果を左右するので前提として並べる。
+  // ただし①②が実際にその前提で計算しているとき（売却計画が組めたとき）だけにする。
+  const cp = lastConcPlan;
+  if (cp) {
     const pct = p.conc_keep != null ? p.conc_keep : 100;
-    chips.push([`${cc.name}（現在 ${cc.share}%）`,
-                pct >= cc.share ? "そのまま保有" : `${Math.round(pct)}%まで減らす`]);
+    chips.push([`${cp.cc.name}（現在 ${cp.cc.share}%）`,
+                pct >= cp.cc.share ? "そのまま保有" : `${Math.round(pct)}%まで減らす`]);
   }
   el.innerHTML = chips.map(([k, v]) =>
     `<span class="premise-chip"><span class="premise-key">${k}</span>${escapeHtml(String(v))}</span>`).join("");
@@ -2705,6 +2710,7 @@ function renderStrategy() {
 
   // 集中している銘柄を「どれだけ残すか」は設定タブの値を使う（100%＝売らずに現状のまま）
   const cp = concentrationPlan(a, rm);
+  lastConcPlan = cp;   // 前提チップは①②が実際に使った計画に合わせる
   const keepOpts = cp ? cp.optsFor(cp.target) : {};
   const path = (extra) => runPath(Object.assign({}, keepOpts, extra));
   const curPath = path({ method: cur });
@@ -2967,7 +2973,9 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
         価格が取得できている状態にすると、実際の値動きから成功確率を計算します。</p>`;
   }
   const N = 400;
-  const HORIZON = 600;
+  // 100歳までの月数ぶん用意する。固定長にすると、若い人ほど末尾が
+  // 「同じ乱数の使い回し」になってブレが消えてしまう。
+  const HORIZON = Math.max(1, Math.round((100 - a.lp.age0) * 12)) + 2;
   // 種を固定しておく。すべての案が同じ乱数列を共有するので、案どうしの差は前提の違いだけ。
   // 描き直しても同じ結果になるため、設定を変えたときの変化だけを見ればよくなる。
   const rand = makeRng(20260807);
@@ -3077,7 +3085,10 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
       現金: Math.round(a.cash0 || 0), 債券: Math.round(a.bonds0 || 0),
       運用資産: Math.round(a.cur || 0),
       売却順序: "NISA温存（特定口座から先に売る）",
-      全体の変動率_年率: portfolioRisk.annual_vol,
+      保有全体の変動率_年率: portfolioRisk.annual_vol,
+      // 集中銘柄を減らす設定なら、実際に使ったのは合成した変動率のほう
+      計算に使った変動率_年率: cp
+        ? Number((cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)) : portfolioRisk.annual_vol,
     },
     集中銘柄: cp ? {
       銘柄: cp.cc.name, 資産に占める割合: cp.cc.share,
@@ -3128,8 +3139,11 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
       グラフは「平均どおりに進んだ1本道」、こちらは「${N}通り試した真ん中」を見ています。
       どちらが正しいというより、<strong>グラフは目標の管理に、中央値と下位10%は備えの確認に</strong>使ってください。</span></p>
     <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
-      を使い、ブレ幅だけを実際の保有から推定した<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
-      （直近${portfolioRisk.months}ヶ月）としています。
+      を使い、ブレ幅だけを実際の保有から推定しています（直近${portfolioRisk.months}ヶ月）。
+      ${cp
+        ? `いまの残す割合では<strong>変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
+           （保有全体では ${portfolioRisk.annual_vol}％。${escapeHtml(cp.cc.name)}を減らすぶん小さくなります）。`
+        : `<strong>変動率 ${portfolioRisk.annual_vol}％</strong>としています。`}
       <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
       直近の相場に引きずられるため平均には使いません。すべての条件を<strong>同じ乱数列</strong>で
       走らせているので、表の行どうしの差は前提の違いだけによるものです。
@@ -3152,6 +3166,7 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
 // ── 取り崩し戦略のAI相談 ────────────────────────────────────────────
 // 試算はブラウザ側で終わっているので、AIには「画面に出ている数字」だけを渡す。
 // サーバで計算し直すと画面と食い違うため、あえて事実を送る形にしている。
+let lastConcPlan = null;      // ①②が使った集中銘柄の売却計画（前提チップと揃えるため）
 let lastStrategyFacts = null;
 let lastStrategyRun = null;   // (方法, 残す割合) => 試算結果。②と同じ乱数列で回る
 let lastStrategyCp = null;    // 集中銘柄の売却計画（無ければ null）
@@ -3259,7 +3274,7 @@ function concentrationPlan(a, rm) {
   const monthCap = NISA_YEAR_CAP / 12;
   const nisaMonths = room > 0 ? Math.ceil(room / monthCap) : 0;
   const nisaGross = nisaMonths > 0 ? (room / nisaMonths) / keep : 0;
-  const HORIZON = 600;
+  const HORIZON = Math.max(1, Math.round((100 - a.lp.age0) * 12)) + 2;
 
   // 比率の分母になる運用資産の推移は、組み替えなしの経路で代用する。
   // 集中銘柄の評価額も、比率(share)から投影の土俵に載せ直す
