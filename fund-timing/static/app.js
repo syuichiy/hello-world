@@ -2439,6 +2439,14 @@ async function loadPlan() {
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
   const aiRow = $("plan-ai-row");
   if (aiRow) aiRow.hidden = (aiSettings.ai_model === "off");
+  // 集中銘柄の売却計画にも使うので、グラフを描く前に読んでおく。
+  // 取り崩し戦略タブを開いたかどうかでグラフが変わってしまうのを防ぐ。
+  if (!portfolioRisk) {
+    try {
+      const r = await (await fetch("/api/portfolio-risk?years=5")).json();
+      portfolioRisk = r.ok ? r : null;
+    } catch (_) { portfolioRisk = null; }
+  }
   await loadPlanHistory();   // ここで lastLifeArgs が確定する（取り崩し戦略ビューが使う）
 }
 
@@ -3107,7 +3115,18 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
         <b class="stat-value">${man(here.pct(0.5))}</b></div>
       <div class="stat-tile"><span class="stat-label">100歳時点（下位10%）</span>
         <b class="stat-value">${man(here.pct(0.1))}</b></div>
+      <div class="stat-tile"><span class="stat-label">参考：ブレなしの場合</span>
+        <b class="stat-value">${here.det.depletionAge > 0 ? ageOf(here.det) : man(here.det.endBal)}</b>
+        <span class="stat-sub">資産推移グラフと同じ1本道</span></div>
     </div>
+    <p class="hint">中央値が<strong>ブレなしより低い</strong>のは計算違いではありません。
+      値動きは掛け算で効くため、平均リターンが同じでも<strong>ブレがあるほど中央値は下がります</strong>
+      （＋50%と−50%を繰り返すと平均0%でも資産は減ります）。
+      さらに取り崩し中は<strong>下がった年にも売る</strong>ので、その差が広がります。
+      よく伸びた一部のケースが平均を押し上げる一方、半数はそこまで伸びない、という形です。
+      <span class="hint-sub">※ 変動率が年10%なら中央値はブレなしの約8割、14%なら約6割、18%なら約5割が目安です。
+      グラフは「平均どおりに進んだ1本道」、こちらは「${N}通り試した真ん中」を見ています。
+      どちらが正しいというより、<strong>グラフは目標の管理に、中央値と下位10%は備えの確認に</strong>使ってください。</span></p>
     <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
       を使い、ブレ幅だけを実際の保有から推定した<strong>変動率 ${portfolioRisk.annual_vol}％</strong>
       （直近${portfolioRisk.months}ヶ月）としています。
@@ -3968,11 +3987,18 @@ function renderLifeStages(o) {
   const div = { grossY: dv.receive_gross_yield || 0, netY: dv.receive_net_yield || 0 };
   // 設定した取り崩し方法（定額／定率／ガードレール）で描く
   const split = o.split || null;
-  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
-                             taxRate, emFloor, div, drawOpts({ split }));
-  // 比較・リスク検証カードから同じ前提で再計算できるよう、引数一式を控えておく
+  // 比較・リスク検証カードから同じ前提で再計算できるよう、引数一式を先に控えておく
+  // （集中銘柄の売却計画を組み立てるのに runPath＝この引数一式が要るため、パスより先）
   lastLifeArgs = { cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
                    taxRate, emFloor, div, split, useAi, retireAge: lp.retire };
+  // 設定した取り崩し方法（定額／定率／ガードレール）で描く。
+  // 集中銘柄を減らす設定にしているなら、その売却（と税）もグラフに反映させる。
+  // ここを抜くと、資産推移グラフだけ売却しない前提になり、取り崩し戦略とズレる。
+  const cpPlan = concentrationPlan(lastLifeArgs, projMonthlyRate(baseRate));
+  const path = buildLifePath(cur, lastDate, monthly, baseRate, lp, cash0, bonds0, basis0,
+                             taxRate, emFloor, div,
+                             drawOpts(Object.assign({ split },
+                                                    cpPlan ? cpPlan.optsFor(cpPlan.target) : {})));
   const pts = path.pts;
   // 現在の税引後総資産。目標判定も「現在」のマーカーもグラフと同じ経路の値を使い、
   // 「グラフでは目標線を超えているのに文言は未達」といった食い違いが出ないようにする。
