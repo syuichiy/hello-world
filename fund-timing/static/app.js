@@ -2014,6 +2014,7 @@ async function loadSettings() {
   $("set-pension-monthly").value = fmtInt(pl.pension_monthly || 0);
   $("set-spend-monthly").value = fmtInt(pl.spend_monthly || 0);
   $("set-inflation").value = pl.inflation != null ? pl.inflation : "";
+  $("set-pension-slide").value = pl.pension_slide != null ? pl.pension_slide : 0.4;
   $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
   $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
   $("set-near-term").value = fmtInt(pl.near_term || 0);
@@ -2022,6 +2023,7 @@ async function loadSettings() {
   $("set-conc-keep").value = pl.conc_keep != null ? pl.conc_keep : 100;
   renderEmFloorNote();
   renderConcKeepNote();
+  renderPensionSlideNote();
 }
 
 function renderSettingsUI() {
@@ -2393,7 +2395,36 @@ function bindPremise(id, key, comma) {
     savePlan({ [key]: v });
     renderEmFloorNote();   // 生活防衛資金は現金・生活費・月数のどれを変えても結果が変わる
     renderConcKeepNote();
+    renderPensionSlideNote();
   });
+}
+
+// 年金の改定率の補足。生活費と同率で増やすと楽観的になることを、金額で示す。
+function renderPensionSlideNote() {
+  const el = $("pension-slide-note");
+  if (!el) return;
+  const p = planData.plan || {};
+  const infl = (p.inflation || 0) / 100;
+  const slide = (p.pension_slide != null ? p.pension_slide : 0.4) / 100;
+  const grow = Math.max(0, infl - slide);
+  const pen = p.pension_monthly || 0;
+  const yen = (n) => Math.round(n).toLocaleString() + "円";
+  el.classList.remove("field-note-warn");
+  if (!(pen > 0)) {
+    el.textContent = "公的年金は物価上昇をそのまま反映せず、マクロ経済スライドで抑えられます。"
+      + "インフレ率からこの値を引いた率で年金を増やします（既定 0.4%）。";
+    return;
+  }
+  const at = (yrs) => pen * Math.pow(1 + grow, yrs);
+  const naive = pen * Math.pow(1 + infl, 20);
+  el.textContent = `インフレ ${(infl * 100).toFixed(1)}% − スライド ${(slide * 100).toFixed(1)}%`
+    + ` ＝ 年金は毎年 ${(grow * 100).toFixed(1)}% 増える前提です。`
+    + `いま ${yen(pen)}/月 なら 20年後は ${yen(at(20))}/月`
+    + `（インフレと同率で増えるとした場合は ${yen(naive)}/月）。`;
+  if (slide <= 0) {
+    el.textContent += " 0にするとインフレと同率＝年金が目減りしない前提になります。";
+    el.classList.add("field-note-warn");
+  }
 }
 
 // 「集中している銘柄を残す割合」の補足。対象の銘柄名と、いまの設定で何が起きるかを示す。
@@ -2458,6 +2489,7 @@ bindPremise("set-pension-monthly", "pension_monthly", true);
 bindPremise("set-spend-monthly", "spend_monthly", true);
 bindPremise("set-inflation", "inflation", false);
 bindPremise("set-tax", "tax", false);
+bindPremise("set-pension-slide", "pension_slide", false);
 bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
 bindPremise("set-draw-rate", "draw_rate", false);
@@ -2725,7 +2757,7 @@ function renderStrategyPremise() {
     ["取り崩し方法", DRAW_LABELS[p.draw_method || "fixed"]
       + ((p.draw_method === "percent") ? `（年${p.draw_rate != null ? p.draw_rate : 4}%）` : "")],
     ["退職", `${lp.retire}歳`],
-    ["年金", `${lp.penAge}歳〜 ${man(lp.pension)}/月`],
+    ["年金", `${lp.penAge}歳〜 ${man(lp.pension)}/月（改定 年${(lp.penGrow * 100).toFixed(1)}%）`],
     ["生活費", `${man(lp.spend)}/月`],
     // 実際に計算へ使う年利を出す（AI予測をオンにしていると設定値ではなくAIの値になる）
     ["想定年利", lastLifeArgs
@@ -3513,6 +3545,11 @@ function planLifePlan() {
     pension: p.pension_monthly || 0,
     spend: p.spend_monthly || 0,
     infl: (p.inflation || 0) / 100,
+    // 年金の改定率＝インフレ率 −スライド調整。公的年金はマクロ経済スライドにより
+    // 物価上昇をそのまま反映しないため、生活費と同率で増やすと楽観的になる。
+    // 名目額は下がらない仕組みなので、マイナスにはしない（0で下限）。
+    penGrow: Math.max(0, (p.inflation || 0) / 100
+                        - (p.pension_slide != null ? p.pension_slide : 0.4) / 100),
   };
 }
 // 生涯の資産推移（積立期→退職→取り崩し期）を月次で構築
@@ -3696,7 +3733,9 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
           : (balReal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / balReal : 0);
       }
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
-      const pen = (age >= lp.penAge) ? lp.pension * inflF : 0;
+      // 年金は生活費とは別の率で増やす（マクロ経済スライドのぶん伸びが鈍い）
+      const penF = Math.pow(1 + (lp.penGrow != null ? lp.penGrow : lp.infl), m / 12);
+      const pen = (age >= lp.penAge) ? lp.pension * penF : 0;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
       const floorNow = floor * inflF;    // ①生活防衛資金：インフレ調整後（実質額を維持）
 

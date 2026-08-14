@@ -2031,7 +2031,9 @@ def api_plan():
                   "cash", "bonds", "tax", "emergency_months", "near_term",
                   "draw_rate", "conc_keep",
                   # ガードレール運用の記録：基準の引出率(%)と、いま採用している生活費(月額)
-                  "guard_base_rate", "guard_spend"):
+                  "guard_base_rate", "guard_spend",
+                  # 年金の改定はインフレより抑えられる（マクロ経済スライド）
+                  "pension_slide"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
