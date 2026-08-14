@@ -660,10 +660,18 @@ function renderPriceChart(holdings, totals) {
     empty.hidden = false; Plotly.purge("actual-chart"); return;
   }
   const layout = baseLayout();
-  layout.height = 460;
+  // 凡例は商品ごとに1行増える（日本語の商品名が長いので、ほぼ1行1件になる）。
+  // 高さを固定すると凡例が枠からはみ出し、描画領域が潰れるうえ、
+  // はみ出した項目はクリックできなくなる（カードが手前に来て反応しない）。
+  // そこで本数に応じて背を高くし、全部の凡例が収まるようにする。
+  const legendH = Math.min(720, traces.length * 20 + 16);
+  layout.height = 400 + legendH;
   layout.hovermode = "closest";   // 触れた1本だけを表示（吹き出しを見やすく）
-  layout.margin = { l: amountMode ? 78 : 64, r: 20, t: 12, b: 40 };
-  layout.legend = { orientation: "h", y: -0.18, font: { size: 10.5 } };
+  layout.margin = { l: amountMode ? 78 : 64, r: 20, t: 12, b: 40 + legendH };
+  // 凡例は描画領域の下端から始めるが、そのままだと日付の目盛りに重なるので少し下げる
+  const plotH = Math.max(1, layout.height - layout.margin.t - layout.margin.b);
+  layout.legend = { orientation: "h", y: -36 / plotH, yanchor: "top", yref: "paper",
+                    font: { size: 10.5 } };
   if (amountMode) {
     layout.yaxis.title = "評価額（円）";
   } else {
