@@ -847,6 +847,11 @@ tr:hover .row-del { opacity: 1; }
 .skipped-tag { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700;
   color: var(--neutral); background: rgba(202,138,4,.14); border-radius: 999px; padding: 1px 8px; }
 
+/* 売却済みの商品を一覧から外したことの知らせ */
+.sold-note { margin: 10px 2px 0; font-size: 12px; color: var(--ink-soft); }
+.link-btn { margin-left: 8px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--accent); font-size: 12px; font-weight: 700; text-decoration: underline; }
+
 /* ------------------------------------------------ 取り崩し戦略の検証 */
 /* 検証に使った前提をチップで一覧する */
 .strat-premise { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }

@@ -483,6 +483,7 @@ async function loadPriceHistory(force) {
   lastActualData = data;
   renderPriceAsOf(data);
   renderPriceSkipped(data.skipped || []);
+  renderPriceSoldOut(data.sold_out || []);
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
   renderPriceTable(data.holdings || [], data.excel_dates || data.dates || [], data.totals || []);
@@ -507,6 +508,19 @@ function renderPriceAsOf(data) {
 }
 
 // グラフ・表に出せない保有を理由つきで知らせる（黙って除外すると原因が分からないため）
+// 全額売却済みの商品はグラフ・表から外している。実現損益は残る情報なので知らせる。
+function renderPriceSoldOut(sold) {
+  const el = $("price-sold-note");
+  if (!el) return;
+  if (!sold.length) { el.hidden = true; el.innerHTML = ""; return; }
+  const sum = sold.reduce((a, s) => a + (s.realized || 0), 0);
+  const names = sold.map((s) => escapeHtml(s.name)).join("、");
+  el.hidden = false;
+  el.innerHTML = `✅ <strong>売却済み ${sold.length}件</strong>はグラフ・表から外しています`
+    + `（実現損益の合計 <strong class="${sum >= 0 ? "up" : "down"}">`
+    + `${sum >= 0 ? "+" : ""}${Math.round(sum).toLocaleString()} 円</strong>）：${names}`;
+}
+
 function renderPriceSkipped(skipped) {
   const card = $("price-skipped-card");
   if (!card) return;
@@ -963,6 +977,24 @@ function renderShortTermBanner() {
   el.hidden = false;
 }
 
+let showSoldOut = false;   // 売却済みの商品を一覧に出すか（既定は隠す）
+
+// 売却済みの商品は一覧から外すが、実現損益は残る情報なので件数と合計を知らせる。
+function renderSoldOutNote(sold) {
+  const el = $("sold-out-note");
+  if (!el) return;
+  if (!sold.length) { el.hidden = true; el.innerHTML = ""; return; }
+  const sum = sold.reduce((a, s) => a + (s.realized || 0), 0);
+  const sign = sum >= 0 ? "+" : "";
+  el.hidden = false;
+  el.innerHTML = `✅ <strong>売却済み ${sold.length}件</strong>は一覧から外しています`
+    + `（実現損益の合計 <strong class="${sum >= 0 ? "up" : "down"}">${sign}${Math.round(sum).toLocaleString()} 円</strong>）。`
+    + `<button type="button" class="link-btn" id="sold-out-toggle">`
+    + `${showSoldOut ? "隠す" : "表示する"}</button>`;
+  const btn = $("sold-out-toggle");
+  if (btn) btn.addEventListener("click", () => { showSoldOut = !showSoldOut; renderWatchTable(); });
+}
+
 function renderWatchTable() {
   const body = $("watch-body");
   const empty = $("empty-watch");
@@ -972,7 +1004,13 @@ function renderWatchTable() {
   }
   empty.hidden = true;
 
-  const rows = lastSummaries.slice().sort((a, b) => {
+  // 全額売却済みはもう持っていないので一覧から外す。ただし黙って消すと
+  // 実現損益が見えなくなるので、件数と合計を下に出して開けるようにする。
+  const sold = lastSummaries.filter((s) => s.sold_out);
+  const live = lastSummaries.filter((s) => !s.sold_out);
+  renderSoldOutNote(sold);
+
+  const rows = (showSoldOut ? lastSummaries : live).slice().sort((a, b) => {
     let va, vb;
     if (sortKey === "broker") {
       // 証券会社: SBI → 三菱UFJ → 楽天 の順（未設定・その他は末尾）

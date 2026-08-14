@@ -368,6 +368,32 @@ def api_watchlist_remove():
     return jsonify({"ok": True})
 
 
+def _is_sold_out(pos, units):
+    """全額売却済みか。買った記録があり、売り切って口数が残っていない状態を指す。
+
+    口数が0でも「まだ入力していない」だけのことがあるため、取引履歴を根拠にする。
+    （口数だけで判断すると、入力前の商品まで画面から消えてしまう）
+    """
+    return bool(pos and (pos.get("buy_amount") or 0) > 0
+                and (pos.get("units") or 0) <= 0 and float(units or 0) <= 0)
+
+
+def _sold_out_ids():
+    """全額売却済みの保有IDの集合。銘柄一覧・価格推移から外すのに使う。"""
+    by_watch = {}
+    for t in db.list_trades():
+        by_watch.setdefault(t["watch_id"], []).append(t)
+    out = set()
+    for it in db.list_watchlist():
+        tr = by_watch.get(it["watch_id"])
+        if not tr:
+            continue
+        pos = db.trade_position(tr, it.get("kind", "fund") or "fund")
+        if _is_sold_out(pos, it.get("units")):
+            out.add(it["watch_id"])
+    return out
+
+
 def _summarize_fund(row, range_key, force=False):
     """カタログ1件の現在の判定サマリを返す（一覧・ランキング共通）。"""
     summary = {
@@ -447,10 +473,12 @@ def _build_summaries(range_key, force=False):
             s["avg_price"] = _pos["avg_price"]
             s["realized"] = _pos["realized"]
             s["trade_count"] = _pos["count"]
+            s["sold_out"] = _is_sold_out(_pos, it.get("units"))
         else:
             s["avg_price"] = None
             s["realized"] = 0
             s["trade_count"] = 0
+            s["sold_out"] = False
         hist = histories.get(wid, {})
 
         stock = s.get("kind") == "stock"
@@ -1206,6 +1234,24 @@ def api_actual_history():
     force = request.args.get("force") in ("1", "true", "yes")
     watch = db.list_watchlist()
     histories = db.get_all_amount_histories()
+    # 全額売却済みの保有はグラフ・表から外す（もう持っていないため）。
+    # 実現損益は残るので、件数と合計を別に返して画面で知らせる。
+    sold_ids = _sold_out_ids()
+    sold_out = []
+    if sold_ids:
+        by_watch = {}
+        for t in db.list_trades():
+            by_watch.setdefault(t["watch_id"], []).append(t)
+        for it in watch:
+            if it["watch_id"] not in sold_ids:
+                continue
+            pos = db.trade_position(by_watch.get(it["watch_id"]) or [],
+                                    it.get("kind", "fund") or "fund")
+            sold_out.append({"watch_id": it["watch_id"], "name": it.get("name") or "",
+                             "broker": it.get("broker") or "",
+                             "realized": pos["realized"], "sell_amount": pos["sell_amount"]})
+        watch = [it for it in watch if it["watch_id"] not in sold_ids]
+
     # 評価額の履歴がある保有を対象にする
     holdings = [it for it in watch if histories.get(it["watch_id"])]
     # 履歴が無く表示できない保有は、理由を添えて画面に知らせる（黙って消さない）
@@ -1340,6 +1386,7 @@ def api_actual_history():
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
                     "excel_dates": excel_dates, "range": range_key,
                     "total_invested": round(total_inv), "skipped": skipped,
+                    "sold_out": sold_out,
                     "totals": totals, "totals_full": totals_full})
 
 
