@@ -680,7 +680,13 @@ function renderPriceChart(holdings, totals) {
     layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 100, y1: 100,
       line: { color: isDark() ? "#8a8f9c" : "#94a3b8", width: 1.2, dash: "dash" } }];
   }
-  Plotly.newPlot("actual-chart", traces, layout, { responsive: true, displayModeBar: false });
+  // responsive:true だと、再描画のたびに高さを layout.height ではなく
+  // 置き場所(div)の高さから取り直す（layout.height は autosize で捨てられる）。
+  // 凡例のぶん margin.b を大きく取っているので、divの高さが合っていないと
+  // 描画領域が潰れて目盛りと凡例が重なる。divにも同じ高さを持たせて食い違いを防ぐ。
+  const gd = $("actual-chart");
+  gd.style.height = layout.height + "px";
+  Plotly.newPlot(gd, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 const BROKER_ORDER = { "SBI証券": 0, "三菱UFJスマート証券": 1, "楽天証券": 2 };
