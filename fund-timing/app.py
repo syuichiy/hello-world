@@ -492,6 +492,10 @@ def _build_summaries(range_key, force=False):
             s["value"] = round(s["latest_price"] * units / divisor)
             # 当日の評価額をDBへ反映（記録期間より後の日付だけ追記＝過去の実額は壊さない）
             _persist_today_value(wid, s.get("latest_date"), s["value"])
+        elif s.get("sold_out"):
+            # 全額売却済み。口数0で履歴の最新額を出すと、売ったのに評価額が残り、
+            # 総資産・資産配分・リバランスの売却候補にまで混ざってしまう。
+            s["value"] = 0
         elif hist:
             s["value"] = round(hist[last_hist_date])     # 口数未入力/価格未取得なら履歴の最新で表示
         else:
@@ -1719,7 +1723,8 @@ def _build_ai_context(summaries, allocation):
     """AIに渡すコンパクトな保有状況（銘柄・指標・リバランス）を組み立てる。"""
     funds = []
     for s in summaries:
-        if not s.get("ok"):
+        # 売却済みは渡さない。渡すと「もう持っていないものを売れ」と言われてしまう
+        if not s.get("ok") or s.get("sold_out"):
             continue
         st, st_score = _short_term_signal(s)
         funds.append({
@@ -1966,7 +1971,8 @@ def _build_dividends(summaries, base_tax):
     recv_gross = recv_net = reinvest_total = tax_total = 0.0
     recv_value = 0.0     # 「受取」に設定した分配金あり商品の評価額（取り崩さずに維持する）
     for s in summaries:
-        if not s.get("ok"):
+        # 売却済みはもう受け取らないので、分配金の一覧にも載せない
+        if not s.get("ok") or s.get("sold_out"):
             continue
         val = s.get("value") or 0
         dy = s.get("div_yield") or 0

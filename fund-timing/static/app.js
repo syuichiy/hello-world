@@ -941,6 +941,7 @@ function renderShortTermBanner() {
   if (!el) return;
   const buys = [], sells = [];
   lastSummaries.forEach((s) => {
+    if (s.sold_out) return;   // もう持っていないものを売り時／買い時に出さない
     const st = shortTermSignal(s);
     if (st === "buy") buys.push(s);
     else if (st === "sell") sells.push(s);
