@@ -2826,6 +2826,10 @@ function renderStrategy() {
     return `<td class="num draw-cell ${cls}"><b>${Math.round(mo).toLocaleString()}</b>`
       + `<span class="draw-year">年 ${yearTxt(yr)}</span></td>`;
   };
+  // 年金の実質的な目減り率（改定が物価に追いつかないぶん）。説明文に使う。
+  const penYears = Math.max(0, 100 - Math.ceil(a.lp.penAge));
+  const penReal = (Math.pow((1 + (a.lp.penGrow != null ? a.lp.penGrow : a.lp.infl))
+                            / (1 + a.lp.infl), penYears) - 1) * 100;
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
@@ -2846,8 +2850,9 @@ function renderStrategy() {
           <option value="5"${drawTableStep === 5 ? " selected" : ""}>5年ごと</option>
           <option value="1"${drawTableStep === 1 ? " selected" : ""}>1年ごと</option>
         </select></label>
-      <label class="draw-toggle"><input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
-        今日の価値で表示する（インフレ分を除く）</label>
+      <label class="draw-toggle" title="金額の単位を今日の購買力に直して表示します。計算の前提は変わりません">
+        <input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
+        今日の価値で表示する</label>
       <span class="draw-unit">単位：円（上段＝月額／下段＝年額）</span>
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
@@ -2857,7 +2862,15 @@ function renderStrategy() {
     <p class="hint"><strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
       になるように並べています（「取り崩し計」は年金以外の小計＝資産から出る額）。
       ${drawTableReal
-        ? "インフレ分を除いた<strong>今日の価値</strong>で表示中です。"
+        ? `金額を<strong>今日の購買力</strong>に直して表示しています。
+           <strong>前提は変えていません</strong>（単位の付け替えだけです）。
+           ${penReal < -0.5
+             ? `年金がだんだん減るのは、改定 年${(a.lp.penGrow * 100).toFixed(1)}% が
+                物価上昇 年${(a.lp.infl * 100).toFixed(1)}% に追いつかず、
+                <strong>実質的に目減りする</strong>ためです
+                （${Math.ceil(a.lp.penAge)}歳から100歳で約${Math.abs(penReal).toFixed(0)}%）。
+                これがマクロ経済スライドの効果そのものです。`
+             : ""}`
         : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
       退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>、
