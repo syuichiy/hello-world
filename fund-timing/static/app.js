@@ -3176,22 +3176,26 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
     前提: {
       現在年齢: a.lp.age0, 退職年齢: a.lp.retire, 年金開始年齢: a.lp.penAge,
       年金_月額: Math.round(a.lp.pension), 生活費_月額: Math.round(a.lp.spend),
-      インフレ率: a.lp.infl, 想定年利: a.baseRate,
+      // 率は「%の数値」で統一する。小数(0.02)と%(4)が混在すると桁を取り違えられる
+      インフレ率_パーセント: Number((a.lp.infl * 100).toFixed(2)),
+      想定年利_パーセント: Number((a.baseRate * 100).toFixed(2)),
+      年金の改定率_パーセント: Number(((a.lp.penGrow != null ? a.lp.penGrow : a.lp.infl) * 100).toFixed(2)),
       取り崩し方法: DRAW_LABELS[cur],
-      定率のときの率: p.draw_rate != null ? p.draw_rate : 4,
-      生活防衛資金: Math.round(a.emFloor || 0),
-      現金: Math.round(a.cash0 || 0), 債券: Math.round(a.bonds0 || 0),
-      運用資産: Math.round(a.cur || 0),
+      定率のときの率_パーセント: p.draw_rate != null ? p.draw_rate : 4,
+      生活防衛資金_円: Math.round(a.emFloor || 0),
+      現金_円: Math.round(a.cash0 || 0), 債券_円: Math.round(a.bonds0 || 0),
+      運用資産_円: Math.round(a.cur || 0),
       売却順序: "NISA温存（特定口座から先に売る）",
-      保有全体の変動率_年率: portfolioRisk.annual_vol,
+      保有全体の変動率_年率パーセント: portfolioRisk.annual_vol,
       // 集中銘柄を減らす設定なら、実際に使ったのは合成した変動率のほう
-      計算に使った変動率_年率: cp
+      計算に使った変動率_年率パーセント: cp
         ? Number((cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)) : portfolioRisk.annual_vol,
     },
     集中銘柄: cp ? {
-      銘柄: cp.cc.name, 資産に占める割合: cp.cc.share,
-      含み益の割合: Math.round(cp.gain * 100),
-      この銘柄の変動率: cp.cc.vol, それ以外の変動率: cp.cc.rest_vol, 相関: cp.cc.corr,
+      銘柄: cp.cc.name, 資産に占める割合_パーセント: cp.cc.share,
+      含み益の割合_パーセント: Math.round(cp.gain * 100),
+      この銘柄の変動率_年率パーセント: cp.cc.vol,
+      それ以外の変動率_年率パーセント: cp.cc.rest_vol, 相関: cp.cc.corr,
       設定した方針: cp.label(cp.target),
       その水準まで下げるのにかかる年数: cp.reachOf(cp.target) >= 0
         ? Number(cp.reachOf(cp.target).toFixed(1)) : null,

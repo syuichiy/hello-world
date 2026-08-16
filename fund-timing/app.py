@@ -2116,6 +2116,8 @@ _AI_PLAN_PROMPT = (
     "現金(cash)・債券(bonds)がある場合は、それらを含めた総資産(current_total)で見立て、"
     "退職〜年金開始までの取り崩しに現金・債券のクッションをどう使うか等にも触れてください。"
     "現金・債券は値上がりを見込まない安定資産である点に留意する。\n"
+    "年金は pension_growth_pct（＝インフレ率−マクロ経済スライド）の率でしか増えません。"
+    "物価上昇に追いつかず実質的に目減りする点を踏まえてください。\n"
     "dividend_income_after_tax_yearly（受取に設定した分配金・配当の税引後の年間キャッシュ収入）が"
     "ある場合は、取り崩し期にこのインカムが売却額を軽減する点に comment_drawdown で触れてください。\n"
     "これは機械的な参考情報であり、将来を保証する投資助言ではありません。"
@@ -2175,6 +2177,14 @@ def api_ai_plan():
             "pension_monthly": plan.get("pension_monthly", 0),
             "spend_monthly": plan.get("spend_monthly", 0),
             "inflation_pct": plan.get("inflation", 0),
+            # 年金はマクロ経済スライドで物価上昇をそのまま反映しない。
+            # 渡さないと「年金は物価どおり増える」前提でコメントされてしまう。
+            "pension_slide_pct": (plan.get("pension_slide")
+                                  if plan.get("pension_slide") is not None else 0.4),
+            "pension_growth_pct": round(max(0.0, (plan.get("inflation") or 0)
+                                            - (plan.get("pension_slide")
+                                               if plan.get("pension_slide") is not None
+                                               else 0.4)), 2),
         },
         "allocation": [{"name": c.get("name"), "current_pct": c.get("share")}
                        for c in ((allocation or {}).get("classes") or []) if c.get("share")],
