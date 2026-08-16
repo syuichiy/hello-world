@@ -711,12 +711,17 @@ function renderPriceTable(holdings, dates, totals) {
   card.hidden = false;
   const cols = dates.slice().reverse();   // 新しい日付が左
   const ndates = cols.length;
-  const plCell = (r) => {   // 損益率セル（r=比率%）。マイナスは赤字
+  const yenSign = (n) => (n >= 0 ? "+" : "−") + Math.abs(Math.round(n)).toLocaleString();
+  // 損益セル：上に総利益（円）、下に損益率（%）。マイナスは赤字
+  const plCell = (r, gain) => {
     if (r == null) return `<td class="num pt-plcol">—</td>`;
     const pl = Math.round((r - 100) * 10) / 10;
-    return `<td class="num pt-plcol ${pl >= 0 ? "up" : "down"}">${pl >= 0 ? "+" : ""}${pl}%</td>`;
+    const top = (gain == null) ? ""
+      : `<b class="pt-amt">${yenSign(gain)}</b>`;
+    return `<td class="num pt-plcol ${pl >= 0 ? "up" : "down"}">${top}`
+      + `<span class="pt-pct">${pl >= 0 ? "+" : ""}${pl}%</span></td>`;
   };
-  // 前日比セル（直近2日の評価額の差）。%のみ表示
+  // 前日セル：上に前日益（円）、下に前日比（%）。直近2日の評価額の差から出す
   const dodCell = (dts, amts) => {
     const vals = [];
     for (let i = (dts ? dts.length : 0) - 1; i >= 0 && vals.length < 2; i--) {
@@ -726,11 +731,19 @@ function renderPriceTable(holdings, dates, totals) {
     if (vals.length < 2 || !vals[1]) return `<td class="num pt-dodcol">—</td>`;
     const diff = vals[0] - vals[1], pct = diff / vals[1] * 100;
     const cls = diff >= 0 ? "up" : "down", sg = diff >= 0 ? "+" : "";
-    return `<td class="num pt-dodcol ${cls}">${sg}${pct.toFixed(2)}%</td>`;
+    return `<td class="num pt-dodcol ${cls}"><b class="pt-amt">${yenSign(diff)}</b>`
+      + `<span class="pt-pct">${sg}${pct.toFixed(2)}%</span></td>`;
+  };
+  // 総利益＝最新の評価額 − 投資金額（投資金額が未入力なら出さない）
+  const gainOf = (h) => {
+    const inv = Number(h.invested || 0);
+    return (inv > 0 && h.latest != null) ? h.latest - inv : null;
   };
   // ヘッダ：商品名（固定）＋ 損益率（固定）＋ 前日比（固定）＋ 各日付
   $("price-table-head").innerHTML =
-    `<th class="pt-namecol">商品名</th><th class="num pt-plcol">損益率</th><th class="num pt-dodcol">前日比</th>` +
+    `<th class="pt-namecol">商品名</th>`
+    + `<th class="num pt-plcol">総利益<span class="th-note">損益率</span></th>`
+    + `<th class="num pt-dodcol">前日益<span class="th-note">前日比</span></th>` +
     cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
   // 証券会社順（SBI→三菱UFJ→楽天→その他）に並べ替え。色はグラフと合わせて元の並び順で固定
   const withColor = holdings.map((h, i) => ({ h, color: PRICE_COLORS[i % PRICE_COLORS.length] }));
@@ -754,15 +767,21 @@ function renderPriceTable(holdings, dates, totals) {
     }).join("");
     const acct = (h.account && h.account !== h.name)
       ? `<div class="pt-acct">${escapeHtml(h.account)}</div>` : "";
-    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio)}${dodCell(h.dates, h.amount)}${cells}</tr>`;
+    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio, gainOf(h))}${dodCell(h.dates, h.amount)}${cells}</tr>`;
   });
   const totRatio = totals.length ? totals[totals.length - 1].ratio : null;
+  // 合計の総利益＝各保有の総利益の合計（投資金額が入っているものだけ）
+  const totGain = holdings.reduce((a, h) => {
+    const g = gainOf(h);
+    return g == null ? a : a + g;
+  }, 0);
+  const anyGain = holdings.some((h) => gainOf(h) != null);
   const totalCells = cols.map((d) => {
     const v = totalMap[d];
     return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
   }).join("");
   const totDod = dodCell(totals.map((t) => t.date), totals.map((t) => t.amount));
-  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio)}${totDod}${totalCells}</tr>`;
+  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio, anyGain ? totGain : null)}${totDod}${totalCells}</tr>`;
   $("price-table-body").innerHTML = html;
 }
 
