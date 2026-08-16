@@ -414,6 +414,11 @@ def _summarize_fund(row, range_key, force=False):
         change = None
         if prices[0]:
             change = round((prices[-1] - prices[0]) / prices[0] * 100, 2)
+        # 前日比（直近2営業日の変化率）。期間の騰落率とは別物なので分けて持つ。
+        prev_change = None
+        _valid = [p for p in prices if p]
+        if len(_valid) >= 2 and _valid[-2]:
+            prev_change = round((_valid[-1] - _valid[-2]) / _valid[-2] * 100, 2)
         # 時間軸別スコア（ポートフォリオ全体判定用・全履歴で計算）
         hz_full = signal_mod.analyze_horizons(series["dates"], series["nav"])
         hz = [{"key": h["key"], "ok": h["ok"], "score": h.get("score")} for h in hz_full]
@@ -436,7 +441,8 @@ def _summarize_fund(row, range_key, force=False):
             "rsi": a.stats.get("rsi"),
             "deviation_pct": a.stats.get("deviation_pct"),
             "uptrend": (a.stats.get("sma_short") or 0) >= (a.stats.get("sma_long") or 0),
-            "change_pct": change,
+            "change_pct": change,          # 表示期間の騰落率（前日比ではない）
+            "prev_change_pct": prev_change,  # 前日比
             "spark": _downsample([p for p in prices if p is not None], 60),
             "hz": hz,
         })
@@ -1719,7 +1725,15 @@ def _short_term_signal(s):
     return "neutral", None
 
 
-def _build_ai_context(summaries, allocation):
+_RANGE_LABELS = {"3m": "3ヶ月", "6m": "6ヶ月", "1y": "1年", "3y": "3年",
+                 "5y": "5年", "all": "全期間"}
+
+
+def _range_label(range_key):
+    return _RANGE_LABELS.get(range_key or "1y", "1年")
+
+
+def _build_ai_context(summaries, allocation, range_key="1y"):
     """AIに渡すコンパクトな保有状況（銘柄・指標・リバランス）を組み立てる。"""
     funds = []
     for s in summaries:
@@ -1740,9 +1754,11 @@ def _build_ai_context(summaries, allocation):
             "invested": s.get("invested"),
             "pl_pct": s.get("pl_pct"),
             "sell_policy": s.get("sell_policy"),
-            "change_pct": s.get("change_pct"),
+            # 「変化率」は前日比と期間騰落率で桁が全く違う。名前で取り違えられないよう分ける
+            "前日比_パーセント": s.get("prev_change_pct"),
+            "期間騰落率_パーセント": s.get("change_pct"),
         })
-    ctx = {"funds": funds}
+    ctx = {"funds": funds, "騰落率の期間": _range_label(range_key)}
     _plan = db.get_setting("plan", {}) or {}
     _cash, _bonds = _plan.get("cash", 0) or 0, _plan.get("bonds", 0) or 0
     if _cash or _bonds:
@@ -1764,13 +1780,16 @@ def _build_ai_context(summaries, allocation):
 
 _AI_SYSTEM_PROMPT = (
     "あなたは日本の個人投資家の投資信託ポートフォリオを見て、保有者向けのコメントを書くアシスタントです。"
-    "入力はテクニカル指標（スコアや判定）・短期シグナル・損益・前日比・資産配分・リバランス計算の結果です。"
+    "入力はテクニカル指標（スコアや判定）・短期シグナル・損益・前日比・期間騰落率・資産配分・リバランス計算の結果です。"
+    "「前日比_パーセント」は直近2営業日の変化率、"
+    "「期間騰落率_パーセント」は表示期間（騰落率の期間）ぜんぶの変化率です。"
+    "桁が大きく違うので取り違えないこと。前日比として期間騰落率の数字を使ってはいけません。"
     "これらを横断的に解釈し、次のコメントをJSONで返してください。\n"
     "- trade_overall: 「売買」に絞ったポートフォリオ全体の見立て（3〜4文・220字以内）。"
     "いまの相場位置（高値圏か割安圏か・過熱感）、買い増し／利益確定／一部売却／ホールドの方針、"
     "注目すべき銘柄（過熱・割安・損益が大きい等）を具体的に述べる。リバランスや資産配分比率の話は含めない。\n"
     "- funds: 各商品の『売買』コメント（1商品につき2文・90字以内）。watch_id で必ず対応づける。"
-    "スコア・判定・短期シグナル・前日比・損益率・売却方針をふまえ、"
+    "スコア・判定・短期シグナル・前日比・期間騰落率・損益率・売却方針をふまえ、"
     "『買い増しを検討できる／一部利益確定を検討できる／ホールドが無難／売り時に近い』などの具体的な行動と、"
     "その根拠（価格位置・トレンド・過熱/割安・含み損益）を簡潔に述べる。銘柄ごとに内容を変え、使い回さない。\n"
     "- overall: ポートフォリオ全体の総合コメント（3文以内・150字以内）。偏り・過熱/割安・損益の傾向に触れる。"
@@ -1824,7 +1843,7 @@ def api_ai_advice():
     range_key = request.args.get("range", "1y")
     summaries = _build_summaries(range_key, force=False)
     allocation = _build_allocation(summaries)
-    ctx = _build_ai_context(summaries, allocation)
+    ctx = _build_ai_context(summaries, allocation, range_key)
     if not ctx["funds"]:
         return jsonify({"ok": False, "error": "分析できる保有商品がありません。"})
 
