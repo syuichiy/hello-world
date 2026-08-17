@@ -343,6 +343,15 @@
       <!-- いつ時点のデータかを明示する（基準価額は当日中には公表されないため） -->
       <p class="asof-note" id="price-asof" hidden></p>
 
+      <!-- 口数・売買の記録と、記録されている実際の評価額が食い違う保有のお知らせ -->
+      <div class="card mismatch-card" id="price-mismatch-card" hidden>
+        <div class="skipped-head">🚨 口数と実際の評価額が大きく食い違う銘柄があります</div>
+        <ul class="skipped-list" id="price-mismatch-list"></ul>
+        <p class="hint">取引CSVを<strong>別の口座の保有</strong>に取り込んでしまった場合などに起こります（同じ商品を特定口座とNISA口座で持っているときなど）。
+          銘柄一覧の<strong>📝ボタン</strong>で売買の記録を開き、身に覚えのない購入・売却が無いか確認してください。誤りは✕で削除でき、口数と投資金額は自動で計算し直されます。<br>
+          評価額の記録を取り込んだ日より後に<strong>売買した（口数を変えた）</strong>場合にも出ることがあります。その場合は売買として記録すると解消します。</p>
+      </div>
+
       <!-- グラフ・表に出せない保有のお知らせ（黙って除外しないため） -->
       <div class="card skipped-card" id="price-skipped-card" hidden>
         <div class="skipped-head">⚠️ 表示できていない・更新が止まっている銘柄があります</div>

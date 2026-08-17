@@ -482,6 +482,7 @@ async function loadPriceHistory(force) {
   st.hidden = true;
   lastActualData = data;
   renderPriceAsOf(data);
+  renderPriceMismatch(data.mismatch || []);
   renderPriceSkipped(data.skipped || []);
   renderPriceSoldOut(data.sold_out || []);
   renderPriceSummary(data);
@@ -519,6 +520,25 @@ function renderPriceSoldOut(sold) {
   el.innerHTML = `✅ <strong>売却済み ${sold.length}件</strong>はグラフ・表から外しています`
     + `（実現損益の合計 <strong class="${sum >= 0 ? "up" : "down"}">`
     + `${sum >= 0 ? "+" : ""}${Math.round(sum).toLocaleString()} 円</strong>）：${names}`;
+}
+
+// 口数・売買の記録から計算した評価額と、記録されている実額が大きく違う保有を知らせる。
+// 取引CSVを別口座の保有へ取り込んでしまうと口数が数倍になり、画面上は数字が並ぶだけで
+// 気づけないため（例：実額68万円に対し、口数からの計算は616万円）。
+function renderPriceMismatch(list) {
+  const card = $("price-mismatch-card");
+  if (!card) return;
+  if (!list.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  $("price-mismatch-list").innerHTML = list.map((m) => {
+    const bk = m.broker ? `<span class="skipped-broker">${escapeHtml(m.broker)}</span>` : "";
+    const acct = m.account_type === "nisa" ? "NISA" : "特定";
+    return `<li>${escapeHtml(m.name)}${bk}<span class="skipped-tag">${acct}</span>`
+      + `<span class="skipped-why">${m.date} 時点：記録されている評価額 <b>${yen(m.recorded)}</b>`
+      + ` に対し、口数 ${Number(m.units).toLocaleString()} から計算すると <b class="skipped-need">${yen(m.calculated)}</b>`
+      + `（約${m.ratio}倍）</span></li>`;
+  }).join("");
 }
 
 function renderPriceSkipped(skipped) {
@@ -2355,7 +2375,9 @@ function renderCsvPreview() {
   const opt = (g) => {
     const sel = g.watch_id ? String(g.watch_id) : (g.catalog_id ? `c:${g.catalog_id}` : "");
     const own = hs.map((h) => {
-      const label = `${h.name}${h.label && h.label !== h.name ? `／${h.label}` : ""}${h.broker ? `（${h.broker}）` : ""}`;
+      const acct = h.account_type === "nisa" ? "NISA" : "特定";
+      const label = `${h.name}${h.label && h.label !== h.name ? `／${h.label}` : ""}`
+        + `［${acct}］${h.broker ? `（${h.broker}）` : ""}`;
       return `<option value="${h.watch_id}"${sel === String(h.watch_id) ? " selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
     // 名前が近いものが上に来るように並べ替える（選ぶだけで、自動選択はしない）
@@ -2367,9 +2389,13 @@ function renderCsvPreview() {
       + (own ? `<optgroup label="保有から選ぶ">${own}</optgroup>` : "")
       + (add ? `<optgroup label="一覧に追加して取り込む">${add}</optgroup>` : "");
   };
+  // 口座区分（特定/NISA）ごとに行を分けて取り込む。同じ商品を2口座で持っている場合に
+  // 片方の保有へまとめて入ってしまうのを防ぐため。
+  const acctChip = (t) => t === "nisa" ? '<span class="csv-acct csv-acct-nisa">NISA</span>'
+    : t === "taxable" ? '<span class="csv-acct">特定</span>' : "";
   const rows = (csvPreview.groups || []).map((g) => `
     <tr class="${g.watch_id ? "" : "csv-unmatched"}">
-      <td class="csv-name">${escapeHtml(g.name)}
+      <td class="csv-name">${escapeHtml(g.name)}${acctChip(g.account_type)}
         <span class="csv-meta">${g.first} 〜 ${g.last}</span></td>
       <td class="num">${g.count}<span class="csv-meta">買${g.buy}／売${g.sell}</span></td>
       <td>${g.watch_id

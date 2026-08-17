@@ -297,20 +297,45 @@ def suggest_catalog(rows, catalog, watched_ids=()):
     return out
 
 
+def group_key(row) -> str:
+    """取り込みの対応づけキー。
+
+    同じ商品を特定口座とNISA口座の2行で持っていることがあるため、商品名だけで
+    まとめると片方の保有に全部の取引が入ってしまう（口数・取得原価が実際の
+    数倍になる）。CSVから読める口座区分もキーに含めて、口座ごとに分けて扱う。
+    """
+    return normalize_name(row.get("name") or "") + "\t" + (row.get("account_type") or "")
+
+
+def split_key(key):
+    """group_key を (正規化名, 口座区分) に戻す。"""
+    name, _, acct = str(key or "").partition("\t")
+    return name, acct
+
+
 def match_holdings(rows, holdings, broker=""):
-    """CSVの商品名を、保有（ウォッチリスト）へ突き合わせる。
+    """CSVの商品（商品名＋口座区分）を、保有（ウォッチリスト）へ突き合わせる。
 
     holdings は db.list_watchlist() の結果。同じ商品を複数の証券会社で持てるため、
-    CSVの発行元（broker）と同じ証券会社の保有を優先する。
+    CSVの発行元（broker）と同じ証券会社の保有を優先し、さらに口座区分（特定/NISA）が
+    一致する保有を優先する。
     照合は 正式名称の完全一致 → 口座名の完全一致 → 正式名称どうしの部分一致 の順。
     確実に1件に絞れないものは None にして、画面で選んでもらう。
 
-    戻り値: {正規化名: {"watch_id": id or None, "how": "name"|"label"|"partial"|None}}
+    戻り値: {group_key: {"watch_id": id or None, "how": "name"|"label"|"partial"|None}}
     """
-    def pref(hs):
-        """同じ証券会社の保有を優先する（無ければ全体から選ぶ）。"""
+    def pref(hs, acct):
+        """同じ証券会社・同じ口座区分の保有を優先する。"""
         same = [h for h in hs if broker and (h.get("broker") or "") == broker]
-        return same or hs
+        hs = same or hs
+        if acct:
+            hit = [h for h in hs if (h.get("account_type") or "taxable") == acct]
+            if hit:
+                return hit
+            if len(hs) > 1:
+                # 口座区分が一致する保有が無く、候補も複数 → 自動では選ばない
+                return []
+        return hs
 
     by_name, by_label = {}, {}
     for h in holdings:
@@ -320,12 +345,13 @@ def match_holdings(rows, holdings, broker=""):
             by_label.setdefault(normalize_name(h["label"]), []).append(h)
 
     result = {}
-    for key in {normalize_name(r["name"]) for r in rows}:
+    for key in {group_key(r) for r in rows}:
+        name_key, acct = split_key(key)
         hit, how = None, None
         for table, label in ((by_name, "name"), (by_label, "label")):
-            hs = table.get(key)
+            hs = table.get(name_key)
             if hs:
-                cands = pref(hs)
+                cands = pref(hs, acct)
                 if len(cands) == 1:
                     hit, how = cands[0], label
                 break
@@ -333,9 +359,10 @@ def match_holdings(rows, holdings, broker=""):
             # 正式名称どうしの部分一致（末尾の「（愛称）」有無などの差を吸収する）。
             # 短い名前は誤判定のもとなので対象外にする。
             partial = [h for k, hs in by_name.items() if len(k) >= _MIN_PARTIAL_LEN
-                       and len(key) >= _MIN_PARTIAL_LEN and (k in key or key in k)
+                       and len(name_key) >= _MIN_PARTIAL_LEN
+                       and (k in name_key or name_key in k)
                        for h in hs]
-            cands = pref(partial)
+            cands = pref(partial, acct)
             if len(cands) == 1:
                 hit, how = cands[0], "partial"
         result[key] = {"watch_id": hit["watch_id"] if hit else None, "how": how}

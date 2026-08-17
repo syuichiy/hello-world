@@ -851,6 +851,9 @@ tr:hover .row-del { opacity: 1; }
 
 /* ------------------------------------------------ 表示できない保有のお知らせ */
 .skipped-card { border-style: dashed; }
+/* 口数と実額が食い違う保有の警告（取り込みミスに気づけるように、点線より強く出す） */
+.mismatch-card { border-color: var(--down-text); }
+.mismatch-card .skipped-head { color: var(--down-text); }
 .skipped-head { font-size: 13.5px; font-weight: 700; color: var(--neutral); }
 .skipped-list { margin: 8px 0 4px; padding-left: 20px; font-size: 12.5px; line-height: 1.8; }
 .skipped-list li { color: var(--ink); }
@@ -964,6 +967,12 @@ tr:hover .row-del { opacity: 1; }
 .csv-table td.num, .csv-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .csv-name { font-weight: 600; line-height: 1.35; }
 .csv-meta { display: block; font-size: 10.5px; color: var(--ink-soft); font-weight: 400; }
+/* CSVの行がどの口座のものか（同じ商品を特定/NISAの2行で持っている場合の取り違え防止） */
+.csv-acct {
+  margin-left: 6px; font-size: 10px; font-weight: 700; border-radius: 999px;
+  padding: 1px 7px; border: 1px solid var(--line); color: var(--ink-soft); white-space: nowrap;
+}
+.csv-acct-nisa { border-color: var(--accent); color: var(--accent); }
 .csv-unmatched { background: rgba(202,138,4,.06); }
 .csv-badge { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 9px; white-space: nowrap; }
 .csv-auto { background: rgba(18,131,59,.10); color: var(--up-text); border: 1px solid rgba(18,131,59,.3); }

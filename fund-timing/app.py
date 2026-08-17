@@ -1179,7 +1179,9 @@ def api_trades_import_preview():
     # 商品ごとにまとめて返す（画面では商品単位で対応づけを確認・変更する）
     groups = {}
     for r in parsed["rows"]:
-        key = broker_import.normalize_name(r["name"])
+        # 同じ商品でも口座区分（特定/NISA）が違えば別の保有に取り込む
+        key = broker_import.group_key(r)
+        name_key = broker_import.normalize_name(r["name"])
         g = groups.setdefault(key, {
             "key": key, "name": r["name"], "count": 0, "buy": 0, "sell": 0,
             "first": r["date"], "last": r["date"], "duplicates": 0,
@@ -1187,8 +1189,8 @@ def api_trades_import_preview():
             "how": matches.get(key, {}).get("how"),
             # 保有に無い場合の「追加候補」（カタログのid）と、候補の並び順（似ている順）
             "catalog_id": (None if matches.get(key, {}).get("watch_id")
-                           else suggests.get(key, {}).get("catalog_id")),
-            "catalog_order": suggests.get(key, {}).get("order", []),
+                           else suggests.get(name_key, {}).get("catalog_id")),
+            "catalog_order": suggests.get(name_key, {}).get("order", []),
             "account_type": r["account_type"], "dividend_mode": r["dividend_mode"],
         })
         g["count"] += 1
@@ -1206,6 +1208,7 @@ def api_trades_import_preview():
         "mapping_saved": bool(parsed.get("mapping_saved")),
         "holdings": [{"watch_id": h["watch_id"], "name": h.get("name") or "",
                       "label": h.get("label") or "", "broker": h.get("broker") or "",
+                      "account_type": h.get("account_type") or "taxable",
                       "kind": h.get("kind") or "fund"} for h in holdings],
         # 一覧に無い商品を、その場で追加して取り込むための候補
         "catalog": [{"catalog_id": c["id"], "name": c.get("name") or "",
@@ -1252,7 +1255,7 @@ def api_trades_import():
         return wid
 
     for r in rows:
-        key = broker_import.normalize_name(r.get("name") or "")
+        key = broker_import.group_key(r)
         raw_target = mapping.get(key)
         if not raw_target:
             skipped += 1
@@ -1410,12 +1413,14 @@ def api_actual_history():
 
     excel_dates = set()          # 実額の記録がある日付（表・合計に使う）
     result = []
+    mismatch = []                # 口数から計算した評価額と、記録されている実額が食い違う保有
     for it in holdings:
         excel = histories[it["watch_id"]]
         excel_dates.update(excel.keys())
         inv = float(it.get("invested") or 0)
         units = float(it.get("units") or 0)
         merged = {d: round(a) for d, a in excel.items()}   # 実額を優先
+        checks = []                                        # (日付, 実額, 口数から計算した額)
         kind = it.get("kind", "fund") or "fund"
         # 日付ごとの口数・取得原価（売買の記録をいまの値からさかのぼって復元）。
         # 記録が無い期間はその時点のままとみなす。
@@ -1430,6 +1435,12 @@ def api_actual_history():
                 dts, prs, _ = _apply_range(series, range_key)
                 div = 10000.0 if kind != "stock" else 1.0
                 unit_at = (lambda d: _units_at(tl, d))
+                # 取り込んだ実額（記録期間内）と「基準価額×口数」を突き合わせる（取り込みミスの検知用）。
+                # 記録期間より後の実額はアプリが口数から保存した値なので、比べても意味がない。
+                for d, p in zip(dts, prs):
+                    if (p is not None and d in excel and unit_at(d) > 0
+                            and _RECORDED_MAX_DATE and d <= _RECORDED_MAX_DATE):
+                        checks.append((d, float(excel[d]), round(p * unit_at(d) / div)))
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:
                         u = unit_at(d)
@@ -1458,6 +1469,23 @@ def api_actual_history():
                     excel_dates.add(d)
             except Exception:
                 pass
+        # 記録されている実額と、口数・売買の記録から計算した評価額が大きく食い違う場合に知らせる。
+        # 取引CSVを別口座の保有に取り込んでしまった場合など、口数が実際と数倍ずれていても
+        # 画面上は数字が並ぶだけで気づけないため（例: 実額68万円 vs 計算616万円）。
+        # しきい値は「1.8倍以上・0.55倍以下、かつ差が20万円以上」。口数を後から手で変えた
+        # 場合の多少のずれで警告が出ると、本当の取り込みミスが埋もれてしまうため。
+        if checks:
+            d0, real, calc = checks[-1]
+            r0 = (calc / real) if real > 0 else 0
+            if real > 0 and (r0 >= 1.8 or r0 <= 0.55) and abs(calc - real) >= 200000:
+                mismatch.append({
+                    "watch_id": it["watch_id"], "name": it.get("name") or "",
+                    "broker": it.get("broker") or "",
+                    "account_type": it.get("account_type") or "taxable",
+                    "date": d0, "recorded": round(real), "calculated": round(calc),
+                    "units": round(units), "ratio": round(calc / real, 2),
+                })
+
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
         # 比率は「その日の評価額 ÷ その日の投資金額」。いまの投資金額で過去まで割ると、
@@ -1567,7 +1595,7 @@ def api_actual_history():
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
                     "excel_dates": excel_dates, "range": range_key,
                     "total_invested": round(total_inv), "skipped": skipped,
-                    "sold_out": sold_out,
+                    "sold_out": sold_out, "mismatch": mismatch,
                     "totals": totals, "totals_full": totals_full})
 
 
