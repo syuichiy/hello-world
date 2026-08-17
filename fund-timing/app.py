@@ -368,44 +368,71 @@ def api_watchlist_remove():
     return jsonify({"ok": True})
 
 
-def _units_timeline(trades, current_units):
-    """「その日の時点で持っていた口数」を、いまの口数から売買をさかのぼって作る。
+def _holding_timeline(trades, current_units, current_invested=0.0, kind="fund"):
+    """「その日の時点の口数と取得原価」を、いまの値から売買をさかのぼって作る。
 
     積立のように後から買い増した場合、いまの口数で過去を計算すると
     過去の評価額まで増えてしまう（3万円の積立が、買い増した翌日から
     過去に遡って6万円になる）。日付ごとの口数を使ってそれを防ぐ。
 
+    取得原価も一緒に戻すのは、比率（評価額 ÷ 投資金額）を過去の日付で出すため。
+    いまの投資金額で過去の評価額を割ると、売る前の口数が多かった期間の比率が
+    跳ね上がってしまう（数百%の山になる）。
+
     さかのぼる向きで作るのは、売買の記録が一部しか無くても使えるようにするため。
-    記録のある増減だけを反映し、最初の記録より前は「その時点の口数のまま」とみなす
-    （記録が1件も無ければ全期間いまの口数＝従来どおり）。
-    戻り値は (最初の記録より前の口数, [(日付, その日以降の口数), ...])。
+    記録のある増減だけを反映し、最初の記録より前は「その時点のまま」とみなす
+    （記録が1件も無ければ全期間いまの口数・投資金額＝従来どおり）。
+    戻り値は ((最初の記録より前の口数, 原価), [(日付, 口数, 原価), ...])。
     """
-    agg = {}
-    for t in trades or []:
+    div = 1.0 if kind == "stock" else 10000.0
+    u = float(current_units or 0)
+    c = float(current_invested or 0)
+    items = []
+    for t in sorted(trades or [], key=lambda x: ((x.get("date") or ""), x.get("id") or 0),
+                    reverse=True):
         d = t.get("date") or ""
         n = float(t.get("units") or 0)
+        p = float(t.get("price") or 0)
+        fee = float(t.get("fee") or 0)
         if not d or n <= 0:
             continue
-        agg[d] = agg.get(d, 0.0) + (n if t.get("side") == "buy" else -n)
-    u = float(current_units or 0)
-    out = []
-    for d in sorted(agg, reverse=True):
-        out.append((d, max(0.0, u)))    # その日（売買後）の口数
-        u -= agg[d]                     # その日より前の口数
-    out.reverse()
-    return max(0.0, u), out
+        items.append((d, max(0.0, u), max(0.0, c)))     # その売買の直後（＝その日）の状態
+        if t.get("side") == "buy":
+            u -= n
+            c -= n * p / div + fee
+        else:
+            before = u + n
+            # 売却は移動平均法で原価を按分するので、さかのぼるときは口数に比例して戻す。
+            # 売り切っていて按分できないときは、その売買の単価で買っていたとみなす。
+            c = c * (before / u) if u > 0 else c + n * p / div
+            u = before
+        u, c = max(0.0, u), max(0.0, c)
+    items.reverse()
+    return (max(0.0, u), max(0.0, c)), items
 
 
 def _units_at(timeline, date):
     """その日付の時点で持っていた口数。"""
-    base, items = timeline
-    u = base
-    for d, v in items:
+    (base_u, _), items = timeline
+    u = base_u
+    for d, uu, _cc in items:
         if d <= date:
-            u = v
+            u = uu
         else:
             break
     return u
+
+
+def _basis_at(timeline, date):
+    """その日付の時点の取得原価（投資金額）。売買の記録が無ければ、いまの投資金額のまま。"""
+    (_, base_c), items = timeline
+    c = base_c
+    for d, _uu, cc in items:
+        if d <= date:
+            c = cc
+        else:
+            break
+    return c
 
 
 def _is_sold_out(pos, units):
@@ -1389,16 +1416,16 @@ def api_actual_history():
         inv = float(it.get("invested") or 0)
         units = float(it.get("units") or 0)
         merged = {d: round(a) for d, a in excel.items()}   # 実額を優先
-        # 日付ごとの口数（売買の記録をいまの口数からさかのぼって復元）。
-        # 記録が無い期間はその時点の口数のままとみなす。
-        tl = _units_timeline(trades_by_watch.get(it["watch_id"]) or [], units)
-        tl_base, tl_items = tl
+        kind = it.get("kind", "fund") or "fund"
+        # 日付ごとの口数・取得原価（売買の記録をいまの値からさかのぼって復元）。
+        # 記録が無い期間はその時点のままとみなす。
+        tl = _holding_timeline(trades_by_watch.get(it["watch_id"]) or [], units, inv, kind)
+        (tl_base_u, _), tl_items = tl
         # いまは0口でも、売る前の期間は持っていたので描く
-        had_units = units > 0 or tl_base > 0 or any(v > 0 for _, v in tl_items)
+        had_units = units > 0 or tl_base_u > 0 or any(u > 0 for _, u, _c in tl_items)
         # 口数が入っていれば、実際の基準価額×口数で「過去の価格データ」を反映（実額の無い日を補完）
         if had_units and (it.get("isin") or it.get("assoc_code")):
             try:
-                kind = it.get("kind", "fund") or "fund"
                 series = load_series(it["isin"], it["assoc_code"], it["name"], force=force, kind=kind)
                 dts, prs, _ = _apply_range(series, range_key)
                 div = 10000.0 if kind != "stock" else 1.0
@@ -1433,7 +1460,17 @@ def api_actual_history():
                 pass
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
-        ratio = [round(a / inv * 100, 2) for a in amounts] if inv > 0 else None
+        # 比率は「その日の評価額 ÷ その日の投資金額」。いまの投資金額で過去まで割ると、
+        # 売る前で口数が多かった期間の比率が跳ね上がる（数百%の山になる）。
+        basis = []
+        for d in dates:
+            b = _basis_at(tl, d)
+            if b <= 0 and inv > 0 and units > 0:
+                # 記録が足りず原価を戻しきれない日は、口数に比例させる（線を切らさない）
+                b = inv * _units_at(tl, d) / units
+            basis.append(b)
+        ratio = ([round(a / b * 100, 2) if b > 0 else None for a, b in zip(amounts, basis)]
+                 if inv > 0 else None)
         official = it.get("name") or it.get("label") or ""   # catalog（正式なファンド名）
         result.append({
             "id": it["watch_id"], "name": official,
@@ -1444,6 +1481,7 @@ def api_actual_history():
             "kind": it.get("kind", "fund") or "fund",
             "sell_policy": it.get("sell_policy", "full"),
             "invested": round(inv), "dates": dates, "amount": amounts, "ratio": ratio,
+            "basis": [round(b) for b in basis],   # その日の投資金額（比率の分母）
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })
@@ -1497,18 +1535,35 @@ def api_actual_history():
                 break
         return v
 
+    # 合計の比率も分母を日付ごとにする（その日までに持ち始めた保有の投資金額の合計）。
+    # まだ持っていない保有の投資金額まで足すと、過去の比率が実際より低く出る。
+    bmaps = []
+    for h in result:
+        bmaps.append((h["dates"][0] if h["dates"] else None,
+                      sorted((d, b) for d, b in zip(h["dates"], h["basis"]))))
+
+    def _basis_sum(d):
+        tot = 0.0
+        for first, series in bmaps:
+            if first is None or first > d:
+                continue
+            tot += _carry(series, d)
+        return tot
+
     totals = []
     for d in excel_dates:
         ssum = round(sum(_carry(s, d) for s in hmaps))
-        totals.append({"date": d, "amount": ssum,
-                       "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
+        binv = _basis_sum(d)
+        totals.append({"date": d, "amount": ssum, "invested": round(binv),
+                       "ratio": round(ssum / binv * 100, 2) if binv > 0 else None})
     # 期間(range)に応じた評価額合計の推移（全保有の日付＝graph_dates で積み上げ）。
     # excel_dates 基準の totals と違い、選択期間に合わせて長さが変わる（資産プランの推移グラフ用）。
     totals_full = []
     for d in graph_dates:
         ssum = round(sum(_carry(s, d) for s in hmaps))
-        totals_full.append({"date": d, "amount": ssum,
-                            "ratio": round(ssum / total_inv * 100, 2) if total_inv > 0 else None})
+        binv = _basis_sum(d)
+        totals_full.append({"date": d, "amount": ssum, "invested": round(binv),
+                            "ratio": round(ssum / binv * 100, 2) if binv > 0 else None})
     return jsonify({"ok": True, "holdings": result, "dates": graph_dates,
                     "excel_dates": excel_dates, "range": range_key,
                     "total_invested": round(total_inv), "skipped": skipped,
