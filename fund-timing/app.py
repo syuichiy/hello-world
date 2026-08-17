@@ -368,28 +368,39 @@ def api_watchlist_remove():
     return jsonify({"ok": True})
 
 
-def _units_timeline(trades):
-    """売買の記録から「その日の時点で持っていた口数」を作る。[(日付, 口数), ...] 古い順。
+def _units_timeline(trades, current_units):
+    """「その日の時点で持っていた口数」を、いまの口数から売買をさかのぼって作る。
 
     積立のように後から買い増した場合、いまの口数で過去を計算すると
     過去の評価額まで増えてしまう（3万円の積立が、買い増した翌日から
     過去に遡って6万円になる）。日付ごとの口数を使ってそれを防ぐ。
+
+    さかのぼる向きで作るのは、売買の記録が一部しか無くても使えるようにするため。
+    記録のある増減だけを反映し、最初の記録より前は「その時点の口数のまま」とみなす
+    （記録が1件も無ければ全期間いまの口数＝従来どおり）。
+    戻り値は (最初の記録より前の口数, [(日付, その日以降の口数), ...])。
     """
-    out, u = [], 0.0
-    for t in sorted(trades, key=lambda x: (x.get("date") or "", x.get("id") or 0)):
+    agg = {}
+    for t in trades or []:
+        d = t.get("date") or ""
         n = float(t.get("units") or 0)
-        if t.get("side") == "buy":
-            u += n
-        else:
-            u = max(0.0, u - min(n, u))
-        out.append((t.get("date") or "", u))
-    return out
+        if not d or n <= 0:
+            continue
+        agg[d] = agg.get(d, 0.0) + (n if t.get("side") == "buy" else -n)
+    u = float(current_units or 0)
+    out = []
+    for d in sorted(agg, reverse=True):
+        out.append((d, max(0.0, u)))    # その日（売買後）の口数
+        u -= agg[d]                     # その日より前の口数
+    out.reverse()
+    return max(0.0, u), out
 
 
 def _units_at(timeline, date):
-    """その日付の時点で持っていた口数。最初の売買より前なら0。"""
-    u = 0.0
-    for d, v in timeline:
+    """その日付の時点で持っていた口数。"""
+    base, items = timeline
+    u = base
+    for d, v in items:
         if d <= date:
             u = v
         else:
@@ -898,7 +909,13 @@ def api_watchlist_policy():
 
 @app.route("/api/watchlist/units", methods=["POST"])
 def api_watchlist_units():
-    """保有口数を登録する。"""
+    """保有口数を登録する。
+
+    record（日付・単価）が付いていれば、増減を「その日の売買」として記録する。
+    口数の欄は日付を持たないため、そのまま変えると「昔からこの口数だった」ことに
+    なり、金額の推移が過去に遡って書き換わる。売買として記録すると日付が入り、
+    変更した日より前の評価額はそのまま残る。
+    """
     data = request.get_json(silent=True) or {}
     watch_id = data.get("watch_id")
     if watch_id is None:
@@ -909,8 +926,58 @@ def api_watchlist_units():
         return jsonify({"ok": False, "error": "口数は数値で入力してください。"}), 400
     if units < 0:
         return jsonify({"ok": False, "error": "口数は0以上で入力してください。"}), 400
-    saved = db.set_units(int(watch_id), units)
-    return jsonify({"ok": True, "units": saved})
+
+    watch_id = int(watch_id)
+    rec = data.get("record") or None
+    it = db.get_watch(watch_id) or {}
+    kind = it.get("kind") or "fund"
+    try:
+        prev = float(data.get("prev_units") if data.get("prev_units") is not None
+                     else (it.get("units") or 0))
+    except (TypeError, ValueError):
+        prev = float(it.get("units") or 0)
+
+    saved = db.set_units(watch_id, units)
+    if not rec:
+        return jsonify({"ok": True, "units": saved, "recorded": False})
+
+    delta = units - prev
+    if abs(delta) < 1e-9:
+        return jsonify({"ok": True, "units": saved, "recorded": False,
+                        "note": "口数が変わっていないため、売買は記録しませんでした。"})
+    side = "buy" if delta > 0 else "sell"
+    try:
+        price = float(rec.get("price") or 0)
+        fee = float(rec.get("fee") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "単価・手数料は数値で入力してください。"}), 400
+    try:
+        db.add_trade(watch_id, (rec.get("date") or "").strip(), side, abs(delta), price,
+                     fee, (rec.get("note") or "口数の変更から記録").strip())
+    except (ValueError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    # 売買の記録だけで今の口数を説明できるなら、平均取得単価・取得原価も記録から計算し直す。
+    # 説明できない（昔の購入が未記録）なら、入力された口数を尊重し、投資金額は差分だけ動かす。
+    trades = db.list_trades(watch_id)
+    pos = db.trade_position(trades, kind)
+    if abs(pos["units"] - units) <= max(1.0, abs(units) * 0.01):
+        db.set_units(watch_id, pos["units"])
+        db.set_invested(watch_id, pos["cost"])
+        synced = True
+    else:
+        div = 1.0 if kind == "stock" else 10000.0
+        inv = float(it.get("invested") or 0)
+        if side == "buy":
+            inv += abs(delta) * price / div + fee
+        elif prev > 0:
+            inv = max(0.0, inv * (1 - min(1.0, abs(delta) / prev)))
+        db.set_invested(watch_id, inv)
+        synced = False
+    cur = db.get_watch(watch_id) or {}
+    return jsonify({"ok": True, "units": cur.get("units", saved), "recorded": True,
+                    "side": side, "trade_units": abs(delta),
+                    "invested": cur.get("invested"), "synced": synced})
 
 
 @app.route("/api/watchlist/invested", methods=["POST"])
@@ -1322,18 +1389,20 @@ def api_actual_history():
         inv = float(it.get("invested") or 0)
         units = float(it.get("units") or 0)
         merged = {d: round(a) for d, a in excel.items()}   # 実額を優先
+        # 日付ごとの口数（売買の記録をいまの口数からさかのぼって復元）。
+        # 記録が無い期間はその時点の口数のままとみなす。
+        tl = _units_timeline(trades_by_watch.get(it["watch_id"]) or [], units)
+        tl_base, tl_items = tl
+        # いまは0口でも、売る前の期間は持っていたので描く
+        had_units = units > 0 or tl_base > 0 or any(v > 0 for _, v in tl_items)
         # 口数が入っていれば、実際の基準価額×口数で「過去の価格データ」を反映（実額の無い日を補完）
-        if units > 0 and (it.get("isin") or it.get("assoc_code")):
+        if had_units and (it.get("isin") or it.get("assoc_code")):
             try:
                 kind = it.get("kind", "fund") or "fund"
                 series = load_series(it["isin"], it["assoc_code"], it["name"], force=force, kind=kind)
                 dts, prs, _ = _apply_range(series, range_key)
                 div = 10000.0 if kind != "stock" else 1.0
-                # 売買の記録が「いまの口数」をちょうど説明できるときは、日付ごとの口数を使う。
-                # 説明できない（履歴が一部だけ）ときは、従来どおりいまの口数で計算する。
-                tl = _units_timeline(trades_by_watch.get(it["watch_id"]) or [])
-                use_tl = bool(tl) and abs(tl[-1][1] - units) <= max(1.0, units * 0.01)
-                unit_at = (lambda d: _units_at(tl, d)) if use_tl else (lambda d: units)
+                unit_at = (lambda d: _units_at(tl, d))
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:
                         u = unit_at(d)
@@ -1349,6 +1418,12 @@ def api_actual_history():
                         continue
                     u = unit_at(d)
                     if u <= 0:
+                        # 売り切ったあとの日。以前に自動保存した評価額が残っていると
+                        # 売ったのに資産が残って見えるので、その保存分を消す
+                        # （売買の記録がある場合だけ。口数未入力と区別するため）
+                        if tl_items and d in merged:
+                            db.upsert_amount(it["watch_id"], d, 0)
+                            merged.pop(d, None)
                         continue
                     val = round(p * u / div)
                     _persist_today_value(it["watch_id"], d, val)

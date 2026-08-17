@@ -151,6 +151,33 @@
         </div>
       </div>
 
+      <!-- 口数を変えたときに、その増減を売買として記録するか確認する -->
+      <div class="modal-backdrop" id="units-modal" hidden>
+        <div class="modal-panel units-panel" role="dialog" aria-labelledby="units-rec-title">
+          <div class="modal-head">
+            <h2 id="units-rec-title">📝 売買として記録しますか？</h2>
+            <button class="modal-close" id="units-rec-close" type="button" title="閉じる">✕</button>
+          </div>
+          <p class="modal-sub" id="units-rec-fund"></p>
+          <p class="units-rec-diff" id="units-rec-diff"></p>
+          <div class="trade-fields">
+            <label class="plan-label">日付
+              <input id="units-rec-date" type="date" class="plan-input"></label>
+            <label class="plan-label" id="units-rec-price-label">基準価額（円）
+              <input id="units-rec-price" type="text" inputmode="numeric" class="plan-input"></label>
+            <label class="plan-label">手数料（円）
+              <input id="units-rec-fee" type="text" inputmode="numeric" class="plan-input plan-input-sm" placeholder="0"></label>
+          </div>
+          <p class="hint" id="units-rec-amount"></p>
+          <div class="trade-actions">
+            <button type="button" id="units-rec-save">売買として記録する</button>
+            <button type="button" class="ghost-btn" id="units-rec-skip">口数だけ変更する</button>
+          </div>
+          <p class="hint">記録すると<strong>日付が入る</strong>ので、📋 金額の推移は<strong>変更した日より前が書き換わりません</strong>。
+            記録しない場合は「昔からこの口数だった」ものとして過去まで計算されます（買い増した金額が過去にも反映されます）。</p>
+        </div>
+      </div>
+
       <!-- 注目の投信ランキング（テクニカル） -->
       <div class="card ranking-card">
         <div class="ranking-head">

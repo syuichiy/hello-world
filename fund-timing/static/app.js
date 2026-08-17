@@ -874,6 +874,89 @@ async function saveUnits(watchId, units) {
   }
 }
 
+// 口数の変更を「売買」として記録するか確認する
+// 口数の欄は日付を持たないため、そのまま変えると「昔からこの口数だった」ことになり、
+// 金額の推移が過去に遡って書き換わる。売買として記録すれば日付が入り、過去は動かない。
+let unitsRec = null;   // { watchId, prev, units, kind, name }
+
+function openUnitsRecord(s, prev, units) {
+  unitsRec = { watchId: s.watch_id, prev, units, kind: s.kind };
+  const isStock = s.kind === "stock";
+  const lbl = isStock ? "株" : "口";
+  const d = units - prev;
+  $("units-rec-fund").textContent = s.name || "";
+  $("units-rec-diff").innerHTML =
+    `${fmtInt(prev)} ${lbl} → <b>${fmtInt(units)} ${lbl}</b>　`
+    + `<span class="${d > 0 ? "up" : "down"}">${d > 0 ? "購入" : "売却"} ${fmtInt(Math.abs(d))} ${lbl}</span>`;
+  $("units-rec-price-label").childNodes[0].nodeValue = isStock ? "株価（円）" : "基準価額（円）";
+  $("units-rec-date").value = new Date().toISOString().slice(0, 10);
+  $("units-rec-price").value = s.latest_price != null ? String(Math.round(s.latest_price)) : "";
+  $("units-rec-fee").value = "";
+  updateUnitsRecAmount();
+  $("units-modal").hidden = false;
+}
+
+function closeUnitsModal() {
+  $("units-modal").hidden = true;
+  unitsRec = null;
+}
+
+function updateUnitsRecAmount() {
+  if (!unitsRec) return;
+  const u = Math.abs(unitsRec.units - unitsRec.prev);
+  const p = parseNumComma($("units-rec-price").value);
+  const div = unitsRec.kind === "stock" ? 1 : 10000;
+  $("units-rec-amount").textContent = (u > 0 && p > 0)
+    ? `受渡金額の目安：約 ${Math.round(u * p / div).toLocaleString()} 円`
+      + `（この金額を投資金額に${unitsRec.units > unitsRec.prev ? "足します" : "反映します"}）`
+    : "";
+}
+
+// 口数が変わったら、まず入力どおり保存し、増減があれば記録するか尋ねる
+async function onUnitsChanged(watchId, units) {
+  const s = lastSummaries.find((x) => String(x.watch_id) === String(watchId));
+  const prev = Number(s ? s.units : 0) || 0;
+  await saveUnits(watchId, units);
+  if (s && Math.abs(units - prev) > 0) openUnitsRecord(s, prev, units);
+}
+
+$("units-rec-price").addEventListener("input", updateUnitsRecAmount);
+$("units-rec-close").addEventListener("click", closeUnitsModal);
+$("units-rec-skip").addEventListener("click", () => {
+  closeUnitsModal();
+  toast("口数だけ変更しました（過去の評価額も新しい口数で計算されます）");
+});
+$("units-modal").addEventListener("click", (e) => {
+  if (e.target === $("units-modal")) closeUnitsModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("units-modal").hidden) closeUnitsModal();
+});
+$("units-rec-save").addEventListener("click", async () => {
+  if (!unitsRec) return;
+  const body = {
+    watch_id: Number(unitsRec.watchId), units: unitsRec.units, prev_units: unitsRec.prev,
+    record: {
+      date: $("units-rec-date").value,
+      price: parseNumComma($("units-rec-price").value),
+      fee: parseNumComma($("units-rec-fee").value),
+      note: "口数の変更から記録",
+    },
+  };
+  try {
+    const d = await (await fetch("/api/watchlist/units", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    })).json();
+    if (!d.ok) { toast(d.error || "記録に失敗しました", "error"); return; }
+    closeUnitsModal();
+    toast(`✓ ${d.side === "buy" ? "購入" : "売却"}として記録しました`);
+    loadWatchlist();
+    if (currentView === "price") loadPriceHistory();
+  } catch (e) {
+    toast("通信エラー: " + e.message, "error");
+  }
+});
+
 // 投資金額（元本）の保存 ※保有行(watch_id)単位
 async function saveInvested(watchId, invested) {
   try {
@@ -1873,7 +1956,7 @@ $("watch-body").addEventListener("input", (e) => {
 // 口数・投資金額・売却属性・証券会社の確定（フォーカスを外す/Enter）※保有行(watch_id)単位
 $("watch-body").addEventListener("change", (e) => {
   const units = e.target.closest(".units-input");
-  if (units) { clearTimeout(fieldSaveTimer); pendingSave = null; saveUnits(units.dataset.watch, parseIntComma(units.value)); return; }
+  if (units) { clearTimeout(fieldSaveTimer); pendingSave = null; onUnitsChanged(units.dataset.watch, parseIntComma(units.value)); return; }
   const inv = e.target.closest(".invested-input");
   if (inv) { clearTimeout(fieldSaveTimer); pendingSave = null; saveInvested(inv.dataset.watch, parseIntComma(inv.value)); return; }
   const pol = e.target.closest(".policy-select");

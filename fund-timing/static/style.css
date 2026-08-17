@@ -797,6 +797,17 @@ tr:hover .row-del { opacity: 1; }
 }
 .trade-actions .hint { margin: 0; }
 
+/* 口数の変更を売買として記録するか尋ねるダイアログ */
+.units-panel { max-width: 560px; }
+.units-rec-diff {
+  margin: 0 0 14px; font-size: 15px; font-weight: 700;
+  background: var(--soft, rgba(91,91,214,.08)); border-radius: 10px; padding: 10px 12px;
+}
+.units-panel .trade-actions .ghost-btn {
+  background: var(--card); color: var(--ink-soft); border: 1px solid var(--line);
+  box-shadow: none; font-weight: 600;
+}
+
 .trade-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; }
 .trade-table th, .trade-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 .trade-table th { font-size: 11px; color: var(--ink-soft); font-weight: 700; white-space: nowrap; }
