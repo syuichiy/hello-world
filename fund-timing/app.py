@@ -368,6 +368,35 @@ def api_watchlist_remove():
     return jsonify({"ok": True})
 
 
+def _units_timeline(trades):
+    """売買の記録から「その日の時点で持っていた口数」を作る。[(日付, 口数), ...] 古い順。
+
+    積立のように後から買い増した場合、いまの口数で過去を計算すると
+    過去の評価額まで増えてしまう（3万円の積立が、買い増した翌日から
+    過去に遡って6万円になる）。日付ごとの口数を使ってそれを防ぐ。
+    """
+    out, u = [], 0.0
+    for t in sorted(trades, key=lambda x: (x.get("date") or "", x.get("id") or 0)):
+        n = float(t.get("units") or 0)
+        if t.get("side") == "buy":
+            u += n
+        else:
+            u = max(0.0, u - min(n, u))
+        out.append((t.get("date") or "", u))
+    return out
+
+
+def _units_at(timeline, date):
+    """その日付の時点で持っていた口数。最初の売買より前なら0。"""
+    u = 0.0
+    for d, v in timeline:
+        if d <= date:
+            u = v
+        else:
+            break
+    return u
+
+
 def _is_sold_out(pos, units):
     """全額売却済みか。買った記録があり、売り切って口数が残っていない状態を指す。
 
@@ -1244,6 +1273,9 @@ def api_actual_history():
     force = request.args.get("force") in ("1", "true", "yes")
     watch = db.list_watchlist()
     histories = db.get_all_amount_histories()
+    trades_by_watch = {}
+    for t in db.list_trades():
+        trades_by_watch.setdefault(t["watch_id"], []).append(t)
     # 全額売却済みの保有はグラフ・表から外す（もう持っていないため）。
     # 実現損益は残るので、件数と合計を別に返して画面で知らせる。
     sold_ids = _sold_out_ids()
@@ -1296,11 +1328,17 @@ def api_actual_history():
                 kind = it.get("kind", "fund") or "fund"
                 series = load_series(it["isin"], it["assoc_code"], it["name"], force=force, kind=kind)
                 dts, prs, _ = _apply_range(series, range_key)
-                # 評価額 = 投信:基準価額×口数÷10000 / 株:株価×株数
-                factor = units / (10000.0 if kind != "stock" else 1.0)
+                div = 10000.0 if kind != "stock" else 1.0
+                # 売買の記録が「いまの口数」をちょうど説明できるときは、日付ごとの口数を使う。
+                # 説明できない（履歴が一部だけ）ときは、従来どおりいまの口数で計算する。
+                tl = _units_timeline(trades_by_watch.get(it["watch_id"]) or [])
+                use_tl = bool(tl) and abs(tl[-1][1] - units) <= max(1.0, units * 0.01)
+                unit_at = (lambda d: _units_at(tl, d)) if use_tl else (lambda d: units)
                 for d, p in zip(dts, prs):
                     if p is not None and d not in merged:
-                        merged[d] = round(p * factor)
+                        u = unit_at(d)
+                        if u > 0:            # まだ持っていない日は空欄にする（0を書かない）
+                            merged[d] = round(p * u / div)
                 # 記録期間より後の営業日はすべて表・合計に反映＆保存する。
                 # （単に最新日だけでなく、昨日など直近の営業日や、アプリを起動しなかった
                 #   日も基準価額の履歴からさかのぼって補完する）
@@ -1309,7 +1347,10 @@ def api_actual_history():
                         continue
                     if _RECORDED_MAX_DATE and d <= _RECORDED_MAX_DATE:
                         continue
-                    val = round(p * factor)
+                    u = unit_at(d)
+                    if u <= 0:
+                        continue
+                    val = round(p * u / div)
                     _persist_today_value(it["watch_id"], d, val)
                     merged[d] = val
                     excel_dates.add(d)
