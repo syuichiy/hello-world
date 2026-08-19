@@ -311,9 +311,11 @@ def plotly_js():
 def api_search():
     q = request.args.get("q", "")
     results = db.search_catalog(q, limit=30)
-    watched = {w["id"] for w in db.list_watchlist()}
+    # 売却済みの保有しか無い商品は「保有中」にしない（買い直しのときに紛らわしいため）
+    active, sold_only = _watched_catalog_ids()
     for r in results:
-        r["watched"] = r["id"] in watched
+        r["watched"] = r["id"] in active
+        r["sold_out"] = r["id"] in sold_only
     return jsonify({"ok": True, "results": results})
 
 
@@ -443,6 +445,19 @@ def _is_sold_out(pos, units):
     """
     return bool(pos and (pos.get("buy_amount") or 0) > 0
                 and (pos.get("units") or 0) <= 0 and float(units or 0) <= 0)
+
+
+def _watched_catalog_ids():
+    """(いま持っている商品のカタログid, 売り切っただけの商品のカタログid) を返す。
+
+    検索・ランキングの「追加済み」判定に使う。全額売却済みの保有しか無い商品は
+    もう持っていないので「追加済み」にせず、買い直したときに再び追加できるようにする。
+    """
+    sold = _sold_out_ids()
+    active, sold_only = set(), set()
+    for w in db.list_watchlist():
+        (sold_only if w["watch_id"] in sold else active).add(w["id"])
+    return active, (sold_only - active)
 
 
 def _sold_out_ids():
@@ -909,7 +924,7 @@ def api_watchlist_broker():
 def api_catalog_list():
     """内蔵＋登録済みの全商品を、資産クラス付き・追加済みフラグ付きで返す。
     ポートフォリオ画面の「プリセット商品を追加」一覧で使う。"""
-    watched = {w["id"] for w in db.list_watchlist()}
+    active, sold_only = _watched_catalog_ids()
     items = []
     for r in db.list_catalog():
         items.append({
@@ -917,7 +932,8 @@ def api_catalog_list():
             "category": r.get("category", ""),
             "asset_class": r.get("asset_class", "") or "",
             "kind": r.get("kind", "fund") or "fund",
-            "watched": r["id"] in watched,
+            "watched": r["id"] in active,
+            "sold_out": r["id"] in sold_only,
         })
     return jsonify({"ok": True, "items": items, "brokers": seed_funds.BROKERS})
 
@@ -1763,12 +1779,14 @@ def api_ranking():
     """
     range_key = request.args.get("range", "1y")
     force = request.args.get("force") in ("1", "true", "yes")
-    watched = {w["id"] for w in db.list_watchlist()}
+    # 全額売却済みの保有しか無い商品は「追加済み」にせず、また追加できるようにする
+    active, sold_only = _watched_catalog_ids()
     rows = db.search_catalog("", limit=500)
     summaries = []
     for row in rows:
         s = _summarize_fund(row, range_key, force)
-        s["in_watchlist"] = row["id"] in watched
+        s["in_watchlist"] = row["id"] in active
+        s["sold_out_only"] = row["id"] in sold_only
         summaries.append(s)
     ok = [s for s in summaries if s.get("ok")]
     ok.sort(key=lambda x: (x.get("score") or -999), reverse=True)

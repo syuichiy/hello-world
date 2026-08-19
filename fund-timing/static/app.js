@@ -1322,8 +1322,12 @@ function renderRanking(items) {
     const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
     const chg = s.change_pct == null ? "—"
       : `<span class="${s.change_pct >= 0 ? 'up' : 'down'}">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>`;
+    // 売り切った商品は「追加済み」にせず、買い直せるように再追加のボタンを出す
     const action = s.in_watchlist
       ? '<span class="si-added">✓ 追加済</span>'
+      : s.sold_out_only
+      ? `<span class="si-sold">売却済み</span>`
+        + `<button class="si-add rank-add" data-id="${s.catalog_id}" data-again="1">＋ 再び追加</button>`
       : `<button class="si-add rank-add" data-id="${s.catalog_id}">＋ 追加</button>`;
     return `<tr class="rank-row" data-id="${s.catalog_id}">
       <td class="rank-no">${medal}</td>
@@ -1373,8 +1377,9 @@ async function doSearch() {
     <div class="search-item">
       <div class="si-text"><div class="si-name">${escapeHtml(r.name)}</div>
         <div class="si-sub">${classChip(r.asset_class)}${escapeHtml(r.category || "")} ${escapeHtml(r.isin)}</div></div>
-      ${r.watched ? '<span class="si-added">保有中</span>' : ''}
-      <button class="si-add" data-id="${r.id}">＋ ${r.watched ? "追加" : "一覧に追加"}</button>
+      ${r.watched ? '<span class="si-added">保有中</span>'
+        : r.sold_out ? '<span class="si-sold">売却済み</span>' : ''}
+      <button class="si-add" data-id="${r.id}"${r.sold_out ? ' data-again="1"' : ''}>＋ ${r.watched ? "追加" : r.sold_out ? "再び追加" : "一覧に追加"}</button>
     </div>`).join("");
   box.hidden = false;
   searchSel = -1;
@@ -1709,7 +1714,8 @@ document.addEventListener("keydown", (e) => {
 
 $("search-results").addEventListener("click", (e) => {
   const add = e.target.closest(".si-add");
-  if (add) addToWatch(add.dataset.id);
+  // 売り切った商品の買い直しは、確認なしで新しい保有として追加する
+  if (add) addToWatch(add.dataset.id, add.dataset.again === "1");
 });
 
 $("show-register").addEventListener("click", () => {
@@ -2096,7 +2102,9 @@ $("ranking-body").addEventListener("click", (e) => {
   const add = e.target.closest(".rank-add");
   if (add) {
     e.stopPropagation();
-    addToWatch(add.dataset.id).then(loadRanking);
+    // 売り切った商品の買い直しは、確認なしで新しい保有として追加する
+    // （売却済みの記録は実現損益として残したいので、そちらは触らない）
+    addToWatch(add.dataset.id, add.dataset.again === "1").then(loadRanking);
     return;
   }
   const row = e.target.closest("tr[data-id]");
