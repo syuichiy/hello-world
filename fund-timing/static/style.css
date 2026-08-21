@@ -957,6 +957,9 @@ tr:hover .row-del { opacity: 1; }
 /* 年金（収入）・小計・生活費（総計）を内訳と区別する */
 .draw-pen { background: rgba(28,150,90,.06); }
 .draw-div { background: rgba(202,138,4,.07); }
+/* 資産残高（フローではなくストックなので、区切り線を入れて右端に置く） */
+.draw-bal { border-left: 2px solid var(--line); }
+.draw-bal b { color: var(--accent); }
 .draw-sub { background: rgba(91,91,214,.04); }
 .draw-total { background: rgba(91,91,214,.09); }
 .draw-total b { color: var(--ink); }

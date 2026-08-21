@@ -2967,11 +2967,21 @@ function renderStrategy() {
   const penYears = Math.max(0, 100 - Math.ceil(a.lp.penAge));
   const penReal = (Math.pow((1 + (a.lp.penGrow != null ? a.lp.penGrow : a.lp.infl))
                             / (1 + a.lp.infl), penYears) - 1) * 100;
+  // 資産残高：その年齢になった時点の合計（現金＋債券＋投信・株、税引後）。
+  // 取り崩し額だけでは「あといくら残っているのか」が見えないため、右端に添える。
+  const balCell = (g) => {
+    const b = balAtAge(curPath, g);
+    if (!b) return '<td class="num draw-none draw-bal">—</td>';
+    const v = drawTableReal ? b.real : b.nominal;
+    return `<td class="num draw-cell draw-bal"><b>${Math.round(v / 10000).toLocaleString()}</b>`
+      + `<span class="draw-year">万円</span></td>`;
+  };
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
     const d = drawAtAge(curPath, g);
-    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}</tr>`;
+    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}`
+      + `${balCell(g)}</tr>`;
   }).join("");
 
   // ── ② 値動きのブレを含めた成功確率 ────────────────────────────────
@@ -2994,7 +3004,8 @@ function renderStrategy() {
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
       <thead><tr><th>年齢</th>${srcCols.map(([, label, c]) =>
-        `<th class="num ${c}">${label}</th>`).join("")}</tr></thead>
+        `<th class="num ${c}">${label}</th>`).join("")}
+        <th class="num draw-bal">資産残高<br><small>（年初・万円）</small></th></tr></thead>
       <tbody>${drawRows}</tbody></table></div>
     <p class="hint"><strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
       になるように並べています（「取り崩し計」は年金以外の小計＝資産から出る額）。
@@ -3009,6 +3020,8 @@ function renderStrategy() {
                 これがマクロ経済スライドの効果そのものです。`
              : ""}`
         : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
+      右端の<strong>資産残高</strong>は、その年齢になった時点（年初）の合計
+      （現金＋債券＋投信・株、特定口座の含み益にかかる税を引いた後）です。
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
       退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>、
       資産寿命は<strong>${ageOf(curPath)}</strong>（値動きのブレなし）です。</p>
@@ -3835,6 +3848,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
     // 今日の価値に直すときは同じ月の inflNow で割る。
     let drawM = null, dCash = 0, dBonds = 0, dFund = 0, dDiv = 0, inflNow = 1;
+    let balBefore = null;        // その月に取り崩す前の残高（年齢ごとの表の「資産残高」に使う）
     // その月に受け取った分配金・配当（税引後）のうち、まだ生活費に充てていない分。
     // 月をまたいで残った分はもう手元の現金なので、翌月以降は「現金」として数える。
     // （そうしないと積立期に貯まった分配金が退職直後にまとめて計上され、
@@ -3874,6 +3888,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       if (toTax > 0) { taxV += toTax; taxB += toTax; }
     } else {
       const bal = fundAT() + cash + bonds;         // 取り崩し前の総資産（税引後）
+      balBefore = bal;
       const inflF = Math.pow(1 + lp.infl, m / 12);
       // 引出率は「今日の価値」で比べる。生活費(lp.spend/guardSpend)は今日の価値、
       // 資産(bal)は名目なので、資産側を inflF で割って基準を揃える。
@@ -3943,6 +3958,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
       }
     }
     const pt = snap(age, dt);
+    // 年齢ごとの表に「資産残高」を出すため、積立期も含めて全ての月にインフレ係数を持たせる
+    // （drawM が null の月は inflF を計算していないので、ここで別に持つ）
+    pt.inflAll = Math.pow(1 + lp.infl, m / 12);
+    if (balBefore != null) pt.balBefore = Math.round(balBefore);
     if (drawM != null) {
       pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
       pt.drawDiv = dDiv; pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
@@ -3987,6 +4006,20 @@ function drawAtAge(path, age) {
   };
   return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund"),
            div: of("drawDiv"), pension: of("drawPen"), living: of("living") };
+}
+
+// その年齢になった時点（年初）の資産残高。年齢ごとの表の「資産残高」列に使う。
+// 取り崩し額（その年に出ていくお金）だけでは、資産が今いくら残っているのかが分からないため。
+function balAtAge(path, age) {
+  const pts = path.pts || [];
+  const i = pts.findIndex((p) => p.age >= age - 1e-6);
+  if (i < 0) return null;                  // 枯渇してその年齢まで届いていない
+  const q = pts[i];
+  // その月に取り崩す前の残高を使う（退職年齢の行が本文の「退職時の想定資産」と一致する）。
+  // 取り崩しの無い月（退職前）は前月末の残高。
+  const v = (q.balBefore != null) ? q.balBefore : pts[i > 0 ? i - 1 : 0].v;
+  const f = q.inflAll || 1;
+  return { nominal: v, real: v / f, cash: q.cash, bonds: q.bonds, fund: q.fund };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
