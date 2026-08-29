@@ -2262,6 +2262,91 @@ def api_watchlist_dividend_mode():
 
 
 # 積立シミュレーション・分配金・目標(FIRE)進捗のための設定と現況を返す。
+@app.route("/api/withdraw-plan", methods=["POST"])
+def api_withdraw_plan():
+    """「今年の取り崩し指示書」：売る必要のある金額を、どの保有からいくら売るかに割り当てる。
+
+    試算（取り崩し戦略）は資産をひとかたまりで扱うが、実際に売るときは
+    「どの口座のどの商品を、いくら」まで決める必要がある。同じ画面の中で
+    迷わないよう、リバランスと同じ売却ルールで割り当てる：
+
+      1. NISAは温存し、課税される特定口座から先に売る
+      2. 「売却不可」の保有は売らない。「一部売却可」は評価額の50%まで
+      3. 同じ口座の中では 売り時（高値圏）→ 中立 → 安値圏 の順に売る
+      4. 譲渡益税は「売却額 × 含み益の割合 × 税率」で概算する（特定口座のみ）
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        amount = max(0.0, float(data.get("amount") or 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "金額は数値で指定してください。"}), 400
+
+    plan = db.get_setting("plan", {}) or {}
+    t_rate = (plan.get("tax") if plan.get("tax") is not None else 20.315) / 100.0
+    summaries = [s for s in _build_summaries("1y", force=False)
+                 if s.get("ok") and not s.get("sold_out") and (s.get("value") or 0) > 0]
+
+    excluded, cands = [], []
+    for s in summaries:
+        policy = s.get("sell_policy") or "full"
+        val = float(s.get("value") or 0)
+        if policy == "locked":
+            excluded.append({"watch_id": s["watch_id"], "name": s.get("name") or "",
+                             "broker": s.get("broker") or "", "value": round(val),
+                             "reason": "🔒 売却不可に設定されています"})
+            continue
+        cap = PARTIAL_SELL_RATIO if policy == "partial" else 1.0
+        ts = _timing_score(s)
+        timing, timing_label = _sell_timing(ts)
+        inv = float(s.get("invested") or 0)
+        gain_ratio = max(0.0, min(1.0, (val - inv) / val)) if val > 0 else 0.0
+        cands.append({
+            "watch_id": s["watch_id"], "name": s.get("name") or "",
+            "broker": s.get("broker") or "", "account_type": s.get("account_type") or "taxable",
+            "kind": s.get("kind") or "fund", "value": val, "invested": inv,
+            "sellable": val * cap, "policy": policy,
+            "gain_ratio": gain_ratio, "timing": timing, "timing_label": timing_label,
+            "ts": ts,
+        })
+
+    # NISA温存：特定口座を先に、同じ口座では売り時（tsが小さい＝過熱）から売る
+    order = {"good": 0, "neutral": 1, "bad": 2}
+    cands.sort(key=lambda c: (0 if c["account_type"] != "nisa" else 1,
+                              order.get(c["timing"], 1), -c["value"]))
+
+    left = amount
+    rows = []
+    for c in cands:
+        if left <= 0:
+            break
+        take = min(c["sellable"], left)
+        if take <= 0:
+            continue
+        left -= take
+        gain = take * c["gain_ratio"]
+        tax = 0.0 if c["account_type"] == "nisa" else gain * t_rate
+        rows.append({
+            "watch_id": c["watch_id"], "name": c["name"], "broker": c["broker"],
+            "account_type": c["account_type"], "kind": c["kind"],
+            "sell": round(take), "value": round(c["value"]), "invested": round(c["invested"]),
+            "gain": round(gain), "tax": round(tax), "net": round(take - tax),
+            "after": round(c["value"] - take), "policy": c["policy"],
+            "timing": c["timing"], "timing_label": c["timing_label"],
+            "gain_pct": round(c["gain_ratio"] * 100, 1),
+        })
+
+    tax_total = sum(r["tax"] for r in rows)
+    return jsonify({"ok": True, "amount": round(amount),
+                    "rows": rows, "excluded": excluded,
+                    "sell_total": round(sum(r["sell"] for r in rows)),
+                    "tax_total": round(tax_total),
+                    "net_total": round(sum(r["net"] for r in rows)),
+                    "short": round(max(0.0, left)),
+                    "tax_rate": round(t_rate * 100, 3),
+                    "nisa_used": round(sum(r["sell"] for r in rows
+                                           if r["account_type"] == "nisa"))})
+
+
 @app.route("/api/plan", methods=["GET", "POST"])
 def api_plan():
     if request.method == "POST":
@@ -2275,7 +2360,10 @@ def api_plan():
                   # ガードレール運用の記録：基準の引出率(%)と、いま採用している生活費(月額)
                   "guard_base_rate", "guard_spend",
                   # 年金の改定はインフレより抑えられる（マクロ経済スライド）
-                  "pension_slide"):
+                  "pension_slide",
+                  # 退職一時金（受け取る年齢・金額）と企業年金（開始年齢・月額・受給年数）
+                  "lump_age", "lump_amount",
+                  "corp_pension_age", "corp_pension_monthly", "corp_pension_years"):
             if k in data:
                 try:
                     plan[k] = float(data.get(k) or 0)
@@ -2304,6 +2392,10 @@ def api_plan():
             "watch_id": s["watch_id"], "name": s.get("name"),
             "account": s.get("account") or "", "broker": s.get("broker") or "",
             "value": round(val), "account_type": s.get("account_type") or "taxable",
+            # 「今年の取り崩し指示書」で、どれをいくら売るか・概算税を出すために使う
+            "invested": round(inv), "sell_policy": s.get("sell_policy") or "full",
+            "kind": s.get("kind") or "fund", "score": s.get("score"),
+            "verdict": s.get("verdict") or "",
         })
         total_value += val
         total_invested += inv

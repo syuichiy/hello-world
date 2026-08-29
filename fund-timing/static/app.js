@@ -2152,6 +2152,12 @@ async function loadSettings() {
   $("set-draw-method").value = pl.draw_method || "fixed";
   $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
   $("set-conc-keep").value = pl.conc_keep != null ? pl.conc_keep : 100;
+  $("set-lump-age").value = pl.lump_age || "";
+  $("set-lump-amount").value = fmtInt(pl.lump_amount || 0);
+  $("set-corp-pension-age").value = pl.corp_pension_age || "";
+  $("set-corp-pension-monthly").value = fmtInt(pl.corp_pension_monthly || 0);
+  $("set-corp-pension-years").value = pl.corp_pension_years != null ? pl.corp_pension_years : "";
+  renderRetireIncomeNotes();
   renderEmFloorNote();
   renderConcKeepNote();
   renderPensionSlideNote();
@@ -2533,6 +2539,7 @@ function bindPremise(id, key, comma) {
     renderEmFloorNote();   // 生活防衛資金は現金・生活費・月数のどれを変えても結果が変わる
     renderConcKeepNote();
     renderPensionSlideNote();
+    renderRetireIncomeNotes();
   });
 }
 
@@ -2631,6 +2638,36 @@ bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
 bindPremise("set-draw-rate", "draw_rate", false);
 bindPremise("set-conc-keep", "conc_keep", false);
+bindPremise("set-lump-age", "lump_age", false);
+bindPremise("set-lump-amount", "lump_amount", true);
+bindPremise("set-corp-pension-age", "corp_pension_age", false);
+bindPremise("set-corp-pension-monthly", "corp_pension_monthly", true);
+bindPremise("set-corp-pension-years", "corp_pension_years", false);
+
+// 退職一時金・企業年金の入力補助（受け取り方で試算がどう変わるかを一言で示す）
+function renderRetireIncomeNotes() {
+  const p = planData.plan || {};
+  const yen = (n) => Math.round(n).toLocaleString() + "円";
+  const lump = $("lump-note");
+  if (lump) {
+    const amt = +p.lump_amount || 0, age = +p.lump_age || 0;
+    lump.textContent = amt > 0
+      ? (age > 0 ? `${age}歳で受け取り、現金に加えて計算します（生活費はまずこの現金から使います）。`
+                 : "受け取る年齢を入れると、その時点の現金に加えて計算します。")
+      : "退職金を一時金で受け取る場合に入力します（企業年金として受け取る分は下の欄へ）。";
+  }
+  const corp = $("corp-pension-note");
+  if (corp) {
+    const mo = +p.corp_pension_monthly || 0, age = +p.corp_pension_age || 0;
+    const yrs = +p.corp_pension_years || 0;
+    corp.textContent = mo > 0
+      ? (age > 0
+        ? `${age}歳から${yrs > 0 ? `${yrs}年間` : "終身"}・月 ${yen(mo)}（年 ${yen(mo * 12)}）。`
+          + "公的年金と違いインフレでは増えない前提で計算します。"
+        : "開始年齢を入れると計算に反映します。")
+      : "0のままなら企業年金なしとして計算します。";
+  }
+}
 $("set-draw-method").addEventListener("change", (e) => savePlan({ draw_method: e.target.value }));
 
 // ============================================================ 資産プラン
@@ -2783,7 +2820,19 @@ function renderCashAdvice() {
   const retire = +p.retire_age || 0, pen = +p.pension_age || 0;
   const gapMonths = (retire && pen > retire) ? Math.round((pen - retire) * 12) : 0;
   const emergency = spend * emMonths;                        // ①
-  const gapCushion = spend * gapMonths;                      // ③
+  // ③無年金期間：企業年金を受け取っている間はそのぶん自前で用意する額が減る。
+  // 退職一時金をその期間に受け取るなら、それも充当できる。
+  const cpen = +p.corp_pension_monthly || 0, cpenAge = +p.corp_pension_age || 0;
+  const cpenYears = +p.corp_pension_years || 0;
+  let cpenGap = 0;                                           // 無年金期間に受け取る企業年金の合計
+  for (let i = 0; i < gapMonths; i++) {
+    const ageAt = retire + i / 12;
+    if (cpen > 0 && cpenAge > 0 && ageAt >= cpenAge
+        && (cpenYears <= 0 || ageAt < cpenAge + cpenYears)) cpenGap += cpen;
+  }
+  const lumpAmt = +p.lump_amount || 0, lumpAge = +p.lump_age || 0;
+  const lumpInGap = (lumpAmt > 0 && lumpAge > 0 && lumpAge <= pen) ? lumpAmt : 0;
+  const gapCushion = Math.max(0, spend * gapMonths - cpenGap - lumpInGap);   // ③
   const nowTotal = emergency + nearTerm;                     // 今すぐ手元に置きたい（①＋②）
   const cash = p.cash || 0, bonds = p.bonds || 0, reserve = cash + bonds;
   const yen = (n) => Math.round(n).toLocaleString() + " 円";
@@ -2796,8 +2845,11 @@ function renderCashAdvice() {
   if (nearTerm > 0) html += row("② 数年内に使う予定額", "設定値", nearTerm);
   html += row("今すぐ手元に置きたい目安（①＋②）", "", nowTotal, "cash-adv-total");
   if (gapMonths > 0) {
+    const gapSub = `生活費 ${yen(spend)} × ${gapMonths}ヶ月（${retire}→${pen}歳・公的年金なしの期間）`
+      + (cpenGap > 0 ? ` − 企業年金 ${yen(cpenGap)}` : "")
+      + (lumpInGap > 0 ? ` − 退職一時金 ${yen(lumpInGap)}` : "");
     html += row("③ 退職〜年金の無年金クッション<span class=\"cash-adv-tag\">退職時までに</span>",
-      `生活費 ${yen(spend)} × ${gapMonths}ヶ月（${retire}→${pen}歳・年金なしの生活費）`, gapCushion);
+      gapSub, gapCushion);
     html += row("退職時までに用意したい目安（①＋②＋③）", "", nowTotal + gapCushion, "cash-adv-total cash-adv-total-2");
   }
   html += '</div>';
@@ -2895,6 +2947,11 @@ function renderStrategyPremise() {
       + ((p.draw_method === "percent") ? `（年${p.draw_rate != null ? p.draw_rate : 4}%）` : "")],
     ["退職", `${lp.retire}歳`],
     ["年金", `${lp.penAge}歳〜 ${man(lp.pension)}/月（改定 年${(lp.penGrow * 100).toFixed(1)}%）`],
+    ...(lp.cpen > 0 && lp.cpenAge > 0
+      ? [["企業年金", `${lp.cpenAge}歳〜${lp.cpenYears > 0 ? `${lp.cpenYears}年` : "終身"} `
+                      + `${man(lp.cpen)}/月（増額なし）`]] : []),
+    ...(lp.lump > 0 && lp.lumpAge > 0
+      ? [["退職一時金", `${lp.lumpAge}歳 ${man(lp.lump)}`]] : []),
     ["生活費", `${man(lp.spend)}/月`],
     // 実際に計算へ使う年利を出す（AI予測をオンにしていると設定値ではなくAIの値になる）
     ["想定年利", lastLifeArgs
@@ -2945,8 +3002,11 @@ function renderStrategy() {
     ages.push(penAge); ages.sort((x, y) => x - y);
   }
   // 年金＋出どころ（現金・債券・分配金・投信）＝生活費、と左から右へ足し上がるように並べる
+  // 企業年金を設定していれば、公的年金と分けて見せる（増え方が違うため）
+  const hasCpen = !!(a.lp.cpen > 0 && a.lp.cpenAge > 0);
   const srcCols = [
-    ["pension", "年金", "draw-pen"],
+    hasCpen ? ["pubPension", "公的年金", "draw-pen"] : ["pension", "年金", "draw-pen"],
+    ...(hasCpen ? [["cpen", "企業年金", "draw-pen"]] : []),
     ["cash", "現金", ""], ["bonds", "債券", ""],
     ["div", "分配金・配当", "draw-div"], ["fund", "投信・株<br><small>（売却）</small>", ""],
     ["total", "取り崩し計", "draw-sub"],
@@ -2989,6 +3049,7 @@ function renderStrategy() {
 
   box.innerHTML = `
     ${cur === "guardrail" ? renderGuardStatus(a, curPath, yen, man) : ""}
+    <div id="withdraw-sheet"></div>
 
     <h3 class="strat-h">① 年齢ごとの取り崩し額（${curLabel}${cp ? "・" + cp.label(cp.target) : ""}）</h3>
     <div class="draw-ctrls">
@@ -3007,7 +3068,7 @@ function renderStrategy() {
         `<th class="num ${c}">${label}</th>`).join("")}
         <th class="num draw-bal">資産残高<br><small>（年初・万円）</small></th></tr></thead>
       <tbody>${drawRows}</tbody></table></div>
-    <p class="hint"><strong>年金 ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
+    <p class="hint"><strong>${hasCpen ? "公的年金 ＋ 企業年金" : "年金"} ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
       になるように並べています（「取り崩し計」は年金以外の小計＝資産から出る額）。
       ${drawTableReal
         ? `金額を<strong>今日の購買力</strong>に直して表示しています。
@@ -3086,6 +3147,107 @@ function renderStrategy() {
     }
     renderStrategy();
   });
+  renderWithdrawSheet(a, curPath);
+}
+
+// --- 📋 今年の取り崩し指示書 ---------------------------------------------
+// 試算は資産をひとかたまりで扱うが、実際に売るときは「どの口座のどの商品を、いくら」
+// まで決める必要がある。①の計算と同じ1年ぶんの内訳を使い、売却が必要な額だけを
+// 保有ごとに割り当てて、概算の税金・手取りまで出す。
+function withdrawYear(a, path) {
+  const startAge = Math.max(a.lp.age0, a.lp.retire);
+  const ms = (path.pts || []).filter((q) => q.draw != null
+    && q.age >= startAge - 1e-6 && q.age < startAge + 1 - 1e-6);
+  if (!ms.length) return null;
+  const sum = (k) => ms.reduce((t, q) => t + (q[k] || 0), 0);
+  return {
+    age: Math.floor(startAge + 1e-6), months: ms.length, from: ms[0].date, to: ms[ms.length - 1].date,
+    future: startAge > a.lp.age0 + 1e-6,          // まだ退職前（＝将来の1年ぶんの想定）
+    living: sum("living"), pension: sum("drawPen"), cpen: sum("drawCpen"),
+    cash: sum("drawCash"), bonds: sum("drawBonds"), div: sum("drawDiv"), fund: sum("drawFund"),
+    total: sum("draw"),
+  };
+}
+
+async function renderWithdrawSheet(a, path) {
+  const box = $("withdraw-sheet");
+  if (!box) return;
+  const w = withdrawYear(a, path);
+  if (!w) { box.innerHTML = ""; return; }
+  const yen = (n) => Math.round(n).toLocaleString() + " 円";
+  const man = (n) => Math.round(n / 10000).toLocaleString() + " 万円";
+  const head = `<h3 class="strat-h">📋 ${w.future ? "退職後1年目" : "これから1年"}の取り崩し指示書`
+    + `（${w.age}歳・${String(w.from).slice(0, 7)}〜${String(w.to).slice(0, 7)}）</h3>`;
+  const src = `<div class="wd-src">
+      <div class="wd-src-item"><span>生活費（年）</span><b>${yen(w.living)}</b></div>
+      <div class="wd-src-item"><span>年金でまかなう</span><b>${yen(w.pension)}</b>
+        ${w.cpen > 0 ? `<small>うち企業年金 ${yen(w.cpen)}</small>` : ""}</div>
+      <div class="wd-src-item"><span>分配金・配当</span><b>${yen(w.div)}</b></div>
+      <div class="wd-src-item"><span>現金・債券から</span><b>${yen(w.cash + w.bonds)}</b></div>
+      <div class="wd-src-item wd-src-main"><span>売却が必要な額</span><b>${yen(w.fund)}</b></div>
+    </div>`;
+
+  if (!(w.fund > 0)) {
+    box.innerHTML = head + src + `<p class="hint">この1年は<strong>投信・株を売らなくても</strong>、
+      年金・分配金・手元の現金と債券で生活費をまかなえる見込みです。</p>`;
+    return;
+  }
+  box.innerHTML = head + src + `<p class="hint">売却の割り当てを計算中… ⏳</p>`;
+
+  let d;
+  try {
+    d = await (await fetch("/api/withdraw-plan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: Math.round(w.fund) }),
+    })).json();
+  } catch (e) {
+    box.innerHTML = head + src + `<p class="hint">⚠️ 割り当ての取得に失敗しました（${escapeHtml(e.message)}）。</p>`;
+    return;
+  }
+  if (!d.ok) {
+    box.innerHTML = head + src + `<p class="hint">⚠️ ${escapeHtml(d.error || "計算に失敗しました")}</p>`;
+    return;
+  }
+  const acct = (t) => t === "nisa" ? '<span class="wd-acct wd-acct-nisa">NISA</span>'
+                                   : '<span class="wd-acct">特定</span>';
+  const rows = (d.rows || []).map((r) => `<tr>
+      <td class="wd-name">${escapeHtml(r.name)}${acct(r.account_type)}
+        <span class="wd-sub">${escapeHtml(r.broker || "")}
+          ${r.policy === "partial" ? "・一部売却可（50%まで）" : ""}</span></td>
+      <td class="num"><b>${yen(r.sell)}</b><span class="wd-sub">${r.timing_label}</span></td>
+      <td class="num">${yen(r.gain)}<span class="wd-sub">利益率 ${r.gain_pct}%</span></td>
+      <td class="num">${r.account_type === "nisa" ? "0 円<span class=\"wd-sub\">非課税</span>" : yen(r.tax)}</td>
+      <td class="num">${yen(r.net)}</td>
+      <td class="num">${man(r.after)}</td>
+    </tr>`).join("");
+  const excluded = (d.excluded || []).length
+    ? `<p class="hint">売却の対象外：${(d.excluded || []).map((x) =>
+        `${escapeHtml(x.name)}（${escapeHtml(x.reason)}）`).join("、")}</p>`
+    : "";
+  box.innerHTML = head + src + `
+    <div class="csv-table-wrap"><table class="csv-table strat-table wd-table">
+      <thead><tr><th>売る商品</th><th class="num">売却額</th><th class="num">うち利益</th>
+        <th class="num">概算の税</th><th class="num">手取り</th><th class="num">売却後の残り</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><th>合計</th><th class="num">${yen(d.sell_total)}</th><th class="num"></th>
+        <th class="num">${yen(d.tax_total)}</th><th class="num">${yen(d.net_total)}</th>
+        <th class="num"></th></tr></tfoot>
+    </table></div>
+    ${d.short > 0 ? `<p class="hint wd-short">⚠️ 売却可能な保有だけでは <strong>${yen(d.short)}</strong> 足りません。
+      「売却不可」の設定を見直すか、生活費・取り崩し方法の前提を調整してください。</p>` : ""}
+    ${d.nisa_used > 0 ? `<p class="hint">特定口座だけでは足りないため、NISA口座からも ${yen(d.nisa_used)} 売る前提にしています（非課税）。</p>` : ""}
+    ${excluded}
+    <details class="plan-help">
+      <summary>この指示書の決め方</summary>
+      <ul>
+        <li><strong>NISAは温存</strong>し、課税される<strong>特定口座から先に</strong>売ります（NISAの非課税期間を長く使うため）。</li>
+        <li>同じ口座の中では <strong>🟢売り時（高値圏）→ 🟡中立 → 🔴安値圏</strong> の順に売ります（安値で売る額を減らすため）。</li>
+        <li><strong>売却不可</strong>の保有は売りません。<strong>一部売却可</strong>は評価額の50%までにとどめます（銘柄一覧の「売却」列で変更できます）。</li>
+        <li>税は<strong>売却額 × 含み益の割合 × ${d.tax_rate}%</strong> の概算です。実際は取得単価・手数料・損益通算で変わります。</li>
+        <li>金額は<strong>1年ぶんの合計</strong>です。まとめて売らず、数回に分けると価格のブレを平均化できます。</li>
+        <li>年金・分配金・現金と債券で足りるぶんは売却額に含めていません（①の表と同じ計算です）。</li>
+      </ul>
+    </details>`;
 }
 
 // ── ガードレール運用の現在地 ────────────────────────────────────────
@@ -3102,7 +3264,10 @@ function guardState(a, curPath) {
   const assets = curPath.pts[0] ? curPath.pts[0].v : 0;      // 税引後の総資産（グラフと同じ値）
   const spendSet = a.lp.spend;                                // 設定した生活費
   const spend = (p.guard_spend > 0) ? p.guard_spend : spendSet;   // いま採用している生活費
-  const pension = a.lp.pension;
+  // 年金は公的年金＋企業年金。企業年金の受給中はそのぶん資産から抜く額が減る
+  const cpenNow = (a.lp.cpen > 0 && a.lp.cpenAge > 0 && a.lp.age0 >= a.lp.cpenAge
+    && (a.lp.cpenYears <= 0 || a.lp.age0 < a.lp.cpenAge + a.lp.cpenYears)) ? a.lp.cpen : 0;
+  const pension = a.lp.pension + cpenNow;
   const excess = Math.max(0, (spend - pension) * 12);          // 資産から抜く年額
   const rate = assets > 0 ? excess / assets : 0;
   // 基準の引出率。決めていなければ「設定の生活費といまの資産」から自動で置く
@@ -3325,6 +3490,12 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
     前提: {
       現在年齢: a.lp.age0, 退職年齢: a.lp.retire, 年金開始年齢: a.lp.penAge,
       年金_月額: Math.round(a.lp.pension), 生活費_月額: Math.round(a.lp.spend),
+      企業年金_月額: Math.round(a.lp.cpen || 0),
+      企業年金_開始年齢: a.lp.cpenAge || null,
+      企業年金_受給年数: (a.lp.cpenYears || 0) || "終身",
+      企業年金_インフレ増額: "なし（名目のまま）",
+      退職一時金_円: Math.round(a.lp.lump || 0),
+      退職一時金_受取年齢: a.lp.lumpAge || null,
       // 率は「%の数値」で統一する。小数(0.02)と%(4)が混在すると桁を取り違えられる
       インフレ率_パーセント: Number((a.lp.infl * 100).toFixed(2)),
       想定年利_パーセント: Number((a.baseRate * 100).toFixed(2)),
@@ -3717,6 +3888,14 @@ function planLifePlan() {
     // 名目額は下がらない仕組みなので、マイナスにはしない（0で下限）。
     penGrow: Math.max(0, (p.inflation || 0) / 100
                         - (p.pension_slide != null ? p.pension_slide : 0.4) / 100),
+    // 退職一時金：受け取る年齢にその額を現金へ加える（受け取り前は資産に入れない）
+    lumpAge: +p.lump_age || 0,
+    lump: +p.lump_amount || 0,
+    // 企業年金：開始年齢から受給年数のあいだ、毎月受け取る。公的年金と違い
+    // 物価スライドが無いのが一般的なので、名目のまま（インフレでは増やさない）。
+    cpenAge: +p.corp_pension_age || 0,
+    cpen: +p.corp_pension_monthly || 0,
+    cpenYears: +p.corp_pension_years || 0,   // 0＝終身
   };
 }
 // 生涯の資産推移（積立期→退職→取り崩し期）を月次で構築
@@ -3839,6 +4018,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   // ガードレールの出発点。実際に増減させた後なら、その額から続きを計算する
   // （画面の「現在地」と試算がズレないように、同じ値を使う）。
   let minLivingReal = Infinity, initRate = null;
+  let lumpPaid = false;                 // 退職一時金を受け取り済みか
   let guardSpend = (o.guardSpend > 0) ? o.guardSpend : lp.spend;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
@@ -3855,6 +4035,8 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     //   その年の受取額を超える「分配金」が表示されてしまう。）
     let divAvail = 0;
     let dPen = 0, dLiving = 0;   // 年金のうち生活費に充てた分／その月に使える生活費
+    let dCpen = 0;               // その月の企業年金（表示用。dPen にも含まれる）
+    let lumpGot = 0;             // その月に受け取った退職一時金
     // 現金から amt を使う。分配金や売却代金に由来する分は、その出どころとして数える。
     const useCash = (amt) => {
       if (!(amt > 0)) return;
@@ -3879,6 +4061,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 集中銘柄の売り替えは、積立や取り崩しより先に済ませる（同じ年間枠を取り合うため）。
     nisaMonthLeft = NISA_YEAR_CAP / 12;
     if (typeof o.restructure === "function") restructure(o.restructure(m), o.restructureGain);
+    // 退職一時金：その年齢になった月に現金へ入る（退職所得控除の範囲内とみなし課税しない）
+    if (lp.lump > 0 && lp.lumpAge > 0 && !lumpPaid && age >= lp.lumpAge - 1e-9) {
+      cash += lp.lump; lumpPaid = true; lumpGot = lp.lump;
+    }
     if (age < lp.retire) {
       // 積立はNISAの生涯投資枠（簿価1,800万円・年360万円）を使い切るまでNISAへ。
       // 枠を超えたぶんは特定口座に積み立てる。
@@ -3899,12 +4085,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         // ガードレールの基準：退職時点の「年間引出額 ÷ 資産」を初期の引出率とする
         // 基準の引出率。運用中に記録していればそれを使い、無ければ退職時点から決める
         initRate = (o.guardBaseRate > 0) ? o.guardBaseRate
-          : (balReal > 0 ? Math.max(0, (lp.spend - lp.pension) * 12) / balReal : 0);
+          : (balReal > 0
+             ? Math.max(0, (lp.spend - lp.pension - (lp.cpen || 0)) * 12) / balReal : 0);
       }
       // 退職〜年金受給開始の間は年金なし（純粋に資産を取り崩す）
       // 年金は生活費とは別の率で増やす（マクロ経済スライドのぶん伸びが鈍い）
       const penF = Math.pow(1 + (lp.penGrow != null ? lp.penGrow : lp.infl), m / 12);
-      const pen = (age >= lp.penAge) ? lp.pension * penF : 0;
+      // 企業年金は物価スライドが無いのが一般的なので、名目のまま（実質は目減りする）
+      const cpenOn = lp.cpen > 0 && lp.cpenAge > 0 && age >= lp.cpenAge - 1e-9
+        && (lp.cpenYears <= 0 || age < lp.cpenAge + lp.cpenYears - 1e-9);
+      dCpen = cpenOn ? lp.cpen : 0;
+      const pen = ((age >= lp.penAge) ? lp.pension * penF : 0) + dCpen;
       if (lp.penAge > lp.retire && age >= lp.penAge && penStartAge < 0) penStartAge = age;
       const floorNow = floor * inflF;    // ①生活防衛資金：インフレ調整後（実質額を維持）
 
@@ -3918,7 +4109,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
         // ガードレール：定額を基本にしつつ、引出率が初期水準から大きくずれた年に増減させる。
         // 年1回だけ見直し、生活費が下がりすぎ／上がりすぎないよう幅を制限する。
         if (m % 12 === 0 && initRate > 0 && balReal > 0) {
-          const curRate = Math.max(0, (guardSpend - lp.pension) * 12) / balReal;
+          const curRate = Math.max(0, (guardSpend - lp.pension - (lp.cpen || 0)) * 12) / balReal;
           if (curRate > initRate * 1.2) guardSpend *= 0.9;        // 資産の目減りが早い→減額
           else if (curRate < initRate * 0.8) guardSpend *= 1.1;   // 余裕がある→増額
           guardSpend = Math.min(lp.spend * 1.25, Math.max(lp.spend * 0.7, guardSpend));
@@ -3962,9 +4153,14 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // （drawM が null の月は inflF を計算していないので、ここで別に持つ）
     pt.inflAll = Math.pow(1 + lp.infl, m / 12);
     if (balBefore != null) pt.balBefore = Math.round(balBefore);
+    if (lumpGot > 0) pt.lump = lumpGot;
     if (drawM != null) {
       pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
       pt.drawDiv = dDiv; pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
+      // 年金の内訳（公的年金と企業年金）。生活費に充てた分だけを按分して数える
+      const penAll = dPen;
+      pt.drawCpen = Math.min(dCpen, penAll);
+      pt.drawPubPen = Math.max(0, penAll - pt.drawCpen);
     }
     pts.push(pt);
     if (pt.v <= 0) { depletionAge = age; break; }
@@ -4005,7 +4201,8 @@ function drawAtAge(path, age) {
     return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
   };
   return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund"),
-           div: of("drawDiv"), pension: of("drawPen"), living: of("living") };
+           div: of("drawDiv"), pension: of("drawPen"), living: of("living"),
+           pubPension: of("drawPubPen"), cpen: of("drawCpen") };
 }
 
 // その年齢になった時点（年初）の資産残高。年齢ごとの表の「資産残高」列に使う。
@@ -4317,7 +4514,10 @@ function renderLifeStages(o) {
   const achAge = ach > 0 ? lp.age0 + ach / 12 : -1;
 
   // 横軸の区間と表示幅（画面比率）。退職後（＝取り崩し期）は長いので幅を絞って圧縮する。
-  const segs = [{ a0: lp.age0, a1: retireAge, wid: 0.46 }];
+  // すでに退職している（現在の年齢＝退職年齢）場合、積立期の区間は幅0になる。
+  // そのまま座標に使うと0除算でNaNになり、グラフの目盛り・縦線が壊れる。
+  const segs = [];
+  if (retireAge > lp.age0 + 0.02) segs.push({ a0: lp.age0, a1: retireAge, wid: 0.46 });
   if (endAge > retireAge + 0.02) {
     if (hasGap) {
       const gEnd = Math.min(penAge, endAge);
@@ -4327,13 +4527,18 @@ function renderLifeStages(o) {
       segs.push({ a0: retireAge, a1: endAge, wid: 0.54 });
     }
   }
+  if (!segs.length) segs.push({ a0: lp.age0, a1: Math.max(endAge, lp.age0 + 1), wid: 1 });
   const totW = segs.reduce((t, s) => t + s.wid, 0);
   let accW = 0;
   segs.forEach((s) => { s.x0 = accW / totW; accW += s.wid; s.x1 = accW / totW; });
   const lo = segs[0].a0, hi = segs[segs.length - 1].a1;
   const X = (age) => {   // 年齢 → プロット座標(0〜1)。区間ごとに線形。
     const a = Math.min(Math.max(age, lo), hi);
-    for (const s of segs) if (a <= s.a1 + 1e-6) return s.x0 + (a - s.a0) / (s.a1 - s.a0) * (s.x1 - s.x0);
+    for (const s of segs) {
+      if (a > s.a1 + 1e-6) continue;
+      const span = s.a1 - s.a0;
+      return span > 0 ? s.x0 + (a - s.a0) / span * (s.x1 - s.x0) : s.x0;
+    }
     return 1;
   };
 

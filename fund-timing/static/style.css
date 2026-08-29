@@ -957,6 +957,28 @@ tr:hover .row-del { opacity: 1; }
 /* 年金（収入）・小計・生活費（総計）を内訳と区別する */
 .draw-pen { background: rgba(28,150,90,.06); }
 .draw-div { background: rgba(202,138,4,.07); }
+/* 今年の取り崩し指示書 */
+.wd-src { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 14px; }
+.wd-src-item {
+  flex: 1 1 150px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  background: var(--card);
+}
+.wd-src-item span { display: block; font-size: 11.5px; color: var(--ink-soft); font-weight: 700; }
+.wd-src-item b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.wd-src-item small { display: block; font-size: 10.5px; color: var(--ink-soft); font-weight: 400; }
+.wd-src-main { border-color: var(--accent); background: rgba(91,91,214,.06); }
+.wd-src-main b { color: var(--accent); }
+.wd-table th, .wd-table td { vertical-align: top; }
+.wd-table tfoot th { border-top: 2px solid var(--line); font-variant-numeric: tabular-nums; }
+.wd-name { font-weight: 700; }
+.wd-sub { display: block; font-size: 10.5px; color: var(--ink-soft); font-weight: 400; }
+.wd-acct {
+  margin-left: 6px; font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 7px;
+  border: 1px solid var(--line); color: var(--ink-soft); white-space: nowrap;
+}
+.wd-acct-nisa { border-color: var(--accent); color: var(--accent); }
+.wd-short { color: var(--down-text); }
+
 /* 資産残高（フローではなくストックなので、区切り線を入れて右端に置く） */
 .draw-bal { border-left: 2px solid var(--line); }
 .draw-bal b { color: var(--accent); }

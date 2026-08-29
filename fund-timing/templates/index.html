@@ -633,6 +633,28 @@
             <input id="set-spend-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）250,000">
           </div>
           <div class="plan-field">
+            <label class="plan-label" for="set-lump-age">退職一時金を受け取る年齢（歳）</label>
+            <input id="set-lump-age" type="number" class="plan-input plan-input-sm" placeholder="例）60">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-lump-amount">退職一時金（円）</label>
+            <input id="set-lump-amount" type="text" inputmode="numeric" class="plan-input" placeholder="例）20,000,000">
+            <span class="field-note" id="lump-note"></span>
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-corp-pension-age">企業年金の開始年齢（歳）</label>
+            <input id="set-corp-pension-age" type="number" class="plan-input plan-input-sm" placeholder="例）60">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-corp-pension-monthly">企業年金（月額・円）</label>
+            <input id="set-corp-pension-monthly" type="text" inputmode="numeric" class="plan-input" placeholder="例）80,000">
+          </div>
+          <div class="plan-field">
+            <label class="plan-label" for="set-corp-pension-years">企業年金の受給年数（年）</label>
+            <input id="set-corp-pension-years" type="number" step="1" min="0" max="60" class="plan-input plan-input-sm" placeholder="0＝終身">
+            <span class="field-note" id="corp-pension-note"></span>
+          </div>
+          <div class="plan-field">
             <label class="plan-label" for="set-inflation">想定インフレ率（%）</label>
             <input id="set-inflation" type="number" step="0.1" class="plan-input plan-input-sm" placeholder="例）2">
           </div>
