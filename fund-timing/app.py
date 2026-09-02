@@ -482,6 +482,8 @@ def _summarize_fund(row, range_key, force=False):
         "catalog_id": row["id"],
         "name": row["name"],
         "isin": row["isin"],
+        # 画面から1銘柄ずつ価格を取り直す（/api/refresh-one）ために返す
+        "assoc_code": row.get("assoc_code", "") or "",
         "category": row.get("category", ""),
         "asset_class": row.get("asset_class", "") or "",
         "kind": row.get("kind", "fund") or "fund",
@@ -598,6 +600,38 @@ def _build_summaries(range_key, force=False):
             s["pl_pct"] = None
         summaries.append(s)
     return summaries
+
+
+@app.route("/api/refresh-one")
+def api_refresh_one():
+    """1銘柄ぶんだけ価格を取り直す。
+
+    「最新に更新」で全銘柄を1リクエストにまとめると、銘柄数 × 取得時間が積み上がって
+    数十秒〜数分かかり、ブラウザが待ちきれずに接続を切る（iPadで「Load failed」）。
+    画面から1銘柄ずつ呼べるようにして、1回のリクエストを短く保つ。
+
+    直前に取り直したものは skipped=true で返す。途中で切れても押し直せば
+    続きから更新できるようにするため（取得済みを何度も取りに行かない）。
+    """
+    isin = (request.args.get("isin") or "").strip()
+    assoc = (request.args.get("assoc") or "").strip()
+    name = request.args.get("name") or ""
+    kind = request.args.get("kind") or "fund"
+    if not isin and not assoc:
+        return jsonify({"ok": False, "error": "isin か assoc_code が必要です。"}), 400
+    if db.get_cached_series(isin, assoc, max_age_hours=_REFRESH_SKIP_MIN / 60.0):
+        return jsonify({"ok": True, "skipped": True, "name": name})
+    try:
+        series = load_series(isin, assoc, name, force=True, kind=kind)
+    except fund_data.FundDataError as e:
+        # 1件の失敗で更新全体を止めないよう、エラーもHTTP 200で返す
+        return jsonify({"ok": False, "name": name, "error": str(e)})
+    dates = series.get("dates") or []
+    return jsonify({"ok": True, "skipped": False, "name": series.get("name") or name,
+                    "latest_date": dates[-1] if dates else None})
+
+
+_REFRESH_SKIP_MIN = 10   # この分数以内に取り直した銘柄は、押し直しても取りに行かない
 
 
 @app.route("/api/watchlist/analyze")

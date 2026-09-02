@@ -93,13 +93,71 @@ function showSkeleton() {
   }
 }
 
+// 通信が途中で切れたときのメッセージ。ブラウザは "Load failed" などとしか言わないので、
+// 何が起きたのか・どうすればよいのかを日本語で添える。
+function netErrMsg(e) {
+  const m = String((e && e.message) || e || "");
+  if (/Load failed|Failed to fetch|NetworkError|network connection was lost|timed out|aborted|AbortError/i
+      .test(m)) {
+    return "通信が途中で切れました（取得に時間がかかりすぎたか、Wi-Fi・スリープで接続が切れた可能性があります）。"
+      + "もう一度「最新に更新」を押してください。取得できたぶんは残っているので、続きから更新します。";
+  }
+  return m || "通信エラー";
+}
+
+// 「最新に更新」は1銘柄ずつ取り直す。全銘柄を1リクエストにまとめると、
+// 銘柄数 × 取得時間が積み上がってブラウザが待ちきれずに切ってしまう（iPadで Load failed）。
+// 1回のリクエストを短く保ち、途中で切れても押し直せば続きから更新できるようにする。
+async function refreshSeriesStepwise(items, setStatus) {
+  const seen = new Set();
+  const targets = [];
+  for (const s of items || []) {
+    const isin = s.isin || "", assoc = s.assoc_code || "";
+    if (!isin && !assoc) continue;
+    const key = `${isin}|${assoc}`;
+    if (seen.has(key)) continue;          // 同じ商品を複数口座で持っていても取得は1回
+    seen.add(key);
+    targets.push({ isin, assoc, name: s.name || "", kind: s.kind || "fund" });
+  }
+  if (!targets.length) return { total: 0, failed: 0, done: 0 };
+  let done = 0, failed = 0;
+  const queue = targets.slice();
+  const worker = async () => {
+    while (queue.length) {
+      const t = queue.shift();
+      const url = `/api/refresh-one?isin=${encodeURIComponent(t.isin)}`
+        + `&assoc=${encodeURIComponent(t.assoc)}&name=${encodeURIComponent(t.name)}`
+        + `&kind=${encodeURIComponent(t.kind)}`;
+      try {
+        const d = await (await fetch(url)).json();
+        if (!d.ok) failed++;
+      } catch (_) { failed++; }
+      done++;
+      if (setStatus) {
+        setStatus(`価格を取得中… ${done}/${targets.length}`
+          + (failed ? `（${failed}件は取得できず）` : "") + " ⏳");
+      }
+    }
+  };
+  // 同時に3件まで（データ源に負荷をかけず、1回の待ち時間も短く保つ）
+  await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker));
+  return { total: targets.length, failed, done };
+}
+
 async function loadWatchlist(force) {
   showSkeleton();
   setDashStatus("各投信を分析中… ⏳", "loading");
+  // 最新に更新：まず1銘柄ずつ取り直してから、まとめて集計する
+  let refreshed = null;
+  if (force && lastSummaries.length) {
+    refreshed = await refreshSeriesStepwise(lastSummaries,
+      (m) => setDashStatus(m, "loading"));
+    setDashStatus("集計中… ⏳", "loading");
+  }
   let data;
   try {
     const url = `/api/watchlist/analyze?range=${encodeURIComponent(dashRange)}`
-      + (force ? "&force=1" : "");
+      + ((force && !refreshed) ? "&force=1" : "");
     const resp = await fetch(url);
     try {
       data = await resp.json();
@@ -109,10 +167,12 @@ async function loadWatchlist(force) {
     }
     if (!data.ok && data.error) throw new Error(data.error);
   } catch (e) {
-    setDashStatus("⚠️ " + e.message, "error");
+    setDashStatus("⚠️ " + netErrMsg(e), "error");
     return;
   }
-  setDashStatus("");
+  setDashStatus(refreshed && refreshed.failed
+    ? `⚠️ ${refreshed.failed}件は価格を取得できませんでした（時間をおいて「最新に更新」を押してください）`
+    : "", refreshed && refreshed.failed ? "error" : "");
   if (Array.isArray(data.brokers) && data.brokers.length) BROKERS = data.brokers;
   lastSummaries = data.items || [];
   renderShortTermBanner();
@@ -471,15 +531,27 @@ async function loadPriceHistory(force) {
   const st = $("price-status");
   st.hidden = false; st.className = "status loading";
   st.textContent = force ? "最新の基準価額を取得中… ⏳" : "集計中… ⏳";
+  // 銘柄一覧と同じく、更新は1銘柄ずつ（1リクエストが長くなりすぎないように）
+  let refreshed = null;
+  if (force && lastSummaries.length) {
+    refreshed = await refreshSeriesStepwise(lastSummaries, (m) => { st.textContent = m; });
+    st.textContent = "集計中… ⏳";
+  }
   let data;
   try {
     data = await (await fetch(`/api/actual-history?range=${encodeURIComponent(priceRange)}`
-      + (force ? "&force=1" : ""))).json();
+      + ((force && !refreshed) ? "&force=1" : ""))).json();
   } catch (e) {
-    st.className = "status error"; st.textContent = "⚠️ 通信エラー: " + e.message; return;
+    st.className = "status error"; st.textContent = "⚠️ " + netErrMsg(e); return;
   }
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
-  st.hidden = true;
+  if (refreshed && refreshed.failed) {
+    st.className = "status error";
+    st.textContent = `⚠️ ${refreshed.failed}件は価格を取得できませんでした`
+      + "（時間をおいて「最新に更新」を押してください）";
+  } else {
+    st.hidden = true;
+  }
   lastActualData = data;
   renderPriceAsOf(data);
   renderPriceMismatch(data.mismatch || []);
