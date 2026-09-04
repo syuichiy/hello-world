@@ -2408,6 +2408,37 @@ async function fetchJson(url, opts, ms) {
   }
 }
 
+// 選んだファイルをブラウザ側で読み込んでbase64にする。
+// ファイルをそのまま送る（multipart）と、iCloud Driveなどで中身がまだ手元に無い
+// ファイルは「送信中のまま止まり」、サーバーにも届かず原因が分からなくなる。
+// 先に読み切ってから送ることで、読めないときは理由を画面に出せる。
+function readFileAsBase64(file, ms) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    const timer = setTimeout(() => {
+      try { fr.abort(); } catch (_) {}
+      reject(new Error("ファイルを読み込めませんでした（時間切れ）。"
+        + "iCloud Driveにあるファイルは、Finderでダウンロード（雲アイコンをクリック）してから、"
+        + "またはデスクトップにコピーしてからお試しください。"));
+    }, ms || 30000);
+    fr.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("ファイルを読み込めませんでした（アクセスできません）。"
+        + "別の場所にコピーしてからお試しください。"));
+    };
+    fr.onload = () => {
+      clearTimeout(timer);
+      const bytes = new Uint8Array(fr.result);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 8192) {        // 大きいファイルでも積み上げる
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+      }
+      resolve(btoa(bin));
+    };
+    fr.readAsArrayBuffer(file);
+  });
+}
+
 // CSVを読み取る。mapping を渡すと、その列の対応づけで読み直す。
 // csvFile（選んだファイル）と csvText（貼り付けた内容）のどちらかを使う。
 async function readCsv(mapping) {
@@ -2415,17 +2446,18 @@ async function readCsv(mapping) {
   setCsvStatus(`読み取り中… ⏳（${csvFile ? csvFile.name : "貼り付けた内容"}）`);
   $("csv-preview").hidden = true;
   try {
-    let opts;
+    let payload;
     if (csvFile) {
-      const fd = new FormData();
-      fd.append("file", csvFile);
-      if (mapping) fd.append("mapping", JSON.stringify(mapping));
-      opts = { method: "POST", body: fd };
+      const b64 = await readFileAsBase64(csvFile, 30000);
+      if (!b64) throw new Error("ファイルの中身が空でした。");
+      payload = { b64, mapping: mapping || null };
     } else {
-      // 貼り付けはJSONで送る（ファイル送信が通らない環境でも取り込めるように）
-      opts = { method: "POST", headers: { "Content-Type": "application/json" },
-               body: JSON.stringify({ text: csvText, mapping: mapping || null }) };
+      payload = { text: csvText, mapping: mapping || null };
     }
+    // ファイル送信（multipart）ではなくJSONで送る。設定の保存などと同じ経路なので、
+    // ファイル送信だけが通らない環境でも取り込める。
+    const opts = { method: "POST", headers: { "Content-Type": "application/json" },
+                   body: JSON.stringify(payload) };
     const d = await fetchJson("/api/trades/import-preview", opts, 60000);
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "読み取りに失敗しました"), "error"); return; }
     if (d.needs_mapping) {

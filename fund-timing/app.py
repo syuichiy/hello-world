@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import json
 import math
@@ -1190,8 +1192,18 @@ def api_trades_import_preview():
     # （multipart）が通らない場合でも取り込める。
     body = request.get_json(silent=True) or {}
     pasted = (body.get("text") or request.form.get("text") or "").strip()
+    # 画面で読み込んだファイルの中身（base64）。ファイル送信（multipart）を使わず
+    # JSONで送る経路。ブラウザ側でファイルを読んでから送るので、読み込めない場合に
+    # 「送信中のまま止まる」のではなく、画面に理由を出せる。
+    b64 = (body.get("b64") or "").strip()
+    raw_b64 = b""
+    if b64:
+        try:
+            raw_b64 = base64.b64decode(b64, validate=False)
+        except (ValueError, binascii.Error):
+            return jsonify({"ok": False, "error": "ファイルの中身を読み取れませんでした。"}), 400
     f = request.files.get("file")
-    if f is None and not pasted:
+    if f is None and not pasted and not raw_b64:
         return jsonify({"ok": False, "error": "CSVファイルを選ぶか、CSVの中身を貼り付けてください。"}), 400
     # 列の対応づけを画面で指定された場合はそれを使う（証券会社ごとの列名の違いに対応）
     mapping = body.get("mapping") if isinstance(body.get("mapping"), dict) else None
@@ -1202,9 +1214,9 @@ def api_trades_import_preview():
         except json.JSONDecodeError:
             mapping = None
 
-    raw = f.read() if f is not None else b""
+    raw = f.read() if f is not None else raw_b64
     try:
-        parsed = (broker_import.parse_text(pasted, mapping) if f is None
+        parsed = (broker_import.parse_text(pasted, mapping) if (not raw and pasted)
                   else broker_import.parse(raw, mapping))
     except Exception as e:                      # noqa: BLE001 想定外のCSVでも画面に理由を返す
         traceback.print_exc()
@@ -1219,7 +1231,7 @@ def api_trades_import_preview():
     if parsed.get("needs_mapping"):
         # 以前に同じ形式のCSVで指定した対応づけがあれば、それを使って読み直す
         if not mapping and sig and sig in saved_maps:
-            retry = (broker_import.parse_text(pasted, saved_maps[sig]) if f is None
+            retry = (broker_import.parse_text(pasted, saved_maps[sig]) if (not raw and pasted)
                      else broker_import.parse(raw, saved_maps[sig]))
             if retry.get("ok") and not retry.get("needs_mapping"):
                 parsed = retry
