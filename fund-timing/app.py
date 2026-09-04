@@ -1185,21 +1185,27 @@ def api_trades_add():
 def api_trades_import_preview():
     """証券会社の取引履歴CSVを解析し、取り込む内容を確認用に返す。
     どの保有に結び付けるかは商品名で自動判定し、絞れないものは画面で選んでもらう。"""
+    # ファイル選択が使えない・アップロードが進まない環境のために、CSVの中身を
+    # 貼り付ける経路も受け付ける。貼り付けは JSON で受けるので、ファイル送信
+    # （multipart）が通らない場合でも取り込める。
+    body = request.get_json(silent=True) or {}
+    pasted = (body.get("text") or request.form.get("text") or "").strip()
     f = request.files.get("file")
-    if f is None:
-        return jsonify({"ok": False, "error": "CSVファイルを選択してください。"}), 400
+    if f is None and not pasted:
+        return jsonify({"ok": False, "error": "CSVファイルを選ぶか、CSVの中身を貼り付けてください。"}), 400
     # 列の対応づけを画面で指定された場合はそれを使う（証券会社ごとの列名の違いに対応）
-    mapping = None
+    mapping = body.get("mapping") if isinstance(body.get("mapping"), dict) else None
     raw_map = request.form.get("mapping")
-    if raw_map:
+    if mapping is None and raw_map:
         try:
             mapping = json.loads(raw_map)
         except json.JSONDecodeError:
             mapping = None
 
-    raw = f.read()
+    raw = f.read() if f is not None else b""
     try:
-        parsed = broker_import.parse(raw, mapping)
+        parsed = (broker_import.parse_text(pasted, mapping) if f is None
+                  else broker_import.parse(raw, mapping))
     except Exception as e:                      # noqa: BLE001 想定外のCSVでも画面に理由を返す
         traceback.print_exc()
         return jsonify({"ok": False,
@@ -1213,7 +1219,8 @@ def api_trades_import_preview():
     if parsed.get("needs_mapping"):
         # 以前に同じ形式のCSVで指定した対応づけがあれば、それを使って読み直す
         if not mapping and sig and sig in saved_maps:
-            retry = broker_import.parse(raw, saved_maps[sig])
+            retry = (broker_import.parse_text(pasted, saved_maps[sig]) if f is None
+                     else broker_import.parse(raw, saved_maps[sig]))
             if retry.get("ok") and not retry.get("needs_mapping"):
                 parsed = retry
         if parsed.get("needs_mapping"):

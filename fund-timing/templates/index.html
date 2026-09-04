@@ -739,6 +739,17 @@
                  hidden>
           <span id="csv-status" class="ai-test-status"></span>
         </div>
+        <details class="plan-help" id="csv-paste-box">
+          <summary>ファイルを選べない・読み取りが進まないときは、CSVの中身を貼り付ける</summary>
+          <p class="hint">CSVを「テキストエディット」やメモアプリで開いて<strong>全選択（⌘A）→ コピー（⌘C）</strong>し、
+            下の欄に貼り付けて「この内容を読み取る」を押してください。見出し行から丸ごと貼り付けます。
+            ファイルのアップロードを使わないので、ファイル選択が使えない端末でも取り込めます。</p>
+          <textarea id="csv-text" class="plan-input" rows="6"
+            placeholder="約定日,受渡日,ファンド名,分配金,口座,取引,買付方法,数量［口］,単価,…&#10;2026/9/3,2026/9/8,eMAXIS Slim 国内株式(日経平均),再投資型,特定,買付,通常,30,946,…"></textarea>
+          <div class="backup-row">
+            <button id="csv-text-btn" type="button">この内容を読み取る</button>
+          </div>
+        </details>
         <div id="csv-preview" hidden></div>
         <details class="plan-help">
           <summary>CSVの入手方法・注意点</summary>

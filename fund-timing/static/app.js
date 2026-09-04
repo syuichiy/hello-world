@@ -2354,6 +2354,7 @@ $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
 // ============================================================ 取引履歴CSVの取り込み
 let csvPreview = null;   // { rows, groups, holdings, broker }
 let csvFile = null;      // 選んだCSV（列を指定して読み直すため保持する）
+let csvText = "";        // 貼り付けで取り込む場合のCSV本文
 // 列の対応づけで選べる項目（サーバーの ROLE_LABELS と対応）
 const CSV_ROLES = [
   { role: "date", label: "約定日", required: true },
@@ -2376,7 +2377,14 @@ $("csv-file").addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = "";
   if (!file) return;
-  csvFile = file;
+  csvFile = file; csvText = "";
+  await readCsv(null);
+});
+// ファイル選択が使えない端末のために、CSVの中身を貼り付けても取り込めるようにする
+$("csv-text-btn").addEventListener("click", async () => {
+  const t = ($("csv-text").value || "").trim();
+  if (!t) { setCsvStatus("⚠️ CSVの中身を貼り付けてください。", "error"); return; }
+  csvText = t; csvFile = null;
   await readCsv(null);
 });
 
@@ -2401,15 +2409,24 @@ async function fetchJson(url, opts, ms) {
 }
 
 // CSVを読み取る。mapping を渡すと、その列の対応づけで読み直す。
+// csvFile（選んだファイル）と csvText（貼り付けた内容）のどちらかを使う。
 async function readCsv(mapping) {
-  if (!csvFile) return;
-  setCsvStatus(`読み取り中… ⏳（${csvFile.name}）`);
+  if (!csvFile && !csvText) return;
+  setCsvStatus(`読み取り中… ⏳（${csvFile ? csvFile.name : "貼り付けた内容"}）`);
   $("csv-preview").hidden = true;
   try {
-    const fd = new FormData();
-    fd.append("file", csvFile);
-    if (mapping) fd.append("mapping", JSON.stringify(mapping));
-    const d = await fetchJson("/api/trades/import-preview", { method: "POST", body: fd }, 60000);
+    let opts;
+    if (csvFile) {
+      const fd = new FormData();
+      fd.append("file", csvFile);
+      if (mapping) fd.append("mapping", JSON.stringify(mapping));
+      opts = { method: "POST", body: fd };
+    } else {
+      // 貼り付けはJSONで送る（ファイル送信が通らない環境でも取り込めるように）
+      opts = { method: "POST", headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ text: csvText, mapping: mapping || null }) };
+    }
+    const d = await fetchJson("/api/trades/import-preview", opts, 60000);
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "読み取りに失敗しました"), "error"); return; }
     if (d.needs_mapping) {
       csvPreview = null;

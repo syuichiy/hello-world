@@ -173,7 +173,15 @@ def parse(raw: bytes, mapping: dict | None = None) -> dict:
     自動判定し、必要な列が見つからなければ needs_mapping=True と見出し一覧を返して
     画面で選んでもらう（証券会社ごとの列名の違いに、決め打ちせず対応するため）。
     """
-    text = decode(raw)
+    return parse_text(decode(raw), mapping)
+
+
+def parse_text(text: str, mapping: dict | None = None) -> dict:
+    """文字列になったCSVを解析する（画面に貼り付けた内容の取り込みに使う）。
+
+    ファイル選択が使えない環境（iPadのファイルAppでCSVが選べない等）でも
+    取り込めるようにするため、バイト列を経由しない入口を分けている。
+    """
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return {"ok": False, "error": "CSVが空です。"}
