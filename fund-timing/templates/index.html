@@ -732,7 +732,11 @@
         </p>
         <div class="backup-row">
           <button id="csv-btn" type="button">📄 CSVを選ぶ</button>
-          <input id="csv-file" type="file" accept=".csv,text/csv" hidden>
+          <!-- iPad(ファイルApp)ではCSVの種類の判定が緩く、accept を絞りすぎると
+               ファイルが選べない（灰色のまま）ことがあるため、候補を広く取る -->
+          <input id="csv-file" type="file"
+                 accept=".csv,.txt,text/csv,text/plain,text/comma-separated-values,application/csv,application/vnd.ms-excel"
+                 hidden>
           <span id="csv-status" class="ai-test-status"></span>
         </div>
         <div id="csv-preview" hidden></div>

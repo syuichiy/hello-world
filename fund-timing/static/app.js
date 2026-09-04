@@ -99,8 +99,9 @@ function netErrMsg(e) {
   const m = String((e && e.message) || e || "");
   if (/Load failed|Failed to fetch|NetworkError|network connection was lost|timed out|aborted|AbortError/i
       .test(m)) {
-    return "通信が途中で切れました（取得に時間がかかりすぎたか、Wi-Fi・スリープで接続が切れた可能性があります）。"
-      + "もう一度「最新に更新」を押してください。取得できたぶんは残っているので、続きから更新します。";
+    return "通信が途中で切れました（時間がかかりすぎたか、Wi-Fi・スリープで接続が切れた可能性があります）。"
+      + "アプリ（run.command のターミナル）が動いているか確認して、もう一度お試しください。"
+      + "「最新に更新」の場合、取得できたぶんは残っているので続きから更新します。";
   }
   return m || "通信エラー";
 }
@@ -2379,16 +2380,36 @@ $("csv-file").addEventListener("change", async (e) => {
   await readCsv(null);
 });
 
+// 応答が返ってこないまま待ち続けないよう、時間を区切って呼ぶ。
+// 何も起きないと「壊れているのか、待てばよいのか」が分からないため。
+async function fetchJson(url, opts, ms) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms || 60000);
+  try {
+    const resp = await fetch(url, Object.assign({ signal: ac.signal }, opts || {}));
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      // JSONでない＝サーバー側でエラーが起きている。先頭を見せて原因を追えるようにする
+      throw new Error(`サーバーがエラーを返しました（HTTP ${resp.status}）。`
+        + `ターミナルの表示を確認してください。${text.slice(0, 120)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // CSVを読み取る。mapping を渡すと、その列の対応づけで読み直す。
 async function readCsv(mapping) {
   if (!csvFile) return;
-  setCsvStatus("読み取り中… ⏳");
+  setCsvStatus(`読み取り中… ⏳（${csvFile.name}）`);
   $("csv-preview").hidden = true;
   try {
     const fd = new FormData();
     fd.append("file", csvFile);
     if (mapping) fd.append("mapping", JSON.stringify(mapping));
-    const d = await (await fetch("/api/trades/import-preview", { method: "POST", body: fd })).json();
+    const d = await fetchJson("/api/trades/import-preview", { method: "POST", body: fd }, 60000);
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "読み取りに失敗しました"), "error"); return; }
     if (d.needs_mapping) {
       csvPreview = null;
@@ -2412,7 +2433,7 @@ async function readCsv(mapping) {
     setCsvStatus(`${d.broker || "証券会社"}のCSVを読み取りました（売買 ${d.rows.length} 件）`
       + (d.mapping_saved ? "。列の対応を保存したので、次回から自動で読み取ります。" : ""));
   } catch (err) {
-    setCsvStatus("⚠️ 読み取りに失敗しました: " + err.message, "error");
+    setCsvStatus("⚠️ 読み取りに失敗しました: " + netErrMsg(err), "error");
   }
 }
 
@@ -2520,10 +2541,10 @@ async function runCsvImport() {
   }
   setCsvStatus("取り込み中… ⏳");
   try {
-    const d = await (await fetch("/api/trades/import", {
+    const d = await fetchJson("/api/trades/import", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rows: csvPreview.rows, mapping, broker: csvPreview.broker || "" }),
-    })).json();
+    }, 120000);
     if (!d.ok) { setCsvStatus("⚠️ " + (d.error || "取り込みに失敗しました"), "error"); return; }
     setCsvStatus(`✅ ${d.added} 件を取り込みました`
       + (d.duplicates ? `（重複 ${d.duplicates} 件は登録済みのため除外）` : "")
@@ -2535,7 +2556,7 @@ async function runCsvImport() {
     csvPreview = null;
     await loadWatchlist();
   } catch (err) {
-    setCsvStatus("⚠️ 取り込みに失敗しました: " + err.message, "error");
+    setCsvStatus("⚠️ 取り込みに失敗しました: " + netErrMsg(err), "error");
   }
 }
 

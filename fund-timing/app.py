@@ -19,6 +19,7 @@ import re
 import socket
 import threading
 import time
+import traceback
 import webbrowser
 from urllib.parse import urlparse, parse_qs
 
@@ -1197,7 +1198,13 @@ def api_trades_import_preview():
             mapping = None
 
     raw = f.read()
-    parsed = broker_import.parse(raw, mapping)
+    try:
+        parsed = broker_import.parse(raw, mapping)
+    except Exception as e:                      # noqa: BLE001 想定外のCSVでも画面に理由を返す
+        traceback.print_exc()
+        return jsonify({"ok": False,
+                        "error": f"CSVを読み取れませんでした（{type(e).__name__}: {e}）。"
+                                 "ターミナルの表示もあわせて確認してください。"}), 200
     if not parsed.get("ok"):
         return jsonify(parsed), 400
 
