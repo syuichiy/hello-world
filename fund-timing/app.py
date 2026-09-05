@@ -2644,6 +2644,36 @@ def _lan_ip():
         s.close()
 
 
+def _lan_ips():
+    """このMacのLAN内IPv4アドレスを列挙する（ループバックを除く）。
+
+    Wi-Fiと有線の両方につながっている、VPNや仮想ネットワークがある、といった
+    場合に候補が複数になる。既定の経路のIPだけを出すと、iPadがつながっている
+    ネットワークとは別のIPを案内してしまうことがあるため、全部出す。
+    """
+    ips = []
+    primary = _lan_ip()
+    if primary:
+        ips.append(primary)
+    try:                       # ホスト名の解決から拾えるもの
+        for res in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = res[4][0]
+            if ip and not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    try:                       # macOS/Linux: ifconfig からも拾う（見落とし防止）
+        import subprocess
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
+        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)", out):
+            ip = m.group(1)
+            if not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
 def _open_when_ready(url, host, port, timeout=20.0):
     """サーバが接続を受け付けられるようになってからブラウザを開く。"""
     deadline = time.time() + timeout
@@ -2779,13 +2809,22 @@ def main():
               "（macOSではポート5000はAirPlayが使用します）。")
     print(f"投資信託サインアプリを起動しました → {local_url}")
     if args.lan:
-        ip = _lan_ip()
-        if ip:
+        ips = _lan_ips()
+        if ips:
             print("─" * 48)
             print("📱 他の端末（同じWi-Fi）からは次のURLを開いてください：")
-            print(f"    http://{ip}:{port}")
+            print(f"    http://{ips[0]}:{port}")
+            if len(ips) > 1:
+                print("  つながらない場合は、こちらのURLも試してください：")
+                for ip in ips[1:4]:
+                    print(f"    http://{ip}:{port}")
             print("─" * 48)
-            print("※ 同じWi-Fi/LANに接続している必要があります。")
+            print("※ IPアドレスは起動のたびに変わることがあります。"
+                  "他の端末では、必ずここに表示されているURLを開いてください。")
+            print("※ 同じWi-Fi/LANに接続している必要があります"
+                  "（スマホの4G/5G回線ではつながりません）。")
+            print("※ つながらないときは、システム設定 → ネットワーク → ファイアウォールで"
+                  "受信の許可を確認してください。")
             print("※ このURLを知っている同一ネットワーク内の端末は誰でも閲覧できます。")
         else:
             print("LAN内のIPアドレスを取得できませんでした。ネットワーク接続を確認してください。")
