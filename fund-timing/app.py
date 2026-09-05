@@ -2644,30 +2644,83 @@ def _lan_ip():
         s.close()
 
 
-def _lan_ips():
-    """このMacのLAN内IPv4アドレスを列挙する（ループバックを除く）。
+# インターフェイス名から、他の端末がつながる見込みの高さで並べるための重み。
+# Wi-Fi・有線（en0/en1…）を優先し、VPN(utun)・仮想マシン(vmnet/vboxnet)・
+# ブリッジ(bridge)は後ろに回す。これらのアドレスを案内してしまうと、
+# 同じWi-Fiにいる端末からは絶対につながらない。
+_IFACE_KIND = [
+    ("en", "Wi-Fi・有線", 0),
+    ("eth", "有線", 0),
+    ("bridge", "ブリッジ・仮想", 3),
+    ("utun", "VPN", 4),
+    ("ipsec", "VPN", 4),
+    ("ppp", "VPN・テザリング", 4),
+    ("vmnet", "仮想マシン", 5),
+    ("vboxnet", "仮想マシン", 5),
+    ("docker", "Docker", 5),
+    ("awdl", "AirDrop", 6),
+    ("llw", "AirDrop", 6),
+]
 
-    Wi-Fiと有線の両方につながっている、VPNや仮想ネットワークがある、といった
-    場合に候補が複数になる。既定の経路のIPだけを出すと、iPadがつながっている
-    ネットワークとは別のIPを案内してしまうことがあるため、全部出す。
+
+def _iface_kind(name):
+    """インターフェイス名から (説明, 並び順) を返す。"""
+    for prefix, label, rank in _IFACE_KIND:
+        if name.startswith(prefix):
+            return label, rank
+    return "", 2
+
+
+def _lan_ifaces():
+    """このMacのLAN内IPv4を、インターフェイス名つきで列挙する。
+
+    [(IP, インターフェイス名, 説明), ...] を「他の端末からつながりやすい順」で返す。
+    既定の経路のIP（_lan_ip）だけを案内すると、VPNや仮想マシンのアドレスを
+    掴んでいるときに、同じWi-Fiの端末からは決してつながらないURLを表示して
+    しまうため、種類が分かる形で全部出す。
     """
+    found = []       # (rank, ip, iface, label)
+    seen = set()
+    try:             # macOS/Linux: ifconfig からインターフェイス名つきで拾う
+        import subprocess
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
+        iface = ""
+        for line in out.splitlines():
+            m = re.match(r"^([A-Za-z0-9_.:-]+):", line)
+            if m:
+                iface = m.group(1)
+                continue
+            m = re.search(r"\binet (\d+\.\d+\.\d+\.\d+)", line)
+            if m and not m.group(1).startswith("127."):
+                ip = m.group(1)
+                if ip in seen:
+                    continue
+                seen.add(ip)
+                label, rank = _iface_kind(iface)
+                found.append((rank, ip, iface, label))
+    except Exception:
+        pass
+    if not found:    # ifconfig が使えない環境向けの保険
+        for ip in _lan_ips_fallback():
+            if ip not in seen:
+                seen.add(ip)
+                found.append((2, ip, "", ""))
+    primary = _lan_ip()
+    # 既定の経路のIPは、同じ種類の中では先に出す（多くの場合これで正しい）
+    found.sort(key=lambda t: (t[0], t[1] != primary, t[2]))
+    return [(ip, iface, label) for _r, ip, iface, label in found]
+
+
+def _lan_ips_fallback():
+    """ifconfig が無い環境で、ホスト名の解決からIPv4を拾う。"""
     ips = []
     primary = _lan_ip()
     if primary:
         ips.append(primary)
-    try:                       # ホスト名の解決から拾えるもの
+    try:
         for res in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = res[4][0]
             if ip and not ip.startswith("127.") and ip not in ips:
-                ips.append(ip)
-    except Exception:
-        pass
-    try:                       # macOS/Linux: ifconfig からも拾う（見落とし防止）
-        import subprocess
-        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
-        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)", out):
-            ip = m.group(1)
-            if not ip.startswith("127.") and ip not in ips:
                 ips.append(ip)
     except Exception:
         pass
@@ -2809,15 +2862,22 @@ def main():
               "（macOSではポート5000はAirPlayが使用します）。")
     print(f"投資信託サインアプリを起動しました → {local_url}")
     if args.lan:
-        ips = _lan_ips()
-        if ips:
+        ifaces = _lan_ifaces()
+        if ifaces:
+            def _line(item):
+                ip, iface, label = item
+                tag = (f"   ← {iface}" + (f"（{label}）" if label else "")) if iface else ""
+                return f"    http://{ip}:{port}{tag}"
+
             print("─" * 48)
             print("📱 他の端末（同じWi-Fi）からは次のURLを開いてください：")
-            print(f"    http://{ips[0]}:{port}")
-            if len(ips) > 1:
+            print(_line(ifaces[0]))
+            if len(ifaces) > 1:
                 print("  つながらない場合は、こちらのURLも試してください：")
-                for ip in ips[1:4]:
-                    print(f"    http://{ip}:{port}")
+                for it in ifaces[1:5]:
+                    print(_line(it))
+                print("  ※ VPN・仮想マシン・AirDropのアドレスでは、"
+                      "同じWi-Fiの端末からはつながりません。")
             print("─" * 48)
             print("※ IPアドレスは起動のたびに変わることがあります。"
                   "他の端末では、必ずここに表示されているURLを開いてください。")
