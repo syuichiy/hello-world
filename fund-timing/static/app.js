@@ -2255,12 +2255,15 @@ function renderSettingsUI() {
 async function saveAiModel(model) {
   aiSettings.ai_model = model;
   renderSettingsUI();
+  renderOverallAiButton();     // 総合アドバイスのカードもオン/オフに合わせる
   try {
     await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ai_model: model }) });
   } catch (_) {}
   if (model === "off") {
     aiAdviceByWatch = {}; lastAiAdvice = null; aiLoadedOnce = false;
+    const ov = $("ai-overall");
+    if (ov) { ov.hidden = true; ov.innerHTML = ""; }
     const b = $("ai-advice-banner"); b.hidden = true; b.innerHTML = "";
     renderWatchTable();
     renderPortfolioAi();
@@ -2840,6 +2843,7 @@ async function loadPlan() {
     renderCashAdvice();
     renderDividends();
   }
+  renderOverallAiButton();
   // AI予測ボタンは設定でAIをオンにしているときだけ表示
   const aiRow = $("plan-ai-row");
   if (aiRow) aiRow.hidden = (aiSettings.ai_model === "off");
@@ -2869,6 +2873,9 @@ let planSaveTimer = null;
 let planSavePending = null;             // 未送信の変更（まとめて送る）
 let planSaveInflight = Promise.resolve();
 function savePlan(payload) {
+  // 前提が変わったら、古い前提で書かれたAIの助言は消す（残ると食い違うため）
+  const ov = $("ai-overall");
+  if (ov && !ov.hidden) { ov.hidden = true; ov.innerHTML = ""; }
   // 変更を即メモリへ反映（メニュー切替時に古い値を再取得して上書きされないように）
   planData.plan = Object.assign(planData.plan || {}, payload);
   planSavePending = Object.assign(planSavePending || {}, payload);
@@ -2948,15 +2955,12 @@ function renderPlanGoal(exactTotal) {
 }
 
 // --- 手元に置きたい現金の目安（①生活防衛資金＋②数年内の予定支出＋③退職後の無年金クッション）---
-function renderCashAdvice() {
-  const body = $("cash-advice-body");
-  if (!body) return;
+// 手元に置きたい現金の目安を数字で返す（画面表示とAIに渡す事実で同じ計算を使う）。
+// 生活費が未設定なら null。
+function cashTargets() {
   const p = planData.plan || {};
   const spend = p.spend_monthly || 0;                       // 月間生活費（退職後の生活費を流用）
-  if (spend <= 0) {
-    body.innerHTML = `<p class="empty-watch">設定の「資産プランの前提」で<strong>退職後の生活費</strong>を入力すると、手元に置きたい現金の目安を計算します。</p>`;
-    return;
-  }
+  if (spend <= 0) return null;
   const emMonths = p.emergency_months != null ? p.emergency_months : 6;
   const nearTerm = p.near_term || 0;
   const retire = +p.retire_age || 0, pen = +p.pension_age || 0;
@@ -2975,8 +2979,23 @@ function renderCashAdvice() {
   const lumpAmt = +p.lump_amount || 0, lumpAge = +p.lump_age || 0;
   const lumpInGap = (lumpAmt > 0 && lumpAge > 0 && lumpAge <= pen) ? lumpAmt : 0;
   const gapCushion = Math.max(0, spend * gapMonths - cpenGap - lumpInGap);   // ③
-  const nowTotal = emergency + nearTerm;                     // 今すぐ手元に置きたい（①＋②）
-  const cash = p.cash || 0, bonds = p.bonds || 0, reserve = cash + bonds;
+  const cash = p.cash || 0, bonds = p.bonds || 0;
+  return { spend, emMonths, nearTerm, retire, pen, gapMonths, emergency,
+           cpenGap, lumpInGap, gapCushion,
+           nowTotal: emergency + nearTerm, cash, bonds, reserve: cash + bonds };
+}
+
+function renderCashAdvice() {
+  const body = $("cash-advice-body");
+  if (!body) return;
+  const p = planData.plan || {};
+  const t = cashTargets();
+  if (!t) {
+    body.innerHTML = `<p class="empty-watch">設定の「資産プランの前提」で<strong>退職後の生活費</strong>を入力すると、手元に置きたい現金の目安を計算します。</p>`;
+    return;
+  }
+  const { spend, emMonths, nearTerm, retire, pen, gapMonths, emergency,
+          cpenGap, lumpInGap, gapCushion, nowTotal, cash, bonds, reserve } = t;
   const yen = (n) => Math.round(n).toLocaleString() + " 円";
   const row = (k, sub, v, extra) => `<div class="cash-adv-row ${extra || ""}">`
     + `<div class="cash-adv-k">${k}${sub ? `<span class="cash-adv-sub">${sub}</span>` : ""}</div>`
@@ -3072,6 +3091,7 @@ async function runStrategy() {
 }
 $("strategy-run").addEventListener("click", runStrategy);
 $("strategy-ai-run").addEventListener("click", loadStrategyAi);
+$("ai-overall-run").addEventListener("click", loadOverallAi);
 
 // 検証に使う前提をチップで並べる。どの設定で計算しているのかを一目で分かるようにする。
 function renderStrategyPremise() {
@@ -3817,6 +3837,183 @@ function renderStrategyAi(advice, model) {
       + `<ul class="ai-block-b ai-list">${list(v.watch)}</ul></div>`;
   }
   html += '<div class="ai-foot">※ 画面に出ている試算値だけをもとにしたコメントです。'
+    + '前提を変えれば結論も変わります。投資助言ではありません。</div>';
+  box.innerHTML = html;
+  box.hidden = false;
+}
+
+// ============================================================ AI総合アドバイス
+// 各タブのAIコメントは1つの観点しか見ていない。ここでは資産・配分・年齢・年金・
+// 取り崩しの試算・手元現金・直近のシグナルをまとめて渡し、「これから何をするか」を
+// 優先順位つきで返してもらう。数字はすべて画面に出ているものをそのまま送る。
+function buildOverallFacts() {
+  const p = planData.plan || {};
+  const live = (lastSummaries || []).filter((x) => x.ok && !x.sold_out);
+  const val = (x) => Number(x.value || 0);
+  const inv = (x) => Number(x.invested || 0);
+  const sum = (xs, f) => xs.reduce((t, x) => t + f(x), 0);
+  const nisa = live.filter((x) => x.account_type === "nisa");
+  const tax = live.filter((x) => x.account_type !== "nisa");
+  const taxGain = Math.max(0, sum(tax, val) - sum(tax, inv));
+  const taxRate = (p.tax != null ? p.tax : 20.315) / 100;
+  const cash = p.cash || 0, bonds = p.bonds || 0;
+  const fundValue = sum(live, val);
+  const t = cashTargets();
+  const st = (lastActualData && lastActualData.holdings) ? null : null;   // 未使用（将来の拡張用）
+
+  // 直近のシグナル（銘柄一覧のバナーと同じ判定）
+  const shortBuy = live.filter((x) => shortTermSignal(x) === "buy").map((x) => x.name);
+  const shortSell = live.filter((x) => shortTermSignal(x) === "sell").map((x) => x.name);
+  const midCount = { 買い: 0, 中立: 0, 売り: 0 };
+  live.forEach((x) => {
+    const k = x.verdict === "buy" ? "買い" : x.verdict === "sell" ? "売り" : "中立";
+    midCount[k] += 1;
+  });
+
+  // 資産クラスの配分（現在と理想の乖離）
+  const alloc = (lastAllocation && lastAllocation.classes)
+    ? lastAllocation.classes.map((c) => ({
+        資産クラス: c.name, 現在_パーセント: c.current, 理想_パーセント: c.target,
+        差_ポイント: Number((c.current - c.target).toFixed(1)),
+        金額の目安_円: Math.round(c.diff_amount || 0),
+      }))
+    : null;
+
+  // 一番大きい保有（集中のチェック用）
+  const top = live.slice().sort((a2, b2) => val(b2) - val(a2))[0];
+  const total = fundValue + cash + bonds;
+
+  const facts = {
+    今日: new Date().toISOString().slice(0, 10),
+    資産: {
+      総資産_円: Math.round(total),
+      投信株_評価額_円: Math.round(fundValue),
+      現金_円: Math.round(cash), 債券_円: Math.round(bonds),
+      投資金額_円: Math.round(sum(live, inv)),
+      損益_円: Math.round(fundValue - sum(live, inv)),
+      保有本数: live.length,
+      NISA_評価額_円: Math.round(sum(nisa, val)),
+      特定口座_評価額_円: Math.round(sum(tax, val)),
+      特定口座の含み益_円: Math.round(taxGain),
+      特定口座を全部売った場合の概算税_円: Math.round(taxGain * taxRate),
+      一番大きい保有: top ? {
+        銘柄: top.name,
+        評価額_円: Math.round(val(top)),
+        総資産に占める割合_パーセント: total > 0 ? Number((val(top) / total * 100).toFixed(1)) : 0,
+      } : null,
+    },
+    資産配分: alloc,
+    分配金: planData.dividends ? {
+      受取_年額_税引後_円: Math.round(planData.dividends.receive_net || 0),
+      再投資_年額_円: Math.round(planData.dividends.reinvest || 0),
+    } : null,
+    ライフプラン: {
+      現在年齢: p.current_age || null, 退職年齢: p.retire_age || null,
+      退職まで_年: (p.retire_age && p.current_age)
+        ? Number((p.retire_age - p.current_age).toFixed(1)) : null,
+      年金開始年齢: p.pension_age || null, 年金_月額_円: p.pension_monthly || 0,
+      企業年金_月額_円: p.corp_pension_monthly || 0,
+      企業年金_開始年齢: p.corp_pension_age || null,
+      企業年金_受給年数: (p.corp_pension_years || 0) || "終身",
+      退職一時金_円: p.lump_amount || 0, 退職一時金_受取年齢: p.lump_age || null,
+      生活費_月額_円: p.spend_monthly || 0,
+      インフレ率_パーセント: p.inflation != null ? p.inflation : 0,
+      想定年利_パーセント: lastLifeArgs
+        ? Number((lastLifeArgs.baseRate * 100).toFixed(2))
+        : (p.return_rate != null ? p.return_rate : null),
+      毎月の積立_円: p.monthly || 0,
+      目標資産_円: p.goal || 0,
+      取り崩し方法: DRAW_LABELS[p.draw_method || "fixed"],
+      集中銘柄を残す割合_パーセント: p.conc_keep != null ? p.conc_keep : 100,
+    },
+    手元に置きたい現金: t ? {
+      生活防衛資金_円: Math.round(t.emergency),
+      数年内に使う予定額_円: Math.round(t.nearTerm),
+      退職から年金までのクッション_円: Math.round(t.gapCushion),
+      退職時までに用意したい合計_円: Math.round(t.nowTotal + t.gapCushion),
+      いまの現金と債券_円: Math.round(t.reserve),
+      過不足_円: Math.round(t.reserve - (t.nowTotal + t.gapCushion)),
+    } : null,
+    取り崩しの試算: lastStrategyFacts ? {
+      方式ごとの結果: lastStrategyFacts.methods,
+      集中銘柄: lastStrategyFacts.集中銘柄,
+      暴落シナリオ: lastStrategyFacts.暴落シナリオ,
+      試行回数: lastStrategyFacts.試行回数,
+    } : "未計算（取り崩し戦略タブを開くと計算されます）",
+    直近のシグナル: {
+      短期の買い時: shortBuy, 短期の売り時: shortSell,
+      中期判定の内訳: midCount,
+      注意: "短期は〜1ヶ月、中期は3ヶ月〜1年のテクニカル指標による機械的な判定",
+    },
+  };
+  return facts;
+}
+
+function renderOverallAiButton() {
+  const card = $("ai-overall-card");
+  if (!card) return;
+  card.hidden = (aiSettings.ai_model === "off");
+}
+
+async function loadOverallAi() {
+  const box = $("ai-overall");
+  const st = $("ai-overall-status");
+  if (!box) return;
+  const facts = buildOverallFacts();
+  if (!facts.資産 || !facts.資産.総資産_円) {
+    if (st) st.textContent = "⚠️ 資産の情報がありません。銘柄一覧で口数・投資金額を入力してください。";
+    return;
+  }
+  box.hidden = false;
+  if (st) st.textContent = "";
+  box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> AIが全体を検討中… ⏳</div>';
+  try {
+    const d = await fetchJson("/api/ai-overall", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(facts),
+    }, 120000);
+    if (!d.ok) {
+      box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIに相談できませんでした")}</div>`;
+      return;
+    }
+    renderOverallAi(d.advice, d.model, facts);
+  } catch (e) {
+    box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(netErrMsg(e))}</div>`;
+  }
+}
+
+const WHEN_ORDER = { "今すぐ": 0, "今年中": 1, "退職まで": 2, "退職後": 3 };
+
+function renderOverallAi(advice, model, facts) {
+  const box = $("ai-overall");
+  if (!box) return;
+  const v = advice || {};
+  const acts = (v.actions || []).slice().sort(
+    (a, b) => (WHEN_ORDER[a.when] ?? 9) - (WHEN_ORDER[b.when] ?? 9));
+  const list = (xs) => (xs || []).map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
+  let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>これからの投資アクション</b>`
+    + `<span class="ai-model">${modelLabel(model)}</span></div>`;
+  if (v.headline) html += `<div class="ov-headline">${escapeHtml(v.headline)}</div>`;
+  if (acts.length) {
+    html += '<ol class="ov-actions">' + acts.map((a) => `
+      <li class="ov-act">
+        <div class="ov-act-head"><span class="ov-when ov-when-${WHEN_ORDER[a.when] ?? 9}">${escapeHtml(a.when || "")}</span>
+          <b>${escapeHtml(a.title || "")}</b></div>
+        <div class="ov-act-why">${escapeHtml(a.why || "")}</div>
+        <div class="ov-act-how">${escapeHtml(a.how || "")}</div>
+      </li>`).join("") + "</ol>";
+  }
+  if ((v.risks || []).length) {
+    html += `<div class="ai-block"><div class="ai-block-t">見落としやすい点</div>`
+      + `<ul class="ai-block-b ai-list">${list(v.risks)}</ul></div>`;
+  }
+  if ((v.keep || []).length) {
+    html += `<div class="ai-block"><div class="ai-block-t">いまのままでよいこと</div>`
+      + `<ul class="ai-block-b ai-list">${list(v.keep)}</ul></div>`;
+  }
+  const noStrategy = typeof facts.取り崩しの試算 === "string";
+  html += '<div class="ai-foot">※ 画面に出ている数字だけをもとにしたコメントです。'
+    + (noStrategy ? '取り崩し戦略タブを開いてから相談すると、資産寿命や成功確率も踏まえた内容になります。' : "")
     + '前提を変えれば結論も変わります。投資助言ではありません。</div>';
   box.innerHTML = html;
   box.hidden = false;

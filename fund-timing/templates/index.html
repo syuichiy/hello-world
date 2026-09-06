@@ -435,6 +435,20 @@
 
     <!-- ========================= 資産プランビュー ========================= -->
     <section id="plan-view" hidden>
+      <!-- 全体を横断したAIの助言（各タブのコメントをまとめた「これからやること」） -->
+      <div class="card plan-card overall-card" id="ai-overall-card" hidden>
+        <div class="overall-head">
+          <h2>🧭 これからの投資アクション（AI総合）</h2>
+          <button id="ai-overall-run" type="button" class="ghost-btn">AIに相談する</button>
+        </div>
+        <p class="hint">資産全体・資産クラスの配分・年齢と退職・年金・取り崩しの試算・手元に置きたい現金・直近のシグナルを
+          <strong>まとめて</strong>渡し、<strong>これから何をするか</strong>を優先順位つきで返します。
+          各タブのAIコメントは1つの観点だけを見ていますが、ここはそれらを横断した内容です。
+          ※ 機械的な参考情報であり、投資助言ではありません。</p>
+        <div id="ai-overall-status" class="ai-test-status"></div>
+        <div id="ai-overall" hidden></div>
+      </div>
+
       <!-- 目標とFIRE進捗 -->
       <div class="card plan-card">
         <h2>🎯 目標資産と進捗</h2>

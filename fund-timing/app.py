@@ -2247,6 +2247,114 @@ def api_ai_strategy():
     return jsonify({"ok": True, "model": model_key, "advice": data})
 
 
+_AI_OVERALL_PROMPT = (
+    "あなたは日本の個人投資家の「これからの行動」を一緒に決めるアシスタントです。\n"
+    "入力は、その人の資産のいまの姿（保有・資産配分・口座の内訳・含み益・分配金）と、"
+    "ライフプランの前提（年齢・退職・年金・企業年金・退職一時金・生活費・インフレ）、"
+    "アプリが計算した取り崩しの試算（方式ごとの資産寿命と成功確率）、"
+    "手元に置きたい現金の目安と現状、直近の売買シグナルの要約です。\n"
+    "画面に出ている数字をそのまま渡しているので、必ずこの数字だけを使って考えてください"
+    "（自分で相場観や新しい数字を作らない）。\n\n"
+    "個別のメニューには、それぞれの観点の助言がすでに出ています。"
+    "ここで求めているのは、それらを踏まえた\u300c全体としてこれから何をするか\u300d です。"
+    "資産形成期なのか取り崩し期なのか、退職まで何年か、資産が尽きない見込みはどうか、"
+    "現金は足りているか、配分は理想からどれだけ離れているか、1銘柄への集中はどうか、"
+    "税と非課税枠（NISA）をどう使うか——これらを一度に見て、優先順位をつけてください。\n\n"
+    "次をJSONで返してください。\n"
+    "- headline: いまの状況をひとことで言い切る（1〜2文・120字以内）。"
+    "資産が十分か・どの局面にいるかが分かるように。\n"
+    "- actions: これからの行動を3〜5件。優先度の高い順。各項目は\n"
+    "    when: \u300c今すぐ\u300d\u300c今年中\u300d\u300c退職まで\u300d\u300c退職後\u300d のいずれか\n"
+    "    title: 何をするか（30字以内・動詞で終える）\n"
+    "    why: なぜそうするか（80字以内・入力の数字を1つ引用する）\n"
+    "    how: 具体的な進め方（100字以内・金額や順序を含める。"
+    "アプリのどの画面で確認できるかに触れてもよい）\n"
+    "- risks: 見落としやすい点を2〜3件（各60字以内）。"
+    "勤務先の株なら給与・退職金も同じ会社に依存する点、暴落時の順序リスク、"
+    "売却益にかかる税や社会保険料への影響など、その人の状況で効くものを選ぶ。\n"
+    "- keep: いま変えなくてよいこと・うまくいっていることを1〜2件（各60字以内）。"
+    "何もかも変えさせないために、あえて現状維持でよい部分を挙げる。\n\n"
+    "守ること：断定的な将来予測をしない。特定の銘柄の買い推奨をしない"
+    "（すでに持っている銘柄の売却・配分調整に触れるのは構わない）。"
+    "入力に無い数字を作らない。日本語で、専門用語には短い言い換えを添える。"
+    "\u300c投資助言ではない\u300dと毎項目に書かない（画面に注記がある）。"
+)
+
+_AI_OVERALL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "when": {"type": "string"},
+                    "title": {"type": "string"},
+                    "why": {"type": "string"},
+                    "how": {"type": "string"},
+                },
+                "required": ["when", "title", "why", "how"],
+                "additionalProperties": False,
+            },
+        },
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "keep": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["headline", "actions", "risks", "keep"],
+    "additionalProperties": False,
+}
+
+
+@app.route("/api/ai-overall", methods=["POST"])
+def api_ai_overall():
+    """資産・ライフプラン・取り崩しの試算をまとめてClaudeに渡し、これからの行動を返す。
+
+    各メニューのAIコメントは、その画面の観点だけで書かれる。ここは横断して
+    「全体としてどうするか」を1つにまとめるための入口。試算はブラウザ側の計算結果を
+    そのまま受け取る（サーバで計算し直すと画面の数字とずれるため）。
+    """
+    state = _settings_state()
+    model_key = state["ai_model"]
+    if model_key == "off":
+        return jsonify({"ok": False, "disabled": True,
+                        "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
+    if not _HAS_ANTHROPIC:
+        return jsonify({"ok": False, "error":
+                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
+    key = _ai_api_key()
+    if not key:
+        return jsonify({"ok": False, "error":
+                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
+
+    ctx = request.get_json(force=True, silent=True) or {}
+    if not ctx.get("資産"):
+        return jsonify({"ok": False, "error":
+                        "資産の情報がありません。銘柄一覧で口数・投資金額を入力してください。"})
+
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        resp = client.messages.create(
+            model=_AI_MODELS[model_key],
+            max_tokens=4000,
+            system=[{"type": "text", "text": _AI_OVERALL_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content":
+                       "次の状況をもとに、これからの行動を優先順位つきで助言してください。\n"
+                       + json.dumps(ctx, ensure_ascii=False)}],
+            output_config={"format": {"type": "json_schema", "schema": _AI_OVERALL_SCHEMA}},
+        )
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        data = json.loads(text) if text else {}
+    except json.JSONDecodeError:
+        return jsonify({"ok": False, "error":
+                        "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
+    except Exception as e:
+        return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
+
+    return jsonify({"ok": True, "model": model_key, "advice": data})
+
+
 # ================================================================== 資産プラン
 def _dividend_effective_mode(s, annual):
     """分配金の受け取り方を確定する。手動設定が無ければ自動判定：
