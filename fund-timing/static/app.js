@@ -3859,7 +3859,6 @@ function buildOverallFacts() {
   const cash = p.cash || 0, bonds = p.bonds || 0;
   const fundValue = sum(live, val);
   const t = cashTargets();
-  const st = (lastActualData && lastActualData.holdings) ? null : null;   // 未使用（将来の拡張用）
 
   // 直近のシグナル（銘柄一覧のバナーと同じ判定）
   const shortBuy = live.filter((x) => shortTermSignal(x) === "buy").map((x) => x.name);
@@ -3870,12 +3869,15 @@ function buildOverallFacts() {
     midCount[k] += 1;
   });
 
-  // 資産クラスの配分（現在と理想の乖離）
+  // 資産クラスの配分（現在と理想の乖離）。項目名はサーバーが返すものに合わせる
+  // （share=現在%, target=理想%, diff=差, amount=調整の目安額, action_label=判定）
   const alloc = (lastAllocation && lastAllocation.classes)
     ? lastAllocation.classes.map((c) => ({
-        資産クラス: c.name, 現在_パーセント: c.current, 理想_パーセント: c.target,
-        差_ポイント: Number((c.current - c.target).toFixed(1)),
-        金額の目安_円: Math.round(c.diff_amount || 0),
+        資産クラス: c.name,
+        現在_パーセント: c.share, 理想_パーセント: c.target, 差_ポイント: c.diff,
+        判定: c.action_label,
+        調整の目安金額_円: c.amount != null ? c.amount : 0,
+        評価額_円: c.value != null ? c.value : 0,
       }))
     : null;
 
@@ -3904,8 +3906,10 @@ function buildOverallFacts() {
     },
     資産配分: alloc,
     分配金: planData.dividends ? {
+      受取_年額_税引前_円: Math.round(planData.dividends.receive_gross || 0),
       受取_年額_税引後_円: Math.round(planData.dividends.receive_net || 0),
-      再投資_年額_円: Math.round(planData.dividends.reinvest || 0),
+      再投資_年額_円: Math.round(planData.dividends.reinvest_total || 0),
+      分配金を生む商品の評価額_円: Math.round(planData.dividends.receive_value || 0),
     } : null,
     ライフプラン: {
       現在年齢: p.current_age || null, 退職年齢: p.retire_age || null,
