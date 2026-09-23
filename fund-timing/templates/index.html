@@ -795,6 +795,17 @@
           <input id="import-file" type="file" accept="application/json,.json" hidden>
           <span id="backup-status" class="ai-test-status"></span>
         </div>
+        <details class="plan-help" id="backup-paste-box">
+          <summary>ファイルを読み取れないときは、バックアップの中身を貼り付ける</summary>
+          <p class="hint">バックアップJSONを「テキストエディット」で開いて<strong>全選択（⌘A）→ コピー（⌘C）</strong>し、
+            下の欄に貼り付けて「この内容で復元する」を押してください。
+            iCloud Driveにあるファイルなど、ブラウザから読み取れない場所のファイルでも復元できます。</p>
+          <textarea id="backup-text" class="plan-input" rows="6"
+            placeholder='{&#10; "app": "fund-timing",&#10; "version": 1,&#10; "catalog": [ … ]&#10;}'></textarea>
+          <div class="backup-row">
+            <button id="backup-text-btn" type="button">この内容で復元する</button>
+          </div>
+        </details>
         <div class="settings-note">
           <p>⚠️ <strong>復元すると現在の保有・評価額の履歴・設定は置き換わります。</strong>復元前に、いまの状態をバックアップしておくことをおすすめします。</p>
           <p>🔑 <strong>APIキーもバックアップに含まれます</strong>（そのまま復元できるようにするため）。ファイル内に平文で保存されるので、<strong>他人に渡したり、クラウドやGitHubに置いたりしないでください</strong>。</p>

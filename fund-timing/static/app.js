@@ -95,16 +95,21 @@ function showSkeleton() {
 
 // 通信が途中で切れたときのメッセージ。ブラウザは "Load failed" などとしか言わないので、
 // 何が起きたのか・どうすればよいのかを日本語で添える。
-function netErrMsg(e) {
+// ブラウザの生のエラー（Safariの "Load failed" など）は何が起きたか分からないので、
+// 通信が切れた場合だけ手順の分かる文言に置き換える。extra には画面ごとの補足を渡す。
+function netErrMsg(e, extra) {
   const m = String((e && e.message) || e || "");
   if (/Load failed|Failed to fetch|NetworkError|network connection was lost|timed out|aborted|AbortError/i
       .test(m)) {
     return "通信が途中で切れました（時間がかかりすぎたか、Wi-Fi・スリープで接続が切れた可能性があります）。"
       + "アプリ（run.command のターミナル）が動いているか確認して、もう一度お試しください。"
-      + "「最新に更新」の場合、取得できたぶんは残っているので続きから更新します。";
+      + (extra || "");
   }
   return m || "通信エラー";
 }
+
+// 「最新に更新」だけの補足（途中で切れても続きから再開できる）
+const NET_HINT_REFRESH = "取得できたぶんは残っているので、押し直せば続きから更新します。";
 
 // 「最新に更新」は1銘柄ずつ取り直す。全銘柄を1リクエストにまとめると、
 // 銘柄数 × 取得時間が積み上がってブラウザが待ちきれずに切ってしまう（iPadで Load failed）。
@@ -168,7 +173,7 @@ async function loadWatchlist(force) {
     }
     if (!data.ok && data.error) throw new Error(data.error);
   } catch (e) {
-    setDashStatus("⚠️ " + netErrMsg(e), "error");
+    setDashStatus("⚠️ " + netErrMsg(e, NET_HINT_REFRESH), "error");
     return;
   }
   setDashStatus(refreshed && refreshed.failed
@@ -543,7 +548,7 @@ async function loadPriceHistory(force) {
     data = await (await fetch(`/api/actual-history?range=${encodeURIComponent(priceRange)}`
       + ((force && !refreshed) ? "&force=1" : ""))).json();
   } catch (e) {
-    st.className = "status error"; st.textContent = "⚠️ " + netErrMsg(e); return;
+    st.className = "status error"; st.textContent = "⚠️ " + netErrMsg(e, NET_HINT_REFRESH); return;
   }
   if (!data.ok) { st.className = "status error"; st.textContent = "⚠️ " + (data.error || "取得に失敗"); return; }
   if (refreshed && refreshed.failed) {
@@ -2442,6 +2447,30 @@ function readFileAsBase64(file, ms) {
   });
 }
 
+// 選んだファイルを文字列として読み込む（バックアップJSON用）。
+// file.text() を直接使うと、iCloud Driveにあって実体がまだ手元に無いファイルでは
+// Safariが「Load failed」だけを返し、通信エラーと見分けがつかなくなる。
+// FileReader なら失敗と時間切れを切り分けて、原因の分かる文言を出せる。
+function readFileAsText(file, ms) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    const timer = setTimeout(() => {
+      try { fr.abort(); } catch (_) {}
+      reject(new Error("ファイルを読み込めませんでした（時間切れ）。"
+        + "iCloud Driveにあるファイルは、Finderで雲アイコンをクリックしてダウンロードするか、"
+        + "デスクトップにコピーしてからお試しください。"));
+    }, ms || 30000);
+    fr.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("ファイルを読み込めませんでした（アクセスできません）。"
+        + "iCloud Driveやリムーバブルディスクのファイルは、"
+        + "いったんデスクトップにコピーしてからお試しください。"));
+    };
+    fr.onload = () => { clearTimeout(timer); resolve(String(fr.result || "")); };
+    fr.readAsText(file);
+  });
+}
+
 // CSVを読み取る。mapping を渡すと、その列の対応づけで読み直す。
 // csvFile（選んだファイル）と csvText（貼り付けた内容）のどちらかを使う。
 async function readCsv(mapping) {
@@ -2641,37 +2670,81 @@ $("export-btn").addEventListener("click", async () => {
   }
 });
 
-// バックアップからの復元（ファイル選択 → 確認 → 取り込み）
+// バックアップからの復元。
+// 「ファイルを読む」と「サーバーに送る」は失敗の原因が全く違うのに、Safariでは
+// どちらも "Load failed" としか出ない。段階を分けて、どちらで失敗したかを文言に出す。
+async function restoreFromJsonText(text, where) {
+  if (!text || !text.trim()) {
+    throw new Error(`${where}が空でした。中身のあるバックアップを指定してください。`);
+  }
+  let data;
+  try { data = JSON.parse(text); }
+  catch (_) {
+    const head = text.trim().slice(0, 60).replace(/\s+/g, " ");
+    throw new Error(`${where}をJSONとして読み取れませんでした（先頭: ${head}…）。`
+      + "「バックアップを保存」で書き出したJSONファイルか確認してください。");
+  }
+  // 送る前に中身を確かめる。別のJSONを送ってしまったとき、通信エラーと区別できるようにする
+  if (!data || data.app !== "fund-timing") {
+    throw new Error("このアプリのバックアップファイルではないようです"
+      + "（ファイルの先頭に \"app\": \"fund-timing\" が入っている必要があります）。");
+  }
+  setBackupStatus("サーバーに送信中… ⏳");
+  const d = await fetchJson("/api/import", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  }, 120000);
+  if (!d.ok) throw new Error(d.error || "取り込みに失敗しました");
+  const c = d.counts || {};
+  setBackupStatus(`✅ 復元しました（商品 ${c.catalog || 0} / 保有 ${c.watchlist || 0} / 履歴 ${c.amount_history || 0} 件）`);
+  toast("バックアップから復元しました");
+  // 画面全体を作り直す（一覧・設定・資産プラン）
+  await loadSettings();
+  await loadWatchlist();
+}
+
+function confirmRestore() {
+  return confirm("バックアップから復元します。\n\n現在の保有・評価額の履歴・設定は置き換わります。\nよろしいですか？");
+}
+
 $("import-btn").addEventListener("click", () => $("import-file").click());
 $("import-file").addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = "";                       // 同じファイルを続けて選べるようにする
   if (!file) return;
-  if (!confirm("バックアップから復元します。\n\n現在の保有・評価額の履歴・設定は置き換わります。\nよろしいですか？")) {
-    setBackupStatus("復元をキャンセルしました");
+  if (!confirmRestore()) { setBackupStatus("復元をキャンセルしました"); return; }
+  const kb = Math.max(1, Math.round((file.size || 0) / 1024));
+  setBackupStatus(`ファイルを読み取り中… ⏳（${file.name} / ${kb}KB）`);
+  let text;
+  try {
+    text = await readFileAsText(file, 30000);
+  } catch (err) {
+    // ここでの失敗はファイル側。通信エラーと取り違えないよう、原因を明示する
+    setBackupStatus("⚠️ " + err.message, "error");
+    const box = $("backup-paste-box"); if (box) box.open = true;
     return;
   }
-  setBackupStatus("復元中… ⏳");
   try {
-    const text = await file.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch (_) { throw new Error("JSONとして読み取れませんでした。ファイルを確認してください。"); }
-    const r = await fetch("/api/import", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
-    });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || "取り込みに失敗しました");
-    const c = d.counts || {};
-    setBackupStatus(`✅ 復元しました（商品 ${c.catalog || 0} / 保有 ${c.watchlist || 0} / 履歴 ${c.amount_history || 0} 件）`);
-    toast("バックアップから復元しました");
-    // 画面全体を作り直す（一覧・設定・資産プラン）
-    await loadSettings();
-    await loadWatchlist();
+    await restoreFromJsonText(text, "ファイル");
   } catch (err) {
-    setBackupStatus("⚠️ " + err.message, "error");
+    setBackupStatus("⚠️ " + netErrMsg(err), "error");
   }
 });
+
+// 貼り付けからの復元（ファイルが読めないときの逃げ道）
+const backupTextBtn = $("backup-text-btn");
+if (backupTextBtn) {
+  backupTextBtn.addEventListener("click", async () => {
+    const text = ($("backup-text") && $("backup-text").value) || "";
+    if (!text.trim()) { setBackupStatus("⚠️ 貼り付け欄が空です。", "error"); return; }
+    if (!confirmRestore()) { setBackupStatus("復元をキャンセルしました"); return; }
+    setBackupStatus("復元中… ⏳（貼り付けた内容）");
+    try {
+      await restoreFromJsonText(text, "貼り付けた内容");
+    } catch (err) {
+      setBackupStatus("⚠️ " + netErrMsg(err), "error");
+    }
+  });
+}
 
 // 資産プランの前提（設定画面）— 入力を /api/plan に保存
 function bindPremise(id, key, comma) {
