@@ -1151,8 +1151,27 @@ function renderShortTermBanner() {
     el.innerHTML = "";
     return;
   }
+  // 同じ商品名が2件以上あるもの（NISAと特定で分けて持っている等）
+  const dup = new Set();
+  const seen = new Set();
+  buys.concat(sells).forEach((s) => {
+    if (seen.has(s.name)) dup.add(s.name); else seen.add(s.name);
+  });
+  // 商品名を主、口座名（ニックネーム）を従で出す。口座名だけを出すと
+  // 「特定口座」とだけ並んで何の商品か分からなくなる。
+  const itemName = (s) => {
+    const nm = s.name || s.account || "（名称未設定）";
+    const bits = [];
+    if (s.account && s.account !== s.name) bits.push(s.account);
+    if (dup.has(s.name)) {
+      if (!bits.length) bits.push(s.account_type === "nisa" ? "NISA" : "特定");
+      if (s.broker) bits.push(s.broker);
+    }
+    return `<span class="st-item-nm">${escapeHtml(nm)}</span>`
+      + (bits.length ? `<span class="st-item-acct">${escapeHtml(bits.join("・"))}</span>` : "");
+  };
   const list = (arr, signal) => arr.map((s) =>
-    `<li><span class="st-item-nm">${escapeHtml(s.account || s.name)}</span>`
+    `<li>${itemName(s)}`
     + `<span class="st-item-adv">${escapeHtml(shortTermAdviceText(s, signal))}</span></li>`
   ).join("");
   let html = "";
