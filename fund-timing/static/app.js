@@ -2216,8 +2216,9 @@ $("detail-range").addEventListener("click", (e) => {
 $("back-btn").addEventListener("click", showDashboard);
 
 // ============================================================ 設定 / AIアドバイス
-let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false };
-const AI_MODEL_LABELS = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus" };
+let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false,
+                   ai_local_url: "", ai_local_model: "" };
+const AI_MODEL_LABELS = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus", local: "ローカルLLM" };
 function modelLabel(m) { return AI_MODEL_LABELS[m] || "AI"; }
 let aiAdviceByWatch = {};   // watch_id -> コメント
 let lastAiAdvice = null;    // 直近のAIアドバイス全体 {overall, rebalance, funds}
@@ -2263,8 +2264,22 @@ async function loadSettings() {
 function renderSettingsUI() {
   document.querySelectorAll("#ai-model-toggle .seg-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.model === aiSettings.ai_model));
+  // ローカルLLMを選んだときだけ接続先を出す。逆にAPIキーは要らないので隠す。
+  const isLocal = aiSettings.ai_model === "local";
+  const lrow = $("ai-local-row"), lhint = $("ai-local-hint"), krow = $("ai-key-row");
+  if (lrow) lrow.hidden = !isLocal;
+  if (lhint) lhint.hidden = !isLocal;
+  if (krow) krow.hidden = isLocal;
+  if ($("ai-local-url") && document.activeElement !== $("ai-local-url")) {
+    $("ai-local-url").value = aiSettings.ai_local_url || "";
+  }
+  if ($("ai-local-model") && document.activeElement !== $("ai-local-model")) {
+    $("ai-local-model").value = aiSettings.ai_local_model || "";
+  }
   const st = $("ai-key-status");
   if (!st) return;
+  st.hidden = isLocal;
+  if (isLocal) return;         // ローカルLLMではAPIキーの状態は関係ない
   if (!aiSettings.ai_available) {
     st.innerHTML = "⚠️ anthropic パッケージが未インストールです。<code>pip install anthropic</code> を実行してください。";
   } else if (aiSettings.ai_key_from_env) {
@@ -2376,6 +2391,25 @@ $("ai-model-toggle").addEventListener("click", (e) => {
   if (b && b.dataset.model !== aiSettings.ai_model) saveAiModel(b.dataset.model);
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
+
+// ローカルLLMの接続先を保存する
+const aiLocalSave = $("ai-local-save");
+if (aiLocalSave) {
+  aiLocalSave.addEventListener("click", async () => {
+    const url = ($("ai-local-url").value || "").trim();
+    const model = ($("ai-local-model").value || "").trim();
+    try {
+      const d = await fetchJson("/api/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_local_url: url, ai_local_model: model }),
+      });
+      if (d && d.ok) { aiSettings = d; renderSettingsUI(); toast("ローカルLLMの接続先を保存しました"); }
+      else { toast("保存に失敗しました", "error"); }
+    } catch (e) { toast(netErrMsg(e), "error"); }
+    aiLoadedOnce = false;
+    loadAiAdvice();
+  });
+}
 $("ai-test-btn").addEventListener("click", () => loadAiAdvice(true));
 
 // ============================================================ 取引履歴CSVの取り込み

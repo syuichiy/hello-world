@@ -585,11 +585,31 @@
             <button class="seg-btn" data-model="haiku">Haiku（最安・高速）</button>
             <button class="seg-btn" data-model="sonnet">Sonnet（推奨）</button>
             <button class="seg-btn" data-model="opus">Opus（最高精度）</button>
+            <button class="seg-btn" data-model="local">ローカルLLM</button>
           </div>
         </div>
         <p class="hint model-cost-hint">
           目安コスト：Haiku ≈ 1円/回、Sonnet ≈ 3円/回、Opus ≈ 15円/回（従量課金）。
           Opusは最も精度が高い一方、コストと時間がかかります。「オフ」ならAIには一切送信しません。
+          <strong>ローカルLLM</strong>は自分のMacで動かすので費用ゼロ・データも外に出ませんが、
+          精度は落ち、1回に数十秒〜数分かかります。
+        </p>
+
+        <div class="setting-row" id="ai-local-row" hidden>
+          <div class="setting-label">ローカルLLM</div>
+          <div class="setting-field ai-local-field">
+            <input id="ai-local-url" type="text" autocomplete="off"
+                   placeholder="http://127.0.0.1:11434/v1">
+            <input id="ai-local-model" type="text" autocomplete="off"
+                   placeholder="qwen3:14b">
+            <button id="ai-local-save" type="button" class="ghost-btn">保存</button>
+          </div>
+        </div>
+        <p class="hint" id="ai-local-hint" hidden>
+          左が接続先（OpenAI互換API）、右がモデル名です。Ollamaなら
+          <code>http://127.0.0.1:11434/v1</code>、LM Studioなら <code>http://127.0.0.1:1234/v1</code>。
+          先にターミナルで <code>ollama pull qwen3:14b</code> を実行してモデルを入れてください。
+          APIキーは不要で、通信はこのMacの中だけで完結します。
         </p>
 
         <div class="setting-row" id="ai-key-row">

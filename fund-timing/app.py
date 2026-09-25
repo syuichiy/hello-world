@@ -25,6 +25,8 @@ import traceback
 import webbrowser
 from urllib.parse import urlparse, parse_qs
 
+import requests
+
 from flask import Flask, jsonify, render_template, request, Response
 
 import fund_data
@@ -1925,7 +1927,19 @@ _AI_MODELS = {
     "sonnet": "claude-sonnet-5",
     "opus": "claude-opus-5",
 }
-_AI_MODEL_KEYS = ("off",) + tuple(_AI_MODELS.keys())   # 設定で許可するキー
+# ローカルLLM（Ollama / LM Studio など、OpenAI互換のエンドポイント）。
+# 選ぶとAPIキー不要・通信は同じMac（またはLAN内）で完結し、外部には一切送らない。
+_AI_LOCAL = "local"
+_AI_LOCAL_URL_DEFAULT = "http://127.0.0.1:11434/v1"   # Ollama の既定
+_AI_LOCAL_MODEL_DEFAULT = "qwen3:14b"
+_AI_LOCAL_TIMEOUT = 600        # ローカルは生成が遅いので長めに待つ
+_AI_MODEL_KEYS = ("off", _AI_LOCAL) + tuple(_AI_MODELS.keys())   # 設定で許可するキー
+
+
+def _ai_local_conf():
+    url = (db.get_setting("ai_local_url", "") or "").strip() or _AI_LOCAL_URL_DEFAULT
+    model = (db.get_setting("ai_local_model", "") or "").strip() or _AI_LOCAL_MODEL_DEFAULT
+    return url, model
 
 
 def _ai_api_key():
@@ -1937,11 +1951,14 @@ def _settings_state():
     model = db.get_setting("ai_model", "off") or "off"
     if model not in _AI_MODEL_KEYS:
         model = "off"
+    local_url, local_model = _ai_local_conf()
     return {
         "ai_model": model,
         "ai_available": _HAS_ANTHROPIC,            # anthropic パッケージが入っているか
         "ai_key_set": bool(_ai_api_key()),         # キーが使える状態か（値は返さない）
         "ai_key_from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "ai_local_url": local_url,                 # ローカルLLMの接続先（OpenAI互換）
+        "ai_local_model": local_model,
     }
 
 
@@ -1956,7 +1973,123 @@ def api_settings():
         if "ai_api_key" in data:
             key = str(data.get("ai_api_key") or "").strip()
             db.set_setting("ai_api_key", key)
+        if "ai_local_url" in data:
+            db.set_setting("ai_local_url", str(data.get("ai_local_url") or "").strip())
+        if "ai_local_model" in data:
+            db.set_setting("ai_local_model", str(data.get("ai_local_model") or "").strip())
     return jsonify({"ok": True, **_settings_state()})
+
+
+# --------------------------------------------------------------- AI呼び出しの共通部分
+class AiUnavailable(Exception):
+    """AIを呼べない状態（未設定など）。利用者向けの日本語をそのまま持つ。"""
+
+
+def _ai_extract_json(text: str):
+    """モデルの出力からJSONを取り出す。
+
+    ローカルLLMは ```json のコードブロックで囲んだり、推論モデルでは <think>…</think> を
+    前置きしたりする。素の json.loads だけだと、内容は正しいのに読めない扱いになる。
+    """
+    t = (text or "").strip()
+    if "</think>" in t:                       # 推論モデルの思考部分を捨てる
+        t = t.split("</think>", 1)[1].strip()
+    if t.startswith("```"):                   # ```json … ``` を剥がす
+        t = t.split("\n", 1)[1] if "\n" in t else t
+        if t.endswith("```"):
+            t = t[:-3]
+        t = t.strip()
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        pass
+    i, j = t.find("{"), t.rfind("}")          # 前後に説明文が付いた場合の最後の砦
+    if i >= 0 and j > i:
+        return json.loads(t[i:j + 1])
+    raise json.JSONDecodeError("JSONが見つかりません", t, 0)
+
+
+def _ai_local_call(system: str, user: str, schema: dict, max_tokens: int):
+    """ローカルLLM（OpenAI互換API）に問い合わせてJSONを返す。"""
+    base, model = _ai_local_conf()
+    url = base.rstrip("/") + "/chat/completions"
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+        "max_tokens": max_tokens,
+        "temperature": 0.2,        # 数字を扱うので振れを小さく
+        "stream": False,
+        "response_format": {"type": "json_schema",
+                            "json_schema": {"name": "advice", "strict": True, "schema": schema}},
+    }
+    try:
+        r = requests.post(url, json=body, timeout=_AI_LOCAL_TIMEOUT)
+        # 構造化出力に対応していないサーバー・モデルなら、ゆるい指定で試し直す
+        if r.status_code >= 400:
+            body["response_format"] = {"type": "json_object"}
+            r = requests.post(url, json=body, timeout=_AI_LOCAL_TIMEOUT)
+        if r.status_code >= 400:
+            body.pop("response_format", None)
+            r = requests.post(url, json=body, timeout=_AI_LOCAL_TIMEOUT)
+    except requests.exceptions.ConnectionError:
+        raise AiUnavailable(
+            f"ローカルLLM（{base}）に接続できませんでした。"
+            "Ollama や LM Studio が起動しているか、設定画面のURLが合っているかご確認ください。"
+            "（ターミナルで `ollama serve` を実行すると起動します）")
+    except requests.exceptions.Timeout:
+        raise AiUnavailable(
+            f"ローカルLLMの応答が{_AI_LOCAL_TIMEOUT}秒以内に返りませんでした。"
+            "モデルが大きすぎる可能性があります。設定画面でより小さいモデルをお試しください。")
+    except requests.RequestException as e:
+        raise AiUnavailable(f"ローカルLLMの呼び出しに失敗しました: {e}")
+
+    if r.status_code >= 400:
+        detail = (r.text or "")[:200]
+        if r.status_code == 404:
+            raise AiUnavailable(
+                f"ローカルLLMがモデル「{model}」を見つけられませんでした。"
+                f"ターミナルで `ollama pull {model}` を実行するか、設定画面のモデル名をご確認ください。")
+        raise AiUnavailable(f"ローカルLLMがエラーを返しました（HTTP {r.status_code}）。{detail}")
+
+    try:
+        payload = r.json()
+        text = payload["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError):
+        raise AiUnavailable("ローカルLLMの応答形式を解釈できませんでした"
+                            "（OpenAI互換のエンドポイントか確認してください）。")
+    return _ai_extract_json(text)
+
+
+def _ai_generate(model_key: str, system: str, user: str, schema: dict, max_tokens: int):
+    """設定に応じてクラウド（Claude）とローカルLLMを振り分け、JSONを返す。
+
+    どちらも「システムプロンプト＋JSON＋スキーマ」という同じ形なので、
+    呼び出し側（各AI画面）は違いを意識しなくてよい。
+    """
+    if model_key == _AI_LOCAL:
+        return _ai_local_call(system, user, schema, max_tokens)
+
+    if not _HAS_ANTHROPIC:
+        raise AiUnavailable(
+            "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。")
+    key = _ai_api_key()
+    if not key:
+        raise AiUnavailable(
+            "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。")
+    client = anthropic.Anthropic(api_key=key)
+    resp = client.messages.create(
+        model=_AI_MODELS[model_key],
+        max_tokens=max_tokens,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+    )
+    text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+    if not text and getattr(resp, "stop_reason", None) == "max_tokens":
+        raise AiUnavailable("AIの応答が長すぎて途中で切れました。もう一度お試しください"
+                            "（改善しない場合はHaikuモデルでお試しください）。")
+    return _ai_extract_json(text)
 
 
 def _ai_error_message(e) -> str:
@@ -2109,13 +2242,6 @@ def api_ai_advice():
     if model_key == "off":
         return jsonify({"ok": False, "disabled": True,
                         "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
-    if not _HAS_ANTHROPIC:
-        return jsonify({"ok": False, "error":
-                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
-    key = _ai_api_key()
-    if not key:
-        return jsonify({"ok": False, "error":
-                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
 
     range_key = request.args.get("range", "1y")
     summaries = _build_summaries(range_key, force=False)
@@ -2124,29 +2250,17 @@ def api_ai_advice():
     if not ctx["funds"]:
         return jsonify({"ok": False, "error": "分析できる保有商品がありません。"})
 
-    model_id = _AI_MODELS[model_key]
     try:
-        client = anthropic.Anthropic(api_key=key)
-        resp = client.messages.create(
-            model=model_id,
-            max_tokens=12000,   # 日本語＋多数の銘柄でも途中で切れないよう十分な上限
-            system=[{"type": "text", "text": _AI_SYSTEM_PROMPT,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content":
-                       "次の保有状況にコメントしてください。\n" + json.dumps(ctx, ensure_ascii=False)}],
-            output_config={"format": {"type": "json_schema", "schema": _AI_SCHEMA}},
-        )
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        stop = getattr(resp, "stop_reason", None)
-        try:
-            data = json.loads(text) if text else {}
-        except json.JSONDecodeError:
-            if stop == "max_tokens":
-                return jsonify({"ok": False, "error":
-                                "AIの応答が長すぎて途中で切れました。もう一度お試しください"
-                                "（改善しない場合はHaikuモデルでお試しください）。"}), 502
-            return jsonify({"ok": False, "error":
-                            "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
+        data = _ai_generate(
+            model_key, _AI_SYSTEM_PROMPT,
+            "次の保有状況にコメントしてください。\n" + json.dumps(ctx, ensure_ascii=False),
+            _AI_SCHEMA,
+            max_tokens=12000)   # 日本語＋多数の銘柄でも途中で切れないよう十分な上限
+    except AiUnavailable as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    except json.JSONDecodeError:
+        return jsonify({"ok": False, "error":
+                        "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
@@ -2212,32 +2326,19 @@ def api_ai_strategy():
     if model_key == "off":
         return jsonify({"ok": False, "disabled": True,
                         "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
-    if not _HAS_ANTHROPIC:
-        return jsonify({"ok": False, "error":
-                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
-    key = _ai_api_key()
-    if not key:
-        return jsonify({"ok": False, "error":
-                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
 
     ctx = request.get_json(force=True, silent=True) or {}
     if not ctx.get("methods"):
         return jsonify({"ok": False, "error": "試算結果がありません。先に「再計算」を実行してください。"})
 
     try:
-        client = anthropic.Anthropic(api_key=key)
-        resp = client.messages.create(
-            model=_AI_MODELS[model_key],
-            max_tokens=4000,
-            system=[{"type": "text", "text": _AI_STRATEGY_PROMPT,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content":
-                       "次の取り崩し計画の試算結果をもとに助言してください。\n"
-                       + json.dumps(ctx, ensure_ascii=False)}],
-            output_config={"format": {"type": "json_schema", "schema": _AI_STRATEGY_SCHEMA}},
-        )
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        data = json.loads(text) if text else {}
+        data = _ai_generate(
+            model_key, _AI_STRATEGY_PROMPT,
+            "次の取り崩し計画の試算結果をもとに助言してください。\n"
+            + json.dumps(ctx, ensure_ascii=False),
+            _AI_STRATEGY_SCHEMA, max_tokens=4000)
+    except AiUnavailable as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
     except json.JSONDecodeError:
         return jsonify({"ok": False, "error":
                         "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
@@ -2319,13 +2420,6 @@ def api_ai_overall():
     if model_key == "off":
         return jsonify({"ok": False, "disabled": True,
                         "error": "AIアドバイスはオフです（設定画面で有効化できます）。"})
-    if not _HAS_ANTHROPIC:
-        return jsonify({"ok": False, "error":
-                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
-    key = _ai_api_key()
-    if not key:
-        return jsonify({"ok": False, "error":
-                        "APIキーが未設定です。設定画面で入力するか、環境変数 ANTHROPIC_API_KEY を設定してください。"})
 
     ctx = request.get_json(force=True, silent=True) or {}
     if not ctx.get("資産"):
@@ -2333,19 +2427,13 @@ def api_ai_overall():
                         "資産の情報がありません。銘柄一覧で口数・投資金額を入力してください。"})
 
     try:
-        client = anthropic.Anthropic(api_key=key)
-        resp = client.messages.create(
-            model=_AI_MODELS[model_key],
-            max_tokens=4000,
-            system=[{"type": "text", "text": _AI_OVERALL_PROMPT,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content":
-                       "次の状況をもとに、これからの行動を優先順位つきで助言してください。\n"
-                       + json.dumps(ctx, ensure_ascii=False)}],
-            output_config={"format": {"type": "json_schema", "schema": _AI_OVERALL_SCHEMA}},
-        )
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        data = json.loads(text) if text else {}
+        data = _ai_generate(
+            model_key, _AI_OVERALL_PROMPT,
+            "次の状況をもとに、これからの行動を優先順位つきで助言してください。\n"
+            + json.dumps(ctx, ensure_ascii=False),
+            _AI_OVERALL_SCHEMA, max_tokens=4000)
+    except AiUnavailable as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
     except json.JSONDecodeError:
         return jsonify({"ok": False, "error":
                         "AIの応答を解釈できませんでした。もう一度お試しください。"}), 502
@@ -2622,13 +2710,6 @@ def api_ai_plan():
     if state["ai_model"] == "off":
         return jsonify({"ok": False, "disabled": True,
                         "error": "AIはオフです（設定画面で有効化できます）。"})
-    if not _HAS_ANTHROPIC:
-        return jsonify({"ok": False, "error":
-                        "anthropic パッケージが未インストールです。`pip install anthropic` を実行してください。"})
-    key = _ai_api_key()
-    if not key:
-        return jsonify({"ok": False, "error": "APIキーが未設定です。設定画面で入力してください。"})
-
     summaries = _build_summaries(request.args.get("range", "1y"), force=False)
     allocation = _build_allocation(summaries)
     plan = db.get_setting("plan", {}) or {}
@@ -2666,20 +2747,14 @@ def api_ai_plan():
         "allocation": [{"name": c.get("name"), "current_pct": c.get("share")}
                        for c in ((allocation or {}).get("classes") or []) if c.get("share")],
     }
-    model_id = _AI_MODELS[state["ai_model"]]
     try:
-        client = anthropic.Anthropic(api_key=key)
-        resp = client.messages.create(
-            model=model_id, max_tokens=1500,
-            system=[{"type": "text", "text": _AI_PLAN_PROMPT,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content":
-                       "次のポートフォリオの長期期待リターンを見積もってください。\n"
-                       + json.dumps(ctx, ensure_ascii=False)}],
-            output_config={"format": {"type": "json_schema", "schema": _AI_PLAN_SCHEMA}},
-        )
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-        data = json.loads(text) if text else {}
+        data = _ai_generate(
+            state["ai_model"], _AI_PLAN_PROMPT,
+            "次のポートフォリオの長期期待リターンを見積もってください。\n"
+            + json.dumps(ctx, ensure_ascii=False),
+            _AI_PLAN_SCHEMA, max_tokens=1500)
+    except AiUnavailable as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
     return jsonify({"ok": True, "model": state["ai_model"], "prediction": data})

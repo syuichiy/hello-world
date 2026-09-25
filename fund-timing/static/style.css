@@ -1072,6 +1072,9 @@ main > section { display: block; }
 .setting-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 6px; }
 .setting-label { font-weight: 700; font-size: 13.5px; min-width: 88px; }
 .setting-field { display: flex; gap: 8px; flex: 1; min-width: 240px; }
+/* ローカルLLMは「接続先」と「モデル名」の2つを並べる。狭い画面では折り返す */
+.ai-local-field { flex-wrap: wrap; }
+.ai-local-field input { min-width: 150px; }
 .setting-field input { flex: 1; padding: 9px 12px; border: 1.5px solid var(--line); border-radius: 10px;
   background: var(--card); color: var(--ink); font-size: 14px; }
 .seg-toggle { display: inline-flex; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; flex-wrap: wrap; }
