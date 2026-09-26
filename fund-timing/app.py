@@ -2016,6 +2016,17 @@ def _ai_extract_json(text: str):
     raise json.JSONDecodeError("JSONが見つかりません", t, 0)
 
 
+def _ai_schema_hint(schema: dict) -> str:
+    """スキーマを指示文に書き足すための文面。
+
+    構造化出力（json_schema）に対応していないサーバーでは指定を外すしかないが、
+    外すだけだとモデルは返す形を知らないままになる。形だけは文章で伝える。
+    """
+    return ("\n\n必ず次のJSONスキーマに従ったJSONだけを返してください"
+            "（説明文やコードブロックを付けない）。\n"
+            + json.dumps(schema, ensure_ascii=False))
+
+
 def _ai_local_call(system: str, user: str, schema: dict, max_tokens: int):
     """ローカルLLM（OpenAI互換API）に問い合わせてJSONを返す。"""
     base, model = _ai_local_conf()
@@ -2032,8 +2043,11 @@ def _ai_local_call(system: str, user: str, schema: dict, max_tokens: int):
     }
     try:
         r = requests.post(url, json=body, timeout=_AI_LOCAL_TIMEOUT)
-        # 構造化出力に対応していないサーバー・モデルなら、ゆるい指定で試し直す
+        # 構造化出力に対応していないサーバー・モデルなら、ゆるい指定で試し直す。
+        # そのときはスキーマを指示文に書き足す。指定を外すだけだと、モデルは
+        # どんな形で返せばよいか分からなくなり、中身が空のJSONが返ってしまう。
         if r.status_code >= 400:
+            body["messages"][0]["content"] = system + _ai_schema_hint(schema)
             body["response_format"] = {"type": "json_object"}
             r = requests.post(url, json=body, timeout=_AI_LOCAL_TIMEOUT)
         if r.status_code >= 400:
@@ -2273,6 +2287,118 @@ _AI_SCHEMA = {
 }
 
 
+# --------------------------------------------- ローカルLLM向けに小分けして頼む
+# 全銘柄ぶんを1回で頼むと、ローカルLLMの既定のコンテキスト長（Ollamaは4096トークン）を
+# 入力が超えてしまい、超えたぶんは黙って切り捨てられる。モデルは銘柄ごとの数字を
+# 見ないままコメントを書くことになり、全銘柄が同じ（多くは「売り」の）内容になる。
+# そこで「全体コメント」と「銘柄別コメント数件ずつ」に分けて、1回の入力を小さく保つ。
+_AI_LOCAL_CHUNK = 6
+
+_AI_FUNDS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "funds": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"watch_id": {"type": "integer"}, "advice": {"type": "string"}},
+                "required": ["watch_id", "advice"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["funds"],
+    "additionalProperties": False,
+}
+_AI_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {"trade_overall": {"type": "string"}, "overall": {"type": "string"},
+                   "rebalance": {"type": "string"}},
+    "required": ["trade_overall", "overall", "rebalance"],
+    "additionalProperties": False,
+}
+
+_AI_FUNDS_PROMPT = (
+    "あなたは日本の個人投資家の投資信託に、保有者向けの短いコメントを書くアシスタントです。\n"
+    "渡すのは数銘柄ぶんの指標です。**1銘柄ずつ、その銘柄の数字だけを見て**コメントしてください。\n"
+    "- verdict/score は中期のトレンド判定、short_term は短期の過熱・売られすぎ\n"
+    "- pl_pct は含み損益率、前日比_パーセント は直近2営業日、期間騰落率_パーセント は表示期間ぜんぶ\n"
+    "  （桁が違うので取り違えないこと）\n"
+    "- sell_policy が 'hold' の銘柄は売却しない方針なので、売却を勧めない\n\n"
+    "各銘柄について2文・90字以内で、『買い増しを検討できる／一部利益確定を検討できる／"
+    "ホールドが無難／売り時に近い』などの行動と、その根拠（価格位置・トレンド・過熱/割安・含み損益）"
+    "を述べてください。\n"
+    "**重要**: 銘柄ごとに数字は違います。渡した全銘柄に同じ判断を書いてはいけません。"
+    "それぞれの verdict・short_term・pl_pct を見て、買い・ホールド・売りを"
+    "銘柄ごとに判断してください。watch_id は渡されたものをそのまま使い、勝手に作らないこと。\n"
+    "断定を避け『〜を検討できる水準』等の表現にする。これは参考情報であり投資助言ではありません。"
+)
+_AI_SUMMARY_PROMPT = (
+    "あなたは日本の個人投資家のポートフォリオ全体を見て、コメントを書くアシスタントです。\n"
+    "入力は保有の要約（銘柄数・判定の内訳・損益・資産配分・現金/債券）です。JSONで返してください。\n"
+    "- trade_overall: 売買に絞った全体の見立て（3〜4文・220字以内）。相場位置・過熱感、"
+    "買い増し／利益確定／ホールドの方針、注目すべき銘柄に触れる。資産配分比率の話は含めない。\n"
+    "- overall: 全体の総合コメント（3文以内・150字以内）。偏り・過熱/割安・損益の傾向。"
+    "現金・債券があれば投信とのバランスにも触れる。\n"
+    "- rebalance: 資産配分の観点での提案（2文以内・120字以内）。\n"
+    "断定を避け、税・手数料・分配金は未考慮である旨に1度触れる。投資助言ではありません。"
+)
+
+
+def _ai_advice_local(ctx):
+    """ローカルLLM向けに、全体コメントと銘柄別コメントを分けて生成する。"""
+    funds = ctx.get("funds") or []
+    # 全体コメント用は「1銘柄1行」に圧縮して渡す（銘柄別の細かい数字は要らない）
+    summary_ctx = {k: v for k, v in ctx.items() if k != "funds"}
+    summary_ctx["保有の要約"] = {
+        "銘柄数": len(funds),
+        "判定の内訳": {v: sum(1 for f in funds if f.get("verdict") == v)
+                       for v in {f.get("verdict") for f in funds if f.get("verdict")}},
+        "短期シグナルの内訳": {v: sum(1 for f in funds if f.get("short_term") == v)
+                               for v in {f.get("short_term") for f in funds if f.get("short_term")}},
+        "評価額合計": round(sum(f.get("value") or 0 for f in funds)),
+        "投資額合計": round(sum(f.get("invested") or 0 for f in funds)),
+        # 全銘柄を並べると入力が膨らむので、全体の話に効く上位だけに絞る
+        "主な銘柄_評価額順": [
+            {"name": f.get("name"), "verdict": f.get("verdict"),
+             "short_term": f.get("short_term"), "pl_pct": f.get("pl_pct")}
+            for f in sorted(funds, key=lambda x: -(x.get("value") or 0))[:8]],
+    }
+    out = {"trade_overall": "", "overall": "", "rebalance": "", "funds": []}
+    first_err = None        # 全部失敗したときは、最初の失敗の理由をそのまま伝える
+    try:
+        head = _ai_generate(_AI_LOCAL, _AI_SUMMARY_PROMPT,
+                            "次の保有状況の全体像にコメントしてください。\n"
+                            + json.dumps(summary_ctx, ensure_ascii=False),
+                            _AI_SUMMARY_SCHEMA, max_tokens=1200)
+        out.update({k: head.get(k, "") for k in ("trade_overall", "overall", "rebalance")})
+    except (json.JSONDecodeError, AiUnavailable) as e:
+        first_err = e       # 全体が書けなくても、銘柄別だけは出す
+
+    for i in range(0, len(funds), _AI_LOCAL_CHUNK):
+        chunk = funds[i:i + _AI_LOCAL_CHUNK]
+        ids = {f.get("watch_id") for f in chunk}
+        try:
+            d = _ai_generate(_AI_LOCAL, _AI_FUNDS_PROMPT,
+                             "次の銘柄それぞれにコメントしてください。\n"
+                             + json.dumps({"funds": chunk}, ensure_ascii=False),
+                             _AI_FUNDS_SCHEMA, max_tokens=1200)
+        except (json.JSONDecodeError, AiUnavailable) as e:
+            first_err = first_err or e
+            continue        # この数件が書けなくても、残りの銘柄は出す
+        for f in (d.get("funds") or []):
+            # 渡していないwatch_idを返してきた場合は捨てる（別銘柄の欄に出てしまうため）
+            if isinstance(f, dict) and f.get("watch_id") in ids:
+                out["funds"].append({"watch_id": f["watch_id"], "advice": f.get("advice") or ""})
+    if not out["funds"] and not out["trade_overall"]:
+        if isinstance(first_err, AiUnavailable):
+            raise first_err                       # 未起動・モデル違いなどの案内を失わない
+        raise json.JSONDecodeError("空の応答", "", 0) if first_err else AiUnavailable(
+            "ローカルLLMからコメントを受け取れませんでした。"
+            "設定画面の「接続を確認」で状態をご確認ください。")
+    return out
+
+
 @app.route("/api/ai-advice")
 def api_ai_advice():
     """保有状況をClaudeに1回で問い合わせ、総合・リバランス・銘柄別コメントを返す。"""
@@ -2290,11 +2416,14 @@ def api_ai_advice():
         return jsonify({"ok": False, "error": "分析できる保有商品がありません。"})
 
     try:
-        data = _ai_generate(
-            model_key, _AI_SYSTEM_PROMPT,
-            "次の保有状況にコメントしてください。\n" + json.dumps(ctx, ensure_ascii=False),
-            _AI_SCHEMA,
-            max_tokens=12000)   # 日本語＋多数の銘柄でも途中で切れないよう十分な上限
+        if model_key == _AI_LOCAL:
+            data = _ai_advice_local(ctx)     # 小分けにして頼む（入力の切り捨てを避ける）
+        else:
+            data = _ai_generate(
+                model_key, _AI_SYSTEM_PROMPT,
+                "次の保有状況にコメントしてください。\n" + json.dumps(ctx, ensure_ascii=False),
+                _AI_SCHEMA,
+                max_tokens=12000)   # 日本語＋多数の銘柄でも途中で切れないよう十分な上限
     except AiUnavailable as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     except json.JSONDecodeError:
