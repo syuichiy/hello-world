@@ -1936,6 +1936,13 @@ _AI_LOCAL_TIMEOUT = 600        # ローカルは生成が遅いので長めに�
 _AI_MODEL_KEYS = ("off", _AI_LOCAL) + tuple(_AI_MODELS.keys())   # 設定で許可するキー
 
 
+def _ai_model_name(model_key: str) -> str:
+    """実際に使われたモデルの名前。画面に出して、どれで生成したかを分かるようにする。"""
+    if model_key == _AI_LOCAL:
+        return _ai_local_conf()[1]
+    return _AI_MODELS.get(model_key, "")
+
+
 def _ai_local_conf():
     url = (db.get_setting("ai_local_url", "") or "").strip() or _AI_LOCAL_URL_DEFAULT
     model = (db.get_setting("ai_local_model", "") or "").strip() or _AI_LOCAL_MODEL_DEFAULT
@@ -2090,6 +2097,38 @@ def _ai_generate(model_key: str, system: str, user: str, schema: dict, max_token
         raise AiUnavailable("AIの応答が長すぎて途中で切れました。もう一度お試しください"
                             "（改善しない場合はHaikuモデルでお試しください）。")
     return _ai_extract_json(text)
+
+
+@app.route("/api/ai-local-check")
+def api_ai_local_check():
+    """ローカルLLMに接続できるか、設定したモデルが入っているかを確かめる。
+
+    生成を待たずに「いまどれで動くのか」を確認できるようにする（OpenAI互換の /models）。
+    """
+    base, model = _ai_local_conf()
+    url = base.rstrip("/") + "/models"
+    try:
+        r = requests.get(url, timeout=15)
+    except requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "url": base, "model": model,
+                        "error": f"{base} に接続できませんでした。"
+                                 "Ollama（または LM Studio）が起動しているかご確認ください。"})
+    except requests.RequestException as e:
+        return jsonify({"ok": False, "url": base, "model": model,
+                        "error": f"接続を確認できませんでした: {e}"})
+    if r.status_code >= 400:
+        return jsonify({"ok": False, "url": base, "model": model,
+                        "error": f"サーバーがエラーを返しました（HTTP {r.status_code}）。"
+                                 "接続先のURLが正しいかご確認ください。"})
+    try:
+        names = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+    except ValueError:
+        return jsonify({"ok": False, "url": base, "model": model,
+                        "error": "OpenAI互換のエンドポイントではないようです。URLをご確認ください。"})
+    # Ollama は "qwen3:14b" 、タグ無しで "qwen3" と書かれることもあるので緩く照合する
+    found = any(n == model or n.split(":")[0] == model.split(":")[0] for n in names)
+    return jsonify({"ok": True, "url": base, "model": model,
+                    "found": found, "models": names[:50]})
 
 
 def _ai_error_message(e) -> str:
@@ -2264,7 +2303,8 @@ def api_ai_advice():
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
-    return jsonify({"ok": True, "model": model_key, "advice": data})
+    return jsonify({"ok": True, "model": model_key,
+                    "model_name": _ai_model_name(model_key), "advice": data})
 
 
 _AI_STRATEGY_PROMPT = (
@@ -2345,7 +2385,8 @@ def api_ai_strategy():
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
-    return jsonify({"ok": True, "model": model_key, "advice": data})
+    return jsonify({"ok": True, "model": model_key,
+                    "model_name": _ai_model_name(model_key), "advice": data})
 
 
 _AI_OVERALL_PROMPT = (
@@ -2440,7 +2481,8 @@ def api_ai_overall():
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
-    return jsonify({"ok": True, "model": model_key, "advice": data})
+    return jsonify({"ok": True, "model": model_key,
+                    "model_name": _ai_model_name(model_key), "advice": data})
 
 
 # ================================================================== 資産プラン
@@ -2757,7 +2799,8 @@ def api_ai_plan():
         return jsonify({"ok": False, "error": str(e)}), 502
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
-    return jsonify({"ok": True, "model": state["ai_model"], "prediction": data})
+    return jsonify({"ok": True, "model": state["ai_model"],
+                    "model_name": _ai_model_name(state["ai_model"]), "prediction": data})
 
 
 # ================================================================== バックアップ

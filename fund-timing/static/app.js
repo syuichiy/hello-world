@@ -2219,7 +2219,13 @@ $("back-btn").addEventListener("click", showDashboard);
 let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false,
                    ai_local_url: "", ai_local_model: "" };
 const AI_MODEL_LABELS = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus", local: "ローカルLLM" };
-function modelLabel(m) { return AI_MODEL_LABELS[m] || "AI"; }
+// AIカードの右肩に出す名札。ローカルLLMは「どのモデルで動いているか」が
+// 一番知りたい情報なので、モデル名そのもの（gpt-oss:20b など）を出す。
+function modelLabel(m, name) {
+  if (m === "local") return name || aiSettings.ai_local_model || "ローカルLLM";
+  return AI_MODEL_LABELS[m] || "AI";
+}
+let lastAiModelName = "";   // 実際に生成したモデル名（サーバーが返したもの）
 let aiAdviceByWatch = {};   // watch_id -> コメント
 let lastAiAdvice = null;    // 直近のAIアドバイス全体 {overall, rebalance, funds}
 let lastAiModel = null;
@@ -2269,6 +2275,7 @@ function renderSettingsUI() {
   const lrow = $("ai-local-row"), lhint = $("ai-local-hint"), krow = $("ai-key-row");
   if (lrow) lrow.hidden = !isLocal;
   if (lhint) lhint.hidden = !isLocal;
+  if (!isLocal && $("ai-local-status")) $("ai-local-status").hidden = true;
   if (krow) krow.hidden = isLocal;
   if ($("ai-local-url") && document.activeElement !== $("ai-local-url")) {
     $("ai-local-url").value = aiSettings.ai_local_url || "";
@@ -2341,7 +2348,7 @@ async function loadAiAdvice(fromTest) {
       return;
     }
     aiLoadedOnce = true;
-    renderAiAdvice(d.advice, d.model);
+    renderAiAdvice(d.advice, d.model, d.model_name);
     if (fromTest && testStatus) testStatus.textContent = "✅ 成功（銘柄一覧に表示しました）";
   } catch (_) {
     banner.innerHTML = '<div class="ai-head ai-err"><span class="ai-ico">🤖</span> AI呼び出しに失敗しました</div>';
@@ -2349,16 +2356,17 @@ async function loadAiAdvice(fromTest) {
   }
 }
 
-function renderAiAdvice(advice, model) {
+function renderAiAdvice(advice, model, modelName) {
   const banner = $("ai-advice-banner");
   advice = advice || {};
   lastAiAdvice = advice;
   lastAiModel = model;
+  lastAiModelName = modelName || "";
   aiAdviceByWatch = {};
   (advice.funds || []).forEach((f) => {
     if (f && f.watch_id != null) aiAdviceByWatch[f.watch_id] = f.advice;
   });
-  const label = modelLabel(model);
+  const label = escapeHtml(modelLabel(model, modelName));
   // 銘柄一覧では「売買」に関するコメントのみ表示（リバランス・資産配分はポートフォリオ画面へ）
   const tradeHead = advice.trade_overall || advice.overall || "";
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>売買アドバイス</b><span class="ai-model">${label}</span></div>`;
@@ -2376,7 +2384,7 @@ function renderPortfolioAi() {
   if (!card) return;
   if (aiSettings.ai_model === "off" || !lastAiAdvice) { card.hidden = true; return; }
   const a = lastAiAdvice;
-  const label = modelLabel(lastAiModel);
+  const label = escapeHtml(modelLabel(lastAiModel, lastAiModelName));
   let html = "";
   if (a.overall) html += `<div class="ai-block"><div class="ai-block-t">総合</div><div class="ai-block-b">${escapeHtml(a.overall)}</div></div>`;
   if (a.rebalance) html += `<div class="ai-block"><div class="ai-block-t">リバランス</div><div class="ai-block-b">${escapeHtml(a.rebalance)}</div></div>`;
@@ -2391,6 +2399,36 @@ $("ai-model-toggle").addEventListener("click", (e) => {
   if (b && b.dataset.model !== aiSettings.ai_model) saveAiModel(b.dataset.model);
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
+
+// ローカルLLMの接続を確認する（生成を待たずに、いまどのモデルで動くか分かるようにする）
+const aiLocalCheck = $("ai-local-check");
+if (aiLocalCheck) {
+  aiLocalCheck.addEventListener("click", async () => {
+    const box = $("ai-local-status");
+    box.hidden = false;
+    box.textContent = "確認中… ⏳";
+    try {
+      const d = await fetchJson("/api/ai-local-check", {}, 20000);
+      if (!d.ok) { box.innerHTML = "⚠️ " + escapeHtml(d.error || "確認できませんでした"); return; }
+      const list = (d.models || []);
+      if (d.found) {
+        box.innerHTML = `✅ 接続できました。<b>${escapeHtml(d.model)}</b> で動きます`
+          + `（${escapeHtml(d.url)}）。`
+          + (list.length > 1
+             ? `<br>このサーバーにあるモデル: ${escapeHtml(list.join("、"))}` : "");
+      } else {
+        box.innerHTML = `⚠️ 接続はできましたが、<b>${escapeHtml(d.model)}</b> が見つかりません。`
+          + (list.length
+             ? `<br>使えるモデル: ${escapeHtml(list.join("、"))}`
+               + `<br>この中の名前をモデル名の欄に入れるか、`
+               + `ターミナルで <code>ollama pull ${escapeHtml(d.model)}</code> を実行してください。`
+             : "<br>モデルが1つも入っていません。<code>ollama pull qwen3:14b</code> などで取得してください。");
+      }
+    } catch (e) {
+      box.textContent = "⚠️ " + netErrMsg(e);
+    }
+  });
+}
 
 // ローカルLLMの接続先を保存する
 const aiLocalSave = $("ai-local-save");
@@ -3933,19 +3971,19 @@ async function loadStrategyAi() {
       box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIに相談できませんでした")}</div>`;
       return;
     }
-    renderStrategyAi(d.advice, d.model);
+    renderStrategyAi(d.advice, d.model, d.model_name);
   } catch (_) {
     box.innerHTML = '<div class="ai-head ai-err"><span class="ai-ico">🤖</span> AI呼び出しに失敗しました</div>';
   }
 }
 
-function renderStrategyAi(advice, model) {
+function renderStrategyAi(advice, model, modelName) {
   const box = $("strategy-ai");
   if (!box) return;
   const v = advice || {};
   const list = (xs) => (xs || []).map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>取り崩し方針の相談</b>`
-    + `<span class="ai-model">${modelLabel(model)}</span></div>`;
+    + `<span class="ai-model">${escapeHtml(modelLabel(model, modelName))}</span></div>`;
   if (v.recommendation) {
     html += `<div class="ai-block"><div class="ai-block-t">おすすめの方針</div>`
       + `<div class="ai-block-b">${escapeHtml(v.recommendation)}</div></div>`;
@@ -4106,7 +4144,7 @@ async function loadOverallAi() {
       box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIに相談できませんでした")}</div>`;
       return;
     }
-    renderOverallAi(d.advice, d.model, facts);
+    renderOverallAi(d.advice, d.model, facts, d.model_name);
   } catch (e) {
     box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(netErrMsg(e))}</div>`;
   }
@@ -4114,7 +4152,7 @@ async function loadOverallAi() {
 
 const WHEN_ORDER = { "今すぐ": 0, "今年中": 1, "退職まで": 2, "退職後": 3 };
 
-function renderOverallAi(advice, model, facts) {
+function renderOverallAi(advice, model, facts, modelName) {
   const box = $("ai-overall");
   if (!box) return;
   const v = advice || {};
@@ -4122,7 +4160,7 @@ function renderOverallAi(advice, model, facts) {
     (a, b) => (WHEN_ORDER[a.when] ?? 9) - (WHEN_ORDER[b.when] ?? 9));
   const list = (xs) => (xs || []).map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>これからの投資アクション</b>`
-    + `<span class="ai-model">${modelLabel(model)}</span></div>`;
+    + `<span class="ai-model">${escapeHtml(modelLabel(model, modelName))}</span></div>`;
   if (v.headline) html += `<div class="ov-headline">${escapeHtml(v.headline)}</div>`;
   if (acts.length) {
     html += '<ol class="ov-actions">' + acts.map((a) => `

@@ -603,8 +603,10 @@
             <input id="ai-local-model" type="text" autocomplete="off"
                    placeholder="qwen3:14b">
             <button id="ai-local-save" type="button" class="ghost-btn">保存</button>
+            <button id="ai-local-check" type="button" class="ghost-btn">接続を確認</button>
           </div>
         </div>
+        <p class="hint" id="ai-local-status" hidden></p>
         <p class="hint" id="ai-local-hint" hidden>
           左が接続先（OpenAI互換API）、右がモデル名です。Ollamaなら
           <code>http://127.0.0.1:11434/v1</code>、LM Studioなら <code>http://127.0.0.1:1234/v1</code>。
