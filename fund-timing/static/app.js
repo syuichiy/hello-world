@@ -2371,6 +2371,18 @@ function renderAiAdvice(advice, model, modelName) {
   const tradeHead = advice.trade_overall || advice.overall || "";
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>売買アドバイス</b><span class="ai-model">${label}</span></div>`;
   if (tradeHead) html += `<div class="ai-block"><div class="ai-block-t">売買の見立て</div><div class="ai-block-b">${escapeHtml(tradeHead)}</div></div>`;
+  // 取りこぼしを黙って隠さない。ローカルLLMは一部しか返せないことがあるので、
+  // 「出ていないのは不具合か、モデルの限界か」が分かるようにする。
+  const asked = advice.asked_funds || 0;
+  const got = Object.keys(aiAdviceByWatch).length;
+  const miss = [];
+  if (!tradeHead) miss.push("全体の見立て");
+  if (asked && got < asked) miss.push(`銘柄別コメント（${asked}件中${got}件）`);
+  if (miss.length) {
+    html += `<div class="ai-warn">⚠️ ${escapeHtml(miss.join("と"))}をモデルが返せませんでした。`
+      + "「↻最新に更新」で再生成できます。何度も起きる場合は、"
+      + "設定画面でより指示に従いやすいモデル（qwen3:14b など）をお試しください。</div>";
+  }
   html += '<div class="ai-foot">※ 各商品の売買コメントは表の銘柄名の下に表示しています。機械的な参考情報であり投資助言ではありません。</div>';
   banner.innerHTML = html;
   banner.hidden = false;

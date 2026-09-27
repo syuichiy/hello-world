@@ -2010,10 +2010,38 @@ def _ai_extract_json(text: str):
         return json.loads(t)
     except json.JSONDecodeError:
         pass
-    i, j = t.find("{"), t.rfind("}")          # 前後に説明文が付いた場合の最後の砦
+    i, j = t.find("{"), t.rfind("}")          # 前後に説明文が付いた場合
     if i >= 0 and j > i:
-        return json.loads(t[i:j + 1])
+        try:
+            return json.loads(t[i:j + 1])
+        except json.JSONDecodeError:
+            pass
+    # 出力の上限で途中まででも、書けている分だけ拾う。丸ごと捨てると
+    # その回の銘柄すべてがコメント無しになってしまう。
+    items = _ai_scan_objects(t)
+    if items:
+        return {"funds": [o for o in items if "advice" in o]} or {}
     raise json.JSONDecodeError("JSONが見つかりません", t, 0)
+
+
+def _ai_scan_objects(text: str):
+    """文字列の中から、完結している { … } を先頭から順に拾う。
+
+    応答が途中で切れていても、そこまでに書けたオブジェクトは使える。
+    """
+    dec, out, k = json.JSONDecoder(), [], 0
+    while True:
+        k = text.find("{", k)
+        if k < 0:
+            return out
+        try:
+            obj, end = dec.raw_decode(text, k)
+        except ValueError:
+            k += 1
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+        k = end
 
 
 def _ai_schema_hint(schema: dict) -> str:
@@ -2075,10 +2103,19 @@ def _ai_local_call(system: str, user: str, schema: dict, max_tokens: int):
 
     try:
         payload = r.json()
-        text = payload["choices"][0]["message"]["content"]
+        msg = payload["choices"][0]["message"]
     except (ValueError, KeyError, IndexError):
         raise AiUnavailable("ローカルLLMの応答形式を解釈できませんでした"
                             "（OpenAI互換のエンドポイントか確認してください）。")
+    # gpt-oss など推論するモデルは、思考を reasoning に分けて返し content が空になることがある。
+    # content だけを見ていると「何も返ってこなかった」ことになってしまう。
+    text = msg.get("content") or msg.get("reasoning") or msg.get("reasoning_content") or ""
+    fin = (payload.get("choices") or [{}])[0].get("finish_reason")
+    if not text.strip():
+        raise AiUnavailable(
+            "ローカルLLMが空の応答を返しました"
+            + ("（出力の上限に達しました）。" if fin == "length" else "。")
+            + "モデルを変える、または銘柄数を減らしてお試しください。")
     return _ai_extract_json(text)
 
 
@@ -2292,7 +2329,8 @@ _AI_SCHEMA = {
 # 入力が超えてしまい、超えたぶんは黙って切り捨てられる。モデルは銘柄ごとの数字を
 # 見ないままコメントを書くことになり、全銘柄が同じ（多くは「売り」の）内容になる。
 # そこで「全体コメント」と「銘柄別コメント数件ずつ」に分けて、1回の入力を小さく保つ。
-_AI_LOCAL_CHUNK = 6
+# 1回に頼む銘柄数。多いほど呼び出しは減るが、出力が長くなって上限で切れやすい。
+_AI_LOCAL_CHUNK = 4
 
 # 銘柄の指定は watch_id（3桁になることもある通し番号）ではなく、その回だけの 1〜6 を使う。
 # 小さなモデルは長い数字を書き写せず、別の番号を返したり文字列で返したりする。
@@ -2402,30 +2440,45 @@ def _ai_advice_local(ctx):
     }
     out = {"trade_overall": "", "overall": "", "rebalance": "", "funds": []}
     first_err = None        # 全部失敗したときは、最初の失敗の理由をそのまま伝える
-    try:
-        head = _ai_generate(_AI_LOCAL, _AI_SUMMARY_PROMPT,
-                            "次の保有状況の全体像にコメントしてください。\n"
-                            + json.dumps(summary_ctx, ensure_ascii=False),
-                            _AI_SUMMARY_SCHEMA, max_tokens=1200)
-        out.update({k: head.get(k, "") for k in ("trade_overall", "overall", "rebalance")})
-    except (json.JSONDecodeError, AiUnavailable) as e:
-        first_err = e       # 全体が書けなくても、銘柄別だけは出す
+    head_user = ("次の保有状況の全体像にコメントしてください。\n"
+                 + json.dumps(summary_ctx, ensure_ascii=False))
+    for attempt in (1, 2):      # 空で返ってきたら1度だけ頼み直す
+        try:
+            head = _ai_generate(_AI_LOCAL, _AI_SUMMARY_PROMPT, head_user,
+                                _AI_SUMMARY_SCHEMA, max_tokens=4000)
+            out.update({k: str(head.get(k) or "")
+                        for k in ("trade_overall", "overall", "rebalance")})
+        except (json.JSONDecodeError, AiUnavailable) as e:
+            first_err = first_err or e      # 全体が書けなくても、銘柄別だけは出す
+        if out["trade_overall"]:
+            break
+    if not out["trade_overall"]:
+        print("[ai] ローカルLLM: 全体コメント（売買の見立て）が返りませんでした")
 
     for i in range(0, len(funds), _AI_LOCAL_CHUNK):
         chunk = funds[i:i + _AI_LOCAL_CHUNK]
-        # watch_id は渡さず、その回だけの 1〜6 で指す（モデルが書き写しやすい）
+        # watch_id は渡さず、その回だけの 1〜4 で指す（モデルが書き写しやすい）
         asked = [dict(f, no=n) for n, f in enumerate(chunk, 1)]
         for f in asked:
             f.pop("watch_id", None)
-        try:
-            d = _ai_generate(_AI_LOCAL, _AI_FUNDS_PROMPT,
-                             "次の銘柄それぞれにコメントしてください。\n"
-                             + json.dumps({"funds": asked}, ensure_ascii=False),
-                             _AI_FUNDS_SCHEMA, max_tokens=1200)
-        except (json.JSONDecodeError, AiUnavailable) as e:
-            first_err = first_err or e
-            continue        # この数件が書けなくても、残りの銘柄は出す
-        out["funds"].extend(_ai_match_chunk(chunk, d.get("funds")))
+        user = ("次の銘柄それぞれにコメントしてください。\n"
+                + json.dumps({"funds": asked}, ensure_ascii=False))
+        got = []
+        for attempt in (1, 2):      # 空で返ってきたら1度だけ頼み直す
+            try:
+                d = _ai_generate(_AI_LOCAL, _AI_FUNDS_PROMPT, user,
+                                 _AI_FUNDS_SCHEMA, max_tokens=4000)
+                got = _ai_match_chunk(chunk, d.get("funds"))
+            except (json.JSONDecodeError, AiUnavailable) as e:
+                first_err = first_err or e
+                got = []
+            if got:
+                break
+        if len(got) < len(chunk):
+            print(f"[ai] ローカルLLM: {len(chunk)}銘柄のうち{len(got)}件だけコメントが返りました")
+        out["funds"].extend(got)
+
+    out["asked_funds"] = len(funds)          # 画面に「何件中何件」を出すため
     if not out["funds"] and not out["trade_overall"]:
         if isinstance(first_err, AiUnavailable):
             raise first_err                       # 未起動・モデル違いなどの案内を失わない

@@ -1104,6 +1104,13 @@ main > section { display: block; }
 .ai-list { margin: 2px 0 0; padding-left: 1.2em; }
 .ai-list li { margin: 2px 0; }
 .ai-foot { margin-top: 10px; font-size: 11px; color: var(--ink-soft); }
+/* モデルが返せなかったぶんの注意書き（ローカルLLMで起きやすい） */
+.ai-warn {
+  margin-top: 10px; padding: 8px 11px; border-radius: 9px;
+  font-size: 12px; line-height: 1.6;
+  background: color-mix(in srgb, var(--down-text) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--down-text) 35%, transparent);
+}
 .ai-fund-advice { margin-top: 5px; font-size: 12px; color: var(--ink); line-height: 1.5;
   background: rgba(91,141,239,.08); border-left: 3px solid var(--accent);
   border-radius: 5px; padding: 4px 8px; }
