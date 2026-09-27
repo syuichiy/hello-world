@@ -2294,6 +2294,9 @@ _AI_SCHEMA = {
 # そこで「全体コメント」と「銘柄別コメント数件ずつ」に分けて、1回の入力を小さく保つ。
 _AI_LOCAL_CHUNK = 6
 
+# 銘柄の指定は watch_id（3桁になることもある通し番号）ではなく、その回だけの 1〜6 を使う。
+# 小さなモデルは長い数字を書き写せず、別の番号を返したり文字列で返したりする。
+# 返ってきた番号が使えなくても、並び順で対応づけられるようにしている。
 _AI_FUNDS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -2301,8 +2304,8 @@ _AI_FUNDS_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"watch_id": {"type": "integer"}, "advice": {"type": "string"}},
-                "required": ["watch_id", "advice"],
+                "properties": {"no": {"type": "integer"}, "advice": {"type": "string"}},
+                "required": ["no", "advice"],
                 "additionalProperties": False,
             },
         },
@@ -2330,7 +2333,8 @@ _AI_FUNDS_PROMPT = (
     "を述べてください。\n"
     "**重要**: 銘柄ごとに数字は違います。渡した全銘柄に同じ判断を書いてはいけません。"
     "それぞれの verdict・short_term・pl_pct を見て、買い・ホールド・売りを"
-    "銘柄ごとに判断してください。watch_id は渡されたものをそのまま使い、勝手に作らないこと。\n"
+    "銘柄ごとに判断してください。\n"
+    "no は渡された番号をそのまま使い、**渡された銘柄と同じ順番・同じ件数**で返してください。\n"
     "断定を避け『〜を検討できる水準』等の表現にする。これは参考情報であり投資助言ではありません。"
 )
 _AI_SUMMARY_PROMPT = (
@@ -2343,6 +2347,38 @@ _AI_SUMMARY_PROMPT = (
     "- rebalance: 資産配分の観点での提案（2文以内・120字以内）。\n"
     "断定を避け、税・手数料・分配金は未考慮である旨に1度触れる。投資助言ではありません。"
 )
+
+
+def _ai_match_chunk(chunk, answers):
+    """モデルの答えを、渡した銘柄に対応づける。
+
+    小さなモデルは番号を落としたり、文字列で返したり、勝手に振り直したりする。
+    番号で対応づけられるものは番号で、それ以外は並び順で拾う。番号を厳密に見て
+    捨てるだけだと、コメントが1件も出ないことになる。
+    """
+    out, used = [], set()
+    rest = []
+    for pos, a in enumerate(answers or []):
+        if not isinstance(a, dict):
+            continue
+        text = str(a.get("advice") or "").strip()
+        if not text:
+            continue
+        no = a.get("no")
+        try:                                  # "3" のような文字列でも拾う
+            idx = int(str(no).strip()) - 1
+        except (TypeError, ValueError):
+            idx = -1
+        if 0 <= idx < len(chunk) and idx not in used:
+            used.add(idx)
+            out.append({"watch_id": chunk[idx].get("watch_id"), "advice": text})
+        else:
+            rest.append((pos, text))          # 番号が使えないものは後で並び順に割り当てる
+    if rest:
+        free = [i for i in range(len(chunk)) if i not in used]
+        for (_, text), idx in zip(rest, free):
+            out.append({"watch_id": chunk[idx].get("watch_id"), "advice": text})
+    return [o for o in out if o["watch_id"] is not None]
 
 
 def _ai_advice_local(ctx):
@@ -2377,19 +2413,19 @@ def _ai_advice_local(ctx):
 
     for i in range(0, len(funds), _AI_LOCAL_CHUNK):
         chunk = funds[i:i + _AI_LOCAL_CHUNK]
-        ids = {f.get("watch_id") for f in chunk}
+        # watch_id は渡さず、その回だけの 1〜6 で指す（モデルが書き写しやすい）
+        asked = [dict(f, no=n) for n, f in enumerate(chunk, 1)]
+        for f in asked:
+            f.pop("watch_id", None)
         try:
             d = _ai_generate(_AI_LOCAL, _AI_FUNDS_PROMPT,
                              "次の銘柄それぞれにコメントしてください。\n"
-                             + json.dumps({"funds": chunk}, ensure_ascii=False),
+                             + json.dumps({"funds": asked}, ensure_ascii=False),
                              _AI_FUNDS_SCHEMA, max_tokens=1200)
         except (json.JSONDecodeError, AiUnavailable) as e:
             first_err = first_err or e
             continue        # この数件が書けなくても、残りの銘柄は出す
-        for f in (d.get("funds") or []):
-            # 渡していないwatch_idを返してきた場合は捨てる（別銘柄の欄に出てしまうため）
-            if isinstance(f, dict) and f.get("watch_id") in ids:
-                out["funds"].append({"watch_id": f["watch_id"], "advice": f.get("advice") or ""})
+        out["funds"].extend(_ai_match_chunk(chunk, d.get("funds")))
     if not out["funds"] and not out["trade_overall"]:
         if isinstance(first_err, AiUnavailable):
             raise first_err                       # 未起動・モデル違いなどの案内を失わない
