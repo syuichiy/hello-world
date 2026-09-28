@@ -2377,11 +2377,12 @@ function renderAiAdvice(advice, model, modelName) {
   const got = Object.keys(aiAdviceByWatch).length;
   const miss = [];
   if (!tradeHead) miss.push("全体の見立て");
-  if (asked && got < asked) miss.push(`銘柄別コメント（${asked}件中${got}件）`);
+  if (asked && got < asked) miss.push(`銘柄別コメント${asked - got}件（${asked}件中${got}件は出ています）`);
   if (miss.length) {
-    html += `<div class="ai-warn">⚠️ ${escapeHtml(miss.join("と"))}をモデルが返せませんでした。`
-      + "「↻最新に更新」で再生成できます。何度も起きる場合は、"
-      + "設定画面でより指示に従いやすいモデル（qwen3:14b など）をお試しください。</div>";
+    html += `<div class="ai-warn">⚠️ ${escapeHtml(miss.join("、"))}が生成できませんでした。`
+      + (advice.incomplete_reason ? `<br>理由: ${escapeHtml(advice.incomplete_reason)}` : "")
+      + "<br>「↻最新に更新」で作り直せます。何度も起きる場合は、"
+      + "設定画面で別のモデル（qwen3:30b-a3b や qwen3:14b など）をお試しください。</div>";
   }
   html += '<div class="ai-foot">※ 各商品の売買コメントは表の銘柄名の下に表示しています。機械的な参考情報であり投資助言ではありません。</div>';
   banner.innerHTML = html;
