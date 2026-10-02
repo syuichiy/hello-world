@@ -1185,3 +1185,13 @@ main > section { display: block; }
 .draw-nisa b { font-size: 12px; }
 .draw-rate-sw { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .draw-rate-sw .seg-btn { padding: 4px 10px; font-size: 12px; }
+
+/* 取り崩し率の「分子にしている列」を目立たせる（どの列を割っているかを示す） */
+.draw-numer {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);
+}
+.draw-rate-note {
+  margin: 6px 2px 0; font-size: 12px; line-height: 1.7; color: var(--ink-soft);
+}
+.draw-rate-note b { color: var(--ink); }

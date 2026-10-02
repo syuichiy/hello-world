@@ -3350,8 +3350,10 @@ function renderStrategy() {
     hasCpen ? ["pubPension", "公的年金", "draw-pen"] : ["pension", "年金", "draw-pen"],
     ...(hasCpen ? [["cpen", "企業年金", "draw-pen"]] : []),
     ["cash", "現金", ""], ["bonds", "債券", ""],
-    ["div", "分配金・配当", "draw-div"], ["fund", "投信・株<br><small>（売却）</small>", ""],
-    ["total", "取り崩し計", "draw-sub"],
+    ["div", "分配金・配当", "draw-div"],
+    ["fund", "投信・株<br><small>（売却）</small>",
+     drawRateMode === "fund" ? "draw-numer" : ""],
+    ["total", "取り崩し計", "draw-sub" + (drawRateMode === "all" ? " draw-numer" : "")],
     ["living", "生活費", "draw-total"],
   ];
   // 単位は見出しにまとめ、セルは「月額（上段）／年額（下段）」だけにして表を横に詰める
@@ -3401,6 +3403,25 @@ function renderStrategy() {
     const tag = pct >= 99 ? "特定のみ" : (pct <= 1 ? "NISAのみ" : `特定${pct}%`);
     return `<td class="num draw-cell draw-nisa"><b>${tag}</b>${sub}</td>`;
   };
+  // どちらのボタンを選んでいるかが数字で分かるように、実際の行から例を作る。
+  // 分母はどちらも同じ「資産残高」で、変わるのは分子（どの列か）だけ。
+  const rateNote = (() => {
+    const ex = ages.map((g) => ({ g, d: drawAtAge(curPath, g), b: balAtAge(curPath, g) }))
+      .find((x) => x.d && x.b && x.b.nominal > 0 && x.d.total.month > 0);
+    const col = drawRateMode === "fund" ? "投信・株（売却）" : "取り崩し計";
+    let eg = "";
+    if (ex) {
+      const mo = drawRateMode === "fund" ? ex.d.fund.month : ex.d.total.month;
+      eg = `例）${ex.g}歳は <b>${Math.round(mo).toLocaleString()}円</b>`
+        + ` ÷ <b>${Math.round(ex.b.nominal / 10000).toLocaleString()}万円</b>`
+        + ` ＝ <b>${(mo / ex.b.nominal * 100).toFixed(2)}%</b>。`;
+    }
+    return `いま計算しているのは <b>「${col}」の列 ÷ 資産残高</b> です（色の付いた列が分子）。${eg}`
+      + "分母はどちらも資産残高なので、<b>変わるのは分子だけ</b>です。"
+      + "<br>「取り崩し計」には<b>現金・債券・分配金も含みます</b>。"
+      + "それらでまかなえている年は2つに差が出て、"
+      + "<b>現金と債券を使い切ると売却だけになるので2つは同じ値</b>になります。";
+  })();
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
@@ -3426,13 +3447,14 @@ function renderStrategy() {
       <label class="draw-toggle" title="金額の単位を今日の購買力に直して表示します。計算の前提は変わりません">
         <input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
         今日の価値で表示する</label>
-      <span class="draw-rate-sw">取り崩し率
+      <span class="draw-rate-sw">取り崩し率の分子
         <button type="button" class="seg-btn${drawRateMode === "all" ? " active" : ""}"
-          data-rate="all" title="資産全体から出ていく割合（年金以外の生活費 ÷ 資産）">資産全体</button>
+          data-rate="all" title="「取り崩し計」の列 ÷ 資産残高">「取り崩し計」</button>
         <button type="button" class="seg-btn${drawRateMode === "fund" ? " active" : ""}"
-          data-rate="fund" title="そのうち投信・株を売る割合">投信・株だけ</button></span>
+          data-rate="fund" title="「投信・株（売却）」の列 ÷ 資産残高">「投信・株」だけ</button></span>
       <span class="draw-unit">単位：円（上段＝月額／下段＝年額）</span>
     </div>
+    <p class="draw-rate-note">${rateNote}</p>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
       <thead><tr><th>年齢</th>${srcCols.map(([, label, c]) =>
         `<th class="num ${c}">${label}</th>`).join("")}
@@ -3453,9 +3475,11 @@ function renderStrategy() {
                 これがマクロ経済スライドの効果そのものです。`
              : ""}`
         : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
-      <strong>取り崩し率</strong>は、その月に資産から出ていく額 ÷ そのときの資産残高です。
-      「資産全体」は年金でまかなえないぶん全部（4%ルールと同じ考え方）、
-      「投信・株だけ」は<strong>そのうち商品を売る割合</strong>で、ボタンで切り替えられます。
+      <strong>取り崩し率</strong>は、<strong>表の列 ÷ 資産残高</strong>です。
+      分子にする列をボタンで選べます。<strong>「取り崩し計」</strong>は年金でまかなえないぶん全部
+      （現金・債券・分配金・売却の合計＝4%ルールと同じ考え方）、
+      <strong>「投信・株」だけ</strong>はそのうち<strong>実際に商品を売る割合</strong>です。
+      現金や債券でまかなえている年ほど2つの差が大きく、使い切ると同じ値になります。
       年率4%以上は色を変えています。
       <strong>売る口座</strong>は NISA温存（特定口座から先に売る）の結果です。
       下段はその時点で残っている運用資産（特定／NISA）なので、
