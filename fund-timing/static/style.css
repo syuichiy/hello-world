@@ -1177,3 +1177,11 @@ main > section { display: block; }
 .ov-when-1 { border-color: var(--accent); color: var(--accent); }         /* 今年中 */
 .ov-act-why { margin-top: 6px; font-size: 12.5px; color: var(--ink); line-height: 1.7; }
 .ov-act-how { margin-top: 4px; font-size: 12px; color: var(--ink-soft); line-height: 1.7; }
+
+/* 取り崩しの表に足した「取り崩し率」と「売る口座」 */
+.draw-rate { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.draw-rate-hot b { color: var(--down-text); }
+.draw-nisa { background: color-mix(in srgb, var(--buy) 6%, transparent); }
+.draw-nisa b { font-size: 12px; }
+.draw-rate-sw { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.draw-rate-sw .seg-btn { padding: 4px 10px; font-size: 12px; }

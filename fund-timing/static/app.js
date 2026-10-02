@@ -3233,6 +3233,9 @@ let portfolioRisk = null;     // 実際の保有から推定した年率リタ�
 let strategyShown = false;    // 検証結果を表示中か（前提が変わったら計算し直すため）
 let drawTableReal = false;    // 取り崩し額の表を「今日の価値」で表示するか（既定は実際の金額）
 let drawTableStep = 5;        // 取り崩し額の表を何年おきに表示するか（計算自体は常に月単位）
+// 取り崩し率の見かた。"all"＝資産全体から出ていく割合（4%ルールと同じ考え方）、
+// "fund"＝そのうち投信・株を売る割合（＝何%の商品を取り崩すか）。
+let drawRateMode = "all";
 
 function setStrategyStatus(msg, kind) {
   const el = $("strategy-status");
@@ -3375,12 +3378,35 @@ function renderStrategy() {
     return `<td class="num draw-cell draw-bal"><b>${Math.round(v / 10000).toLocaleString()}</b>`
       + `<span class="draw-year">万円</span></td>`;
   };
+  // 取り崩し率：その年齢の月額 ÷ その時点の資産残高。分母は右端の「資産残高」と同じ値に
+  // そろえてあるので、表の中で割り算して確かめられる。
+  const rateCell = (d, g) => {
+    const b = balAtAge(curPath, g);
+    if (!d || !b || !(b.nominal > 0)) return '<td class="num draw-none draw-rate">—</td>';
+    const mo = drawRateMode === "fund" ? d.fund.month : d.total.month;
+    const r = mo / b.nominal * 100;            // 月率（名目どうしの比なので実質でも同じ）
+    const hot = drawRateMode === "all" && r * 12 >= 4 ? " draw-rate-hot" : "";
+    return `<td class="num draw-cell draw-rate${hot}"><b>${r.toFixed(2)}%</b>`
+      + `<span class="draw-year">年 ${(r * 12).toFixed(1)}%</span></td>`;
+  };
+  // NISA温存の進み具合。売った額の口座別内訳（上段）と、残っている運用資産（下段）。
+  const nisaCell = (d, g) => {
+    const b = balAtAge(curPath, g);
+    if (!d || !b) return '<td class="num draw-none draw-nisa">—</td>';
+    const sold = d.sellAll || 0;
+    const sub = `<span class="draw-year">残 特${Math.round(b.taxV / 10000).toLocaleString()}`
+      + ` / N${Math.round(b.nisaV / 10000).toLocaleString()}</span>`;
+    if (!(sold > 0)) return `<td class="num draw-cell draw-nisa"><b>—</b>${sub}</td>`;
+    const pct = Math.round((d.sellTax || 0) / sold * 100);
+    const tag = pct >= 99 ? "特定のみ" : (pct <= 1 ? "NISAのみ" : `特定${pct}%`);
+    return `<td class="num draw-cell draw-nisa"><b>${tag}</b>${sub}</td>`;
+  };
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
     const d = drawAtAge(curPath, g);
     return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}`
-      + `${balCell(g)}</tr>`;
+      + `${rateCell(d, g)}${nisaCell(d, g)}${balCell(g)}</tr>`;
   }).join("");
 
   // ── ② 値動きのブレを含めた成功確率 ────────────────────────────────
@@ -3400,11 +3426,18 @@ function renderStrategy() {
       <label class="draw-toggle" title="金額の単位を今日の購買力に直して表示します。計算の前提は変わりません">
         <input type="checkbox" id="draw-real"${drawTableReal ? " checked" : ""}>
         今日の価値で表示する</label>
+      <span class="draw-rate-sw">取り崩し率
+        <button type="button" class="seg-btn${drawRateMode === "all" ? " active" : ""}"
+          data-rate="all" title="資産全体から出ていく割合（年金以外の生活費 ÷ 資産）">資産全体</button>
+        <button type="button" class="seg-btn${drawRateMode === "fund" ? " active" : ""}"
+          data-rate="fund" title="そのうち投信・株を売る割合">投信・株だけ</button></span>
       <span class="draw-unit">単位：円（上段＝月額／下段＝年額）</span>
     </div>
     <div class="csv-table-wrap"><table class="csv-table strat-table draw-table">
       <thead><tr><th>年齢</th>${srcCols.map(([, label, c]) =>
         `<th class="num ${c}">${label}</th>`).join("")}
+        <th class="num draw-rate">取り崩し率<br><small>（上＝月率／下＝年率）</small></th>
+        <th class="num draw-nisa">売る口座<br><small>（下＝残高 特定/NISA・万円）</small></th>
         <th class="num draw-bal">資産残高<br><small>（年初・万円）</small></th></tr></thead>
       <tbody>${drawRows}</tbody></table></div>
     <p class="hint"><strong>${hasCpen ? "公的年金 ＋ 企業年金" : "年金"} ＋ 現金 ＋ 債券 ＋ 分配金・配当 ＋ 投信・株 ＝ 生活費</strong>
@@ -3420,6 +3453,13 @@ function renderStrategy() {
                 これがマクロ経済スライドの効果そのものです。`
              : ""}`
         : `<strong>その年齢のときに実際に引き出す額</strong>（インフレ 年${(a.lp.infl * 100).toFixed(1)}%込み）です。`}
+      <strong>取り崩し率</strong>は、その月に資産から出ていく額 ÷ そのときの資産残高です。
+      「資産全体」は年金でまかなえないぶん全部（4%ルールと同じ考え方）、
+      「投信・株だけ」は<strong>そのうち商品を売る割合</strong>で、ボタンで切り替えられます。
+      年率4%以上は色を変えています。
+      <strong>売る口座</strong>は NISA温存（特定口座から先に売る）の結果です。
+      下段はその時点で残っている運用資産（特定／NISA）なので、
+      <strong>特定が減ってNISAだけが残っていく様子</strong>が追えます。
       右端の<strong>資産残高</strong>は、その年齢になった時点（年初）の合計
       （現金＋債券＋投信・株、特定口座の含み益にかかる税を引いた後）です。
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
@@ -3453,6 +3493,12 @@ function renderStrategy() {
     drawTableStep = Number(e.target.value) || 5;
     renderStrategy();
   });
+  document.querySelectorAll(".draw-rate-sw .seg-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (b.dataset.rate === drawRateMode) return;
+      drawRateMode = b.dataset.rate;
+      renderStrategy();
+    }));
   const realChk = $("draw-real");
   if (realChk) realChk.addEventListener("change", (e) => {
     drawTableReal = e.target.checked;
@@ -4462,6 +4508,8 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   let nisaRoom = sp ? Math.max(0, sp.nisaRoom || 0) : 0;           // NISA生涯投資枠の残り（簿価）
   const tRate = sp ? (sp.taxRate || 0) : t;   // 特定口座にかかる税率（NISAは非課税）
   let taxPaid = 0;                            // 取り崩しで払う譲渡益税の累計
+  // その月に売った額（売却総額＝税引前）。NISA温存の効き目を年齢ごとの表に出すために数える。
+  let mSellTax = 0, mSellNisa = 0;
 
   const fundV = () => taxV + nisaV;           // 運用資産の合計（税引前）
   // 特定口座を「手取りで need 円」になるまで売る。含み益に課税されるぶん多めに売る必要がある。
@@ -4476,6 +4524,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     if (taxB < 0) taxB = 0;
     const got = sell * keep;
     taxPaid += sell - got;
+    mSellTax += sell;
     return got;
   };
   // NISAは非課税なので、売った額がそのまま手取りになる。
@@ -4486,6 +4535,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     nisaV -= sell;
     if (nisaV < 0) nisaV = 0;
     if (nisaB < 0) nisaB = 0;
+    mSellNisa += sell;
     return sell;
   };
   // 運用資産から「手取り need 円」を取り崩す。手取りで得られた額を返す。
@@ -4548,6 +4598,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 年齢ごとの取り崩し額を出どころ別に表示するために記録する。金額は名目で、
     // 今日の価値に直すときは同じ月の inflNow で割る。
     let drawM = null, dCash = 0, dBonds = 0, dFund = 0, dDiv = 0, inflNow = 1;
+    mSellTax = 0; mSellNisa = 0;        // この月に売った額（口座別）
     let balBefore = null;        // その月に取り崩す前の残高（年齢ごとの表の「資産残高」に使う）
     // その月に受け取った分配金・配当（税引後）のうち、まだ生活費に充てていない分。
     // 月をまたいで残った分はもう手元の現金なので、翌月以降は「現金」として数える。
@@ -4672,6 +4723,10 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 年齢ごとの表に「資産残高」を出すため、積立期も含めて全ての月にインフレ係数を持たせる
     // （drawM が null の月は inflF を計算していないので、ここで別に持つ）
     pt.inflAll = Math.pow(1 + lp.infl, m / 12);
+    // 口座別の売却額と残高。NISA温存の効き目（特定から先に減る）を表に出すために持つ
+    if (mSellTax > 0) pt.sellTax = mSellTax;
+    if (mSellNisa > 0) pt.sellNisa = mSellNisa;
+    pt.taxV = Math.round(taxV); pt.nisaV = Math.round(nisaV);
     if (balBefore != null) pt.balBefore = Math.round(balBefore);
     if (lumpGot > 0) pt.lump = lumpGot;
     if (drawM != null) {
@@ -4720,9 +4775,14 @@ function drawAtAge(path, age) {
     const monthReal = ms.reduce((s, q) => s + (q[key] || 0) / (q.inflF || 1), 0) / ms.length;
     return { month, year: month * 12, monthReal, yearReal: monthReal * 12 };
   };
+  // 口座別の売却額（税引前の売却総額）。NISA温存で特定口座から先に売るので、
+  // 「いまはどちらを売っている時期か」がこの2つで分かる。
+  const sellTax = ms.reduce((s, q) => s + (q.sellTax || 0), 0);
+  const sellNisa = ms.reduce((s, q) => s + (q.sellNisa || 0), 0);
   return { total: of("draw"), cash: of("drawCash"), bonds: of("drawBonds"), fund: of("drawFund"),
            div: of("drawDiv"), pension: of("drawPen"), living: of("living"),
-           pubPension: of("drawPubPen"), cpen: of("drawCpen") };
+           pubPension: of("drawPubPen"), cpen: of("drawCpen"),
+           sellTax, sellNisa, sellAll: sellTax + sellNisa, months: ms.length };
 }
 
 // その年齢になった時点（年初）の資産残高。年齢ごとの表の「資産残高」列に使う。
@@ -4736,7 +4796,9 @@ function balAtAge(path, age) {
   // 取り崩しの無い月（退職前）は前月末の残高。
   const v = (q.balBefore != null) ? q.balBefore : pts[i > 0 ? i - 1 : 0].v;
   const f = q.inflAll || 1;
-  return { nominal: v, real: v / f, cash: q.cash, bonds: q.bonds, fund: q.fund };
+  // 口座別の運用資産（税引前）。取り崩し率の分母や、NISA温存の進み具合に使う。
+  return { nominal: v, real: v / f, cash: q.cash, bonds: q.bonds, fund: q.fund,
+           taxV: q.taxV || 0, nisaV: q.nisaV || 0 };
 }
 
 // 設定された取り崩し方法を buildLifePath のオプションにする
