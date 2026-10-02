@@ -1109,19 +1109,42 @@ def _watch_kind(watch_id):
     return (it.get("kind") or "fund") if it else "fund"
 
 
-def _add_watch_returning_id(catalog_id, broker=""):
+def _add_watch_returning_id(catalog_id, broker="", account_type=""):
     """商品を一覧（ウォッチリスト）へ追加し、その保有IDを返す。
-    すでに同じ商品×同じ証券会社で持っている場合は、その保有IDを返す。
+
+    すでに同じ商品×同じ証券会社で持っている場合は、その保有IDを返す。ただし
+    口座区分（特定/NISA）を指定していて、一致する保有が無いときは別の保有として
+    追加する。NISAと特定は中身も税の扱いも別なので、同じ行にまとめると
+    どちらの口数・投資金額も正しくなくなる。
     db.add_watch は追加できたかの真偽値を返す（画面が使っている）ので、
     IDが必要なここでは追加後に引き当てる。"""
     if not db.get_catalog(int(catalog_id)):
         return None
+
+    def same_rows():
+        return [it for it in db.list_watchlist() if it["id"] == int(catalog_id)]
+
+    def same_broker():
+        return [it for it in same_rows() if (it.get("broker") or "") == (broker or "")]
+
+    if account_type:
+        hit = [it for it in same_broker()
+               if (it.get("account_type") or "taxable") == account_type]
+        if hit:
+            return hit[0]["watch_id"]
+        before = {it["watch_id"] for it in same_rows()}
+        db.add_watch(int(catalog_id), broker=broker, force=True)   # 別口座として追加
+        new = [it for it in same_rows() if it["watch_id"] not in before]
+        if new:
+            db.set_account_type(new[0]["watch_id"], account_type)
+            return new[0]["watch_id"]
+
     db.add_watch(int(catalog_id), broker=broker)
-    for it in db.list_watchlist():
-        if it["id"] == int(catalog_id) and (it.get("broker") or "") == (broker or ""):
-            return it["watch_id"]
+    hit = same_broker()
+    if hit:
+        return hit[0]["watch_id"]
     # 証券会社が一致する行が無ければ、同じ商品の保有から最も新しいものを使う
-    same = [it for it in db.list_watchlist() if it["id"] == int(catalog_id)]
+    same = same_rows()
     return same[-1]["watch_id"] if same else None
 
 
@@ -1312,16 +1335,18 @@ def api_trades_import():
     touched = set()
     resolved = {}          # 対応づけの解決結果（"c:12" の追加は1回だけ行う）
 
-    def resolve(value):
+    def resolve(value, acct=""):
         """対応づけの値を watch_id に変換する。
-        "c:<catalog_id>" は「一覧に追加してから取り込む」指定。"""
-        if value in resolved:
-            return resolved[value]
+        "c:<catalog_id>" は「一覧に追加してから取り込む」指定。
+        同じ商品でも口座区分が違えば別の保有になるので、口座区分も鍵に含める。"""
+        ckey = (str(value), acct)
+        if ckey in resolved:
+            return resolved[ckey]
         wid = None
         s = str(value)
         if s.startswith("c:"):
             try:
-                wid = _add_watch_returning_id(int(s[2:]), broker)
+                wid = _add_watch_returning_id(int(s[2:]), broker, acct)
             except (ValueError, TypeError):
                 wid = None
         else:
@@ -1329,7 +1354,7 @@ def api_trades_import():
                 wid = int(value)
             except (ValueError, TypeError):
                 wid = None
-        resolved[value] = wid
+        resolved[ckey] = wid
         return wid
 
     for r in rows:
@@ -1338,7 +1363,7 @@ def api_trades_import():
         if not raw_target:
             skipped += 1
             continue
-        wid = resolve(raw_target)
+        wid = resolve(raw_target, r.get("account_type") or "")
         if not wid:
             skipped += 1
             continue

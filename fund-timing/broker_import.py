@@ -340,9 +340,11 @@ def match_holdings(rows, holdings, broker=""):
             hit = [h for h in hs if (h.get("account_type") or "taxable") == acct]
             if hit:
                 return hit
-            if len(hs) > 1:
-                # 口座区分が一致する保有が無く、候補も複数 → 自動では選ばない
-                return []
+            # 口座区分が一致する保有が無ければ、候補が1件だけでも自動では選ばない。
+            # 旧NISAのSP500しか無いところへ特定口座の買付を取り込むと、NISAの保有に
+            # 取引が足され、口数・投資金額が売買の記録から計算し直されて書き換わる。
+            # 別口座は別の保有として扱うべきなので、画面で選んでもらう。
+            return []
         return hs
 
     by_name, by_label = {}, {}
