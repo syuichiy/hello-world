@@ -2217,7 +2217,7 @@ $("back-btn").addEventListener("click", showDashboard);
 
 // ============================================================ 設定 / AIアドバイス
 let aiSettings = { ai_model: "off", ai_available: false, ai_key_set: false, ai_key_from_env: false,
-                   ai_local_url: "", ai_local_model: "" };
+                   ai_local_url: "", ai_local_model: "", ai_overall_mode: "one" };
 const AI_MODEL_LABELS = { haiku: "Haiku", sonnet: "Sonnet", opus: "Opus", local: "ローカルLLM" };
 // AIカードの右肩に出す名札。ローカルLLMは「どのモデルで動いているか」が
 // 一番知りたい情報なので、モデル名そのもの（gpt-oss:20b など）を出す。
@@ -2282,6 +2282,24 @@ function renderSettingsUI() {
   }
   if ($("ai-local-model") && document.activeElement !== $("ai-local-model")) {
     $("ai-local-model").value = aiSettings.ai_local_model || "";
+  }
+  // AI総合の出しかた（1つの助言／3者で討議）。費用と時間が変わるので、
+  // 選んだほうに合わせて目安を出す。
+  document.querySelectorAll("#ai-mode-toggle .seg-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === (aiSettings.ai_overall_mode || "one")));
+  const mrow = $("ai-mode-row"), mhint = $("ai-mode-hint");
+  if (mrow) mrow.hidden = (aiSettings.ai_model === "off");
+  if (mhint) {
+    mhint.hidden = (aiSettings.ai_model === "off");
+    mhint.innerHTML = (aiSettings.ai_overall_mode === "debate")
+      ? "「これからの投資アクション」を、<strong>守り・攻め・税と制度</strong>の3つの立場で"
+        + "主張させてから、議長役がまとめます。一面的な助言になりにくくなりますが、"
+        + "<strong>予測が当たるようになるわけではありません</strong>。"
+        + (isLocal
+           ? "ローカルLLMでは<strong>4回に分けて</strong>呼ぶので、数分かかります。"
+           : "呼び出しは1回のままなので、費用と時間はほとんど変わりません"
+             + "（出力が長くなるぶん少し増えます）。")
+      : "「これからの投資アクション」を<strong>1回の呼び出し</strong>でまとめます（従来どおり）。";
   }
   const st = $("ai-key-status");
   if (!st) return;
@@ -2412,6 +2430,25 @@ $("ai-model-toggle").addEventListener("click", (e) => {
   if (b && b.dataset.model !== aiSettings.ai_model) saveAiModel(b.dataset.model);
 });
 $("ai-key-save").addEventListener("click", saveAiKey);
+
+// AI総合の出しかたを切り替える
+document.querySelectorAll("#ai-mode-toggle .seg-btn").forEach((b) =>
+  b.addEventListener("click", async () => {
+    const mode = b.dataset.mode;
+    if (mode === (aiSettings.ai_overall_mode || "one")) return;
+    aiSettings.ai_overall_mode = mode;
+    renderSettingsUI();
+    try {
+      const d = await fetchJson("/api/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_overall_mode: mode }),
+      });
+      if (d && d.ok) aiSettings = d;
+    } catch (e) { toast(netErrMsg(e), "error"); }
+    renderSettingsUI();
+    toast(mode === "debate" ? "AI総合を「3者で討議」にしました"
+                            : "AI総合を「1つの助言」にしました");
+  }));
 
 // ローカルLLMの接続を確認する（生成を待たずに、いまどのモデルで動くか分かるようにする）
 const aiLocalCheck = $("ai-local-check");
@@ -4217,12 +4254,19 @@ async function loadOverallAi() {
   }
   box.hidden = false;
   if (st) st.textContent = "";
-  box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> AIが全体を検討中… ⏳</div>';
+  // 討議モードは時間がかかる（ローカルLLMでは4回に分けて呼ぶ）ので、待たせる理由を出す
+  const isDebate = aiSettings.ai_overall_mode === "debate";
+  box.innerHTML = '<div class="ai-head"><span class="ai-ico">🤖</span> '
+    + (isDebate
+       ? "守り・攻め・税の3者で討議中… ⏳"
+         + (aiSettings.ai_model === "local" ? "（ローカルLLMでは数分かかります）" : "")
+       : "AIが全体を検討中… ⏳")
+    + "</div>";
   try {
     const d = await fetchJson("/api/ai-overall", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(facts),
-    }, 120000);
+    }, isDebate ? 900000 : 120000);
     if (!d.ok) {
       box.innerHTML = `<div class="ai-head ai-err"><span class="ai-ico">🤖</span> ${escapeHtml(d.error || "AIに相談できませんでした")}</div>`;
       return;
@@ -4245,6 +4289,11 @@ function renderOverallAi(advice, model, facts, modelName) {
   let html = `<div class="ai-head"><span class="ai-ico">🤖</span><b>これからの投資アクション</b>`
     + `<span class="ai-model">${escapeHtml(modelLabel(model, modelName))}</span></div>`;
   if (v.headline) html += `<div class="ov-headline">${escapeHtml(v.headline)}</div>`;
+  // 議長の裁定。結論の根拠なので、アクションより先に出す。
+  if (v.verdict) {
+    html += `<div class="ov-verdict"><span class="ov-verdict-t">⚖️ 議長の裁定</span>`
+      + `<span class="ov-verdict-b">${escapeHtml(v.verdict)}</span></div>`;
+  }
   if (acts.length) {
     html += '<ol class="ov-actions">' + acts.map((a) => `
       <li class="ov-act">
@@ -4261,6 +4310,23 @@ function renderOverallAi(advice, model, facts, modelName) {
   if ((v.keep || []).length) {
     html += `<div class="ai-block"><div class="ai-block-t">いまのままでよいこと</div>`
       + `<ul class="ai-block-b ai-list">${list(v.keep)}</ul></div>`;
+  }
+  // 討議の経過は折りたたみ。普段は結論だけ読み、納得できないときに開く。
+  const ROLE_ICON = { "守りの立場": "🛡️", "攻めの立場": "🚀", "税と制度の立場": "🧾" };
+  if ((v.debate || []).length) {
+    html += `<details class="ov-debate"><summary>討議の経過（${v.debate.length}者の主張）</summary>`
+      + v.debate.map((r) => `
+        <div class="ov-speech">
+          <div class="ov-role">${ROLE_ICON[r.role] || "💬"} ${escapeHtml(r.role || "")}</div>
+          <div class="ov-claim">${escapeHtml(r.claim || "")}</div>
+          ${(r.numbers || []).length
+            ? `<div class="ov-nums">根拠: ${(r.numbers || []).map((n) =>
+                `<span class="ov-num">${escapeHtml(String(n))}</span>`).join("")}</div>` : ""}
+          ${r.oppose ? `<div class="ov-oppose"><b>反対</b> ${escapeHtml(r.oppose)}</div>` : ""}
+          ${r.line ? `<div class="ov-line"><b>譲れない一線</b> ${escapeHtml(r.line)}</div>` : ""}
+        </div>`).join("")
+      + `<p class="hint">立場ごとに「最大化したいもの」を変えてあるので、主張は対立します。
+         議長がどれを優先したかは上の裁定に書かれています。</p></details>`;
   }
   const noStrategy = typeof facts.取り崩しの試算 === "string";
   html += '<div class="ai-foot">※ 画面に出ている数字だけをもとにしたコメントです。'

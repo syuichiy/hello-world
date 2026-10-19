@@ -1991,6 +1991,8 @@ def _settings_state():
         "ai_key_from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "ai_local_url": local_url,                 # ローカルLLMの接続先（OpenAI互換）
         "ai_local_model": local_model,
+        # AI総合の出しかた。"one"＝1つの助言（従来）／"debate"＝3者で討議してから結論
+        "ai_overall_mode": db.get_setting("ai_overall_mode", "one") or "one",
     }
 
 
@@ -2009,6 +2011,9 @@ def api_settings():
             db.set_setting("ai_local_url", str(data.get("ai_local_url") or "").strip())
         if "ai_local_model" in data:
             db.set_setting("ai_local_model", str(data.get("ai_local_model") or "").strip())
+        if "ai_overall_mode" in data:
+            m = str(data.get("ai_overall_mode") or "one")
+            db.set_setting("ai_overall_mode", m if m in ("one", "debate") else "one")
     return jsonify({"ok": True, **_settings_state()})
 
 
@@ -2779,6 +2784,160 @@ _AI_OVERALL_SCHEMA = {
 }
 
 
+# ------------------------------------------------- 3者で討議してから結論を出すモード
+# ねらいは「一面的な助言になりにくくすること」。予測が当たるようになるわけではない。
+# 役割は性格づけではなく、最大化するものを変えてある。守りと攻めは必ずぶつかり、
+# 税の立場が両方に制約をかける——ここに本当の対立があるので討議に中身が出る。
+_AI_ROLES = [
+    ("guard", "守りの立場", "資産を枯渇させないこと",
+     "資産寿命・成功確率・暴落シナリオ・生活防衛資金・取り崩し率"),
+    ("growth", "攻めの立場", "長期の購買力（インフレに負けないこと）",
+     "想定利回り・インフレ率・現金比率・理想配分との乖離"),
+    ("tax", "税と制度の立場", "手取りを最大にすること",
+     "NISA温存の進み具合・特定口座の含み益と税・年金・企業年金・退職一時金"),
+]
+
+# 各役の主張。「反対する案」を必須にしてあるのは、空欄を許すと全員が褒め合って
+# 終わり、討議の形だけになるため。
+_AI_ROLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "claim": {"type": "string"},         # 主張（何をすべきか）
+        "numbers": {"type": "array", "items": {"type": "string"}},   # 根拠にした数字
+        "oppose": {"type": "string"},        # 他の立場の案で認められないもの
+        "line": {"type": "string"},          # 譲れない一線
+    },
+    "required": ["claim", "numbers", "oppose", "line"],
+    "additionalProperties": False,
+}
+
+# 討議の経過。結論（_AI_OVERALL_SCHEMA）に足す形で返す。
+_AI_DEBATE_FIELDS = {
+    "debate": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string"},
+                "claim": {"type": "string"},
+                "numbers": {"type": "array", "items": {"type": "string"}},
+                "oppose": {"type": "string"},
+                "line": {"type": "string"},
+            },
+            "required": ["role", "claim", "numbers", "oppose", "line"],
+            "additionalProperties": False,
+        },
+    },
+    "verdict": {"type": "string"},        # どの主張を採り、どれを退けたか
+}
+_AI_DEBATE_SCHEMA = {
+    "type": "object",
+    "properties": dict(_AI_OVERALL_SCHEMA["properties"], **_AI_DEBATE_FIELDS),
+    "required": _AI_OVERALL_SCHEMA["required"] + ["debate", "verdict"],
+    "additionalProperties": False,
+}
+
+
+def _ai_role_prompt(name, goal, basis):
+    return (
+        f"あなたは日本の個人投資家の資産運用を検討する会議の出席者で、**{name}**です。\n"
+        f"あなたが最大化したいのは「{goal}」だけです。他の立場（守り／攻め／税と制度）の"
+        "都合は考えなくてよく、自分の立場から見て最善の案を主張してください。\n"
+        f"主に見るべき数字: {basis}\n\n"
+        "入力はアプリが計算した事実です。**渡された数字だけを使い、相場観や新しい数字を"
+        "作らないでください。**\n"
+        "次の4つをJSONで返してください。\n"
+        "- claim: あなたの立場からの主張（3文以内・200字以内）。具体的な行動を書く\n"
+        "- numbers: 根拠にした数字を2〜4個（例「資産寿命 92歳」「現金比率 28%」）。"
+        "入力に無い数字を書かないこと\n"
+        "- oppose: 他の立場が言いそうな案のうち、**あなたが認められないもの**と理由"
+        "（2文以内）。必ず書くこと。ここが空だと会議の意味がありません\n"
+        "- line: 譲れない一線（1文）。「ここを割るなら反対」という条件を数字で書く\n"
+        "断定を避け『〜を検討できる水準』等の表現にし、投資助言ではない前提で書いてください。"
+    )
+
+
+_AI_JUDGE_PROMPT = (
+    "あなたは日本の個人投資家の資産運用会議の**議長**です。\n"
+    "守りの立場・攻めの立場・税と制度の立場から、それぞれの主張・根拠・反対意見・"
+    "譲れない一線が出そろいました。これらを突き合わせて、**その人がこれから何をするか**を"
+    "優先順位つきで決めてください。\n\n"
+    "入力には、もとの事実データと3者の主張が入っています。"
+    "**数字は入力にあるものだけを使い、新しい数字を作らないでください。**\n\n"
+    "- headline: 結論を1文で（60字以内）\n"
+    "- actions: 具体的な行動を3〜5個。when は「今すぐ」「今年中」「退職まで」「退職後」の"
+    "いずれか。title（何を）・why（なぜ・どの数字から）・how（どうやって）を書く\n"
+    "- risks: 見落としやすいリスクを2〜3個\n"
+    "- keep: いまのままでよいことを1〜3個\n"
+    "- verdict: **どの立場の主張を採り、どれを退けたか**と、その理由（3文以内・250字以内）。"
+    "3者が対立した点に必ず触れ、どちらを優先したかを明示すること\n"
+    "- debate: 3者の主張をそのまま写す（role は『守りの立場』『攻めの立場』『税と制度の立場』）\n\n"
+    "どの立場にも等しく配慮して無難にまとめるのではなく、**この人の状況ではどれを優先すべきか**"
+    "を決めてください。ただし誰かの『譲れない一線』を割る場合は、risks にその旨を書くこと。"
+)
+
+# 1回で済ませる版（クラウドの強いモデル向け）。3つの立場を書き分けてから統合させる。
+# 呼び出しが1回で済むので、費用も時間も討議版の1/4になる。
+_AI_DEBATE_ONE_PROMPT = _AI_OVERALL_PROMPT + (
+    "\n\n【この回は3者で討議してから結論を出してください】\n"
+    "次の3つの立場になりきって、**先にそれぞれの主張を書いてから**、議長として結論を"
+    "出してください。立場どうしは必ず対立します。無難に全員の顔を立てず、"
+    "この人の状況でどれを優先するかを決めてください。\n"
+    "- 守りの立場: 資産を枯渇させないことだけを考える"
+    "（資産寿命・成功確率・暴落シナリオ・生活防衛資金・取り崩し率）\n"
+    "- 攻めの立場: 長期の購買力だけを考える"
+    "（想定利回り・インフレ率・現金比率・理想配分との乖離）\n"
+    "- 税と制度の立場: 手取りを最大にすることだけを考える"
+    "（NISA温存・特定口座の含み益と税・年金・企業年金・退職一時金）\n\n"
+    "debate には3者ぶんを入れ、それぞれ claim（主張）・numbers（根拠にした数字2〜4個）・"
+    "oppose（他の立場の案で認められないものと理由。必ず書く）・line（譲れない一線）を"
+    "書いてください。verdict には、どの主張を採ってどれを退けたか、対立点に触れながら"
+    "3文以内で書いてください。数字は入力にあるものだけを使ってください。"
+)
+
+
+def _ai_overall_debate(model_key, ctx):
+    """3者で討議してから結論を出す。
+
+    クラウドの強いモデルは1回の指示で3つの立場を書き分けられるので1回で済ませる。
+    ローカルLLMは1回の出力が長くなると書き切れずに崩れるため、役ごとに分けて頼む。
+    （銘柄別コメントを小分けにしたのと同じ理由。）
+    """
+    facts = json.dumps(ctx, ensure_ascii=False)
+    if model_key != _AI_LOCAL:
+        return _ai_generate(
+            model_key, _AI_DEBATE_ONE_PROMPT,
+            "次の状況について、3者で討議してから結論を出してください。\n" + facts,
+            _AI_DEBATE_SCHEMA, max_tokens=8000)
+
+    speeches = []
+    for _key, name, goal, basis in _AI_ROLES:
+        d, err = _ai_local_try(_ai_role_prompt(name, goal, basis),
+                               "次の状況について、あなたの立場から主張してください。\n" + facts,
+                               _AI_ROLE_SCHEMA, max_tokens=2500)
+        if not d:
+            print(f"[ai] 討議: {name}の主張が返りませんでした（{err}）")
+            continue
+        speeches.append({"role": name,
+                         "claim": str(d.get("claim") or ""),
+                         "numbers": [str(x) for x in (d.get("numbers") or [])],
+                         "oppose": str(d.get("oppose") or ""),
+                         "line": str(d.get("line") or "")})
+    if len(speeches) < 2:
+        # 1人しか主張できていないなら討議になっていない。従来の1回の助言に戻す。
+        raise AiUnavailable(
+            f"討議に必要な主張がそろいませんでした（{len(speeches)}/3）。"
+            "モデルを変えるか、設定でAIの出しかたを「1つの助言」に戻してお試しください。")
+
+    out = _ai_generate(
+        model_key, _AI_JUDGE_PROMPT,
+        "もとの事実:\n" + facts + "\n\n3者の主張:\n"
+        + json.dumps({"speeches": speeches}, ensure_ascii=False),
+        _AI_DEBATE_SCHEMA, max_tokens=4000)
+    out["debate"] = speeches          # 写し間違いを避けて、実際の主張で上書きする
+    return out
+
+
 @app.route("/api/ai-overall", methods=["POST"])
 def api_ai_overall():
     """資産・ライフプラン・取り崩しの試算をまとめてClaudeに渡し、これからの行動を返す。
@@ -2798,12 +2957,16 @@ def api_ai_overall():
         return jsonify({"ok": False, "error":
                         "資産の情報がありません。銘柄一覧で口数・投資金額を入力してください。"})
 
+    debate = state.get("ai_overall_mode") == "debate"
     try:
-        data = _ai_generate(
-            model_key, _AI_OVERALL_PROMPT,
-            "次の状況をもとに、これからの行動を優先順位つきで助言してください。\n"
-            + json.dumps(ctx, ensure_ascii=False),
-            _AI_OVERALL_SCHEMA, max_tokens=4000)
+        if debate:
+            data = _ai_overall_debate(model_key, ctx)
+        else:
+            data = _ai_generate(
+                model_key, _AI_OVERALL_PROMPT,
+                "次の状況をもとに、これからの行動を優先順位つきで助言してください。\n"
+                + json.dumps(ctx, ensure_ascii=False),
+                _AI_OVERALL_SCHEMA, max_tokens=4000)
     except AiUnavailable as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     except json.JSONDecodeError:
@@ -2812,7 +2975,7 @@ def api_ai_overall():
     except Exception as e:
         return jsonify({"ok": False, "error": _ai_error_message(e)}), 502
 
-    return jsonify({"ok": True, "model": model_key,
+    return jsonify({"ok": True, "model": model_key, "mode": "debate" if debate else "one",
                     "model_name": _ai_model_name(model_key), "advice": data})
 
 
