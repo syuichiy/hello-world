@@ -3147,7 +3147,7 @@ def api_plan():
         for k in ("goal", "monthly", "return_rate",
                   "current_age", "retire_age", "pension_age",
                   "pension_monthly", "spend_monthly", "inflation",
-                  "cash", "bonds", "tax", "emergency_months", "near_term",
+                  "cash", "bonds", "tax", "emergency_months", "near_term", "near_term_age",
                   "draw_rate", "conc_keep",
                   # ガードレール運用の記録：基準の引出率(%)と、いま採用している生活費(月額)
                   "guard_base_rate", "guard_spend",

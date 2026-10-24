@@ -1220,3 +1220,9 @@ main > section { display: block; }
 .ov-oppose, .ov-line { margin-top: 5px; font-size: 12px; line-height: 1.7; color: var(--ink-soft); }
 .ov-oppose b { color: var(--down-text); margin-right: 4px; }
 .ov-line b { color: var(--ink); margin-right: 4px; }
+
+/* 数年内に使う予定額が出ていく年齢の印 */
+.draw-tag-near {
+  background: color-mix(in srgb, var(--down-text) 16%, transparent);
+  color: var(--down-text); border-color: transparent;
+}

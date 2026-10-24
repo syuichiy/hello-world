@@ -2253,6 +2253,7 @@ async function loadSettings() {
   $("set-tax").value = pl.tax != null ? pl.tax : 20.315;   // 既定：日本の約20.315%
   $("set-emergency-months").value = pl.emergency_months != null ? pl.emergency_months : 6;
   $("set-near-term").value = fmtInt(pl.near_term || 0);
+  $("set-near-term-age").value = pl.near_term_age || "";
   $("set-draw-method").value = pl.draw_method || "fixed";
   $("set-draw-rate").value = pl.draw_rate != null ? pl.draw_rate : 4;
   $("set-conc-keep").value = pl.conc_keep != null ? pl.conc_keep : 100;
@@ -2995,6 +2996,7 @@ bindPremise("set-tax", "tax", false);
 bindPremise("set-pension-slide", "pension_slide", false);
 bindPremise("set-emergency-months", "emergency_months", false);
 bindPremise("set-near-term", "near_term", true);
+bindPremise("set-near-term-age", "near_term_age", false);
 bindPremise("set-draw-rate", "draw_rate", false);
 bindPremise("set-conc-keep", "conc_keep", false);
 bindPremise("set-lump-age", "lump_age", false);
@@ -3217,7 +3219,11 @@ function renderCashAdvice() {
 
   let html = '<div class="cash-adv-rows">';
   html += row("① 生活防衛資金", `生活費 ${yen(spend)} × ${emMonths}ヶ月`, emergency);
-  if (nearTerm > 0) html += row("② 数年内に使う予定額", "設定値", nearTerm);
+  if (nearTerm > 0) {
+    const na = +p.near_term_age || +p.current_age || 0;
+    html += row("② 数年内に使う予定額",
+                na ? `${na}歳に使う前提（試算にも反映）` : "設定値", nearTerm);
+  }
   html += row("今すぐ手元に置きたい目安（①＋②）", "", nowTotal, "cash-adv-total");
   if (gapMonths > 0) {
     const gapSub = `生活費 ${yen(spend)} × ${gapMonths}ヶ月（${retire}→${pen}歳・公的年金なしの期間）`
@@ -3331,6 +3337,8 @@ function renderStrategyPremise() {
                       + `${man(lp.cpen)}/月（増額なし）`]] : []),
     ...(lp.lump > 0 && lp.lumpAge > 0
       ? [["退職一時金", `${lp.lumpAge}歳 ${man(lp.lump)}`]] : []),
+    ...(lp.near > 0
+      ? [["数年内に使う予定額", `${lp.nearAge}歳に ${man(lp.near)}`]] : []),
     ["生活費", `${man(lp.spend)}/月`],
     // 実際に計算へ使う年利を出す（AI予測をオンにしていると設定値ではなくAIの値になる）
     ["想定年利", lastLifeArgs
@@ -3462,8 +3470,19 @@ function renderStrategy() {
   const drawRows = ages.map((g) => {
     const tag = g === penAge ? '<span class="draw-tag">年金開始</span>'
       : (g < penAge ? '<span class="draw-tag draw-tag-gap">年金なし</span>' : "");
+    // 数年内に使う予定額が出ていく年齢に印を付ける。生活費ではないので表の金額には
+    // 現れないが、資産残高がここで一段下がる理由を示す。
+    const nearPts = (curPath.pts || []).filter(
+      (q) => q.nearSpend > 0 && q.age >= g - 1e-6 && q.age < g + drawTableStep - 1e-6);
+    const nearSpend = nearPts.reduce((t, q) => t + q.nearSpend, 0);
+    // 5年ごと表示だと行の年齢と実際に使う年齢がずれるので、実際の年齢を書く
+    const nearAt = nearPts.length ? Math.floor(nearPts[0].age + 1e-6) : 0;
+    const nearTag = nearSpend > 0
+      ? `<span class="draw-tag draw-tag-near">${nearAt}歳 予定支出 `
+        + `${Math.round(nearSpend / 10000).toLocaleString()}万</span>`
+      : "";
     const d = drawAtAge(curPath, g);
-    return `<tr><td>${g}歳${tag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}`
+    return `<tr><td>${g}歳${tag}${nearTag}</td>${srcCols.map(([k, , c]) => drawCell(d, k, c)).join("")}`
       + `${rateCell(d, g)}${nisaCell(d, g)}${balCell(g)}</tr>`;
   }).join("");
 
@@ -3524,6 +3543,8 @@ function renderStrategy() {
       右端の<strong>資産残高</strong>は、その年齢になった時点（年初）の合計
       （現金＋債券＋投信・株、特定口座の含み益にかかる税を引いた後）です。
       年金が生活費を上回る月は 0 円、資産が尽きた後は「—」と表示します。
+      <strong>数年内に使う予定額</strong>は生活費ではないので表の金額には現れませんが、
+      設定した年齢で資産から出ていきます（その年齢の行に「予定支出」と表示します）。
       退職時の想定資産は<strong>${yen(curPath.retireBal)}</strong>、
       資産寿命は<strong>${ageOf(curPath)}</strong>（値動きのブレなし）です。</p>
     <details class="plan-help">
@@ -4217,6 +4238,8 @@ function buildOverallFacts() {
     手元に置きたい現金: t ? {
       生活防衛資金_円: Math.round(t.emergency),
       数年内に使う予定額_円: Math.round(t.nearTerm),
+      予定額を使う年齢: (+(planData.plan || {}).near_term_age)
+                        || (+(planData.plan || {}).current_age) || null,
       退職から年金までのクッション_円: Math.round(t.gapCushion),
       退職時までに用意したい合計_円: Math.round(t.nowTotal + t.gapCushion),
       いまの現金と債券_円: Math.round(t.reserve),
@@ -4547,6 +4570,10 @@ function planLifePlan() {
     // 退職一時金：受け取る年齢にその額を現金へ加える（受け取り前は資産に入れない）
     lumpAge: +p.lump_age || 0,
     lump: +p.lump_amount || 0,
+    // 数年内に使う予定額：生活費とは別に出ていくお金（車の買い替え・リフォーム等）。
+    // 年齢を決めていなければ「今すぐ使う」として扱う（残しておくより厳しい側）。
+    near: +p.near_term || 0,
+    nearAge: (+p.near_term_age || 0) || (+p.current_age || 0),
     // 企業年金：開始年齢から受給年数のあいだ、毎月受け取る。公的年金と違い
     // 物価スライドが無いのが一般的なので、名目のまま（インフレでは増やさない）。
     cpenAge: +p.corp_pension_age || 0,
@@ -4679,6 +4706,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
   // （画面の「現在地」と試算がズレないように、同じ値を使う）。
   let minLivingReal = Infinity, initRate = null;
   let lumpPaid = false;                 // 退職一時金を受け取り済みか
+  let nearPaid = false;                 // 数年内に使う予定額を支払い済みか
   let guardSpend = (o.guardSpend > 0) ? o.guardSpend : lp.spend;
   const endMonths = Math.max(1, Math.round((100 - lp.age0) * 12));
   for (let m = 1; m <= endMonths; m++) {
@@ -4698,6 +4726,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     let dPen = 0, dLiving = 0;   // 年金のうち生活費に充てた分／その月に使える生活費
     let dCpen = 0;               // その月の企業年金（表示用。dPen にも含まれる）
     let lumpGot = 0;             // その月に受け取った退職一時金
+    let nearSpent = 0;           // その月に出ていった「数年内に使う予定額」
     // 現金から amt を使う。分配金や売却代金に由来する分は、その出どころとして数える。
     const useCash = (amt) => {
       if (!(amt > 0)) return;
@@ -4725,6 +4754,17 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     // 退職一時金：その年齢になった月に現金へ入る（退職所得控除の範囲内とみなし課税しない）
     if (lp.lump > 0 && lp.lumpAge > 0 && !lumpPaid && age >= lp.lumpAge - 1e-9) {
       cash += lp.lump; lumpPaid = true; lumpGot = lp.lump;
+    }
+    // 数年内に使う予定額：その年齢になった月に、現金→債券→投信の順で出ていく。
+    // 生活費ではないので「取り崩し額」には数えないが、資産からは確実に減る。
+    // ここで引かないと、使う予定のお金を最後まで運用し続ける前提になってしまう。
+    if (lp.near > 0 && !nearPaid && age >= lp.nearAge - 1e-9) {
+      let need = lp.near;
+      const fc = Math.min(cash, need); cash -= fc; need -= fc;
+      const fb = Math.min(bonds, need); bonds -= fb; need -= fb;
+      if (need > 0) need -= sellFund(need);
+      nearPaid = true;
+      nearSpent = lp.near - Math.max(0, need);      // 足りなければ出せたぶんだけ
     }
     if (age < lp.retire) {
       // 積立はNISAの生涯投資枠（簿価1,800万円・年360万円）を使い切るまでNISAへ。
@@ -4819,6 +4859,7 @@ function buildLifePath(cur, lastDate, monthly, annual, lp, cash0, bonds0, basis0
     pt.taxV = Math.round(taxV); pt.nisaV = Math.round(nisaV);
     if (balBefore != null) pt.balBefore = Math.round(balBefore);
     if (lumpGot > 0) pt.lump = lumpGot;
+    if (nearSpent > 0) pt.nearSpend = nearSpent;
     if (drawM != null) {
       pt.draw = drawM; pt.drawCash = dCash; pt.drawBonds = dBonds; pt.drawFund = dFund;
       pt.drawDiv = dDiv; pt.drawPen = dPen; pt.living = dLiving; pt.inflF = inflNow;
