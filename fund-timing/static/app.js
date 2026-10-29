@@ -2992,7 +2992,8 @@ function renderPensionSlideNote() {
   }
 }
 
-// 「集中している銘柄を残す割合」の補足。対象の銘柄名と、いまの設定で何が起きるかを示す。
+// 「集中銘柄を運用資産の何%まで減らすか」の補足。対象の銘柄名と、いまの設定で
+// 何が起きるかを示す。設定値は“その銘柄の何%を残すか”ではなく、運用資産に対する比率。
 function renderConcKeepNote() {
   const el = $("conc-keep-note");
   if (!el) return;
@@ -3001,23 +3002,29 @@ function renderConcKeepNote() {
   const cc = portfolioRisk && portfolioRisk.concentration;
   el.classList.remove("field-note-warn");
   if (!cc || cc.share < CONC_MIN_SHARE) {
-    el.textContent = "1銘柄が資産の15%以上を占めているとき、その銘柄を売って分散資産に"
-      + "買い替える前提で取り崩し戦略を計算します。100%＝売らずにそのまま保有。"
+    el.textContent = "1銘柄が運用資産の15%以上を占めているとき、その銘柄を売って分散資産に"
+      + "買い替える前提で取り崩し戦略を計算します。"
+      + "入れる数字は「その銘柄が運用資産の何%になるまで減らすか」です"
+      + "（その銘柄の何%を残すか、ではありません）。100＝売らずにそのまま保有。"
       + "（いまは対象になる銘柄がありません。取り崩し戦略タブを開くと判定します。）";
     return;
   }
   const yen = (n) => Math.round(n).toLocaleString() + "円";
-  const head = `対象は「${cc.name}」（資産の ${cc.share}%）。`;
+  const head = `対象は「${cc.name}」（運用資産の ${cc.share}%）。`;
   if (pct >= cc.share) {
     el.textContent = head + "いまの設定では売らずにそのまま保有する前提です。"
-      + "減らす場合は、残したい割合（例：10）を入れてください。";
+      + `減らす場合は、いまの ${cc.share}% より小さい数字（例：10）を入れてください。`
+      + "入れた数字は「運用資産に対する比率」です。";
     el.classList.add("field-note-warn");
   } else {
     // 金額は「比率 × 運用資産」で出す。/api/portfolio-risk の評価額（価格×口数）を
     // そのまま使うと、資産プラン側の評価額と桁が食い違うことがあるため。
     const pool = planData.total_value || 0;
     const amount = pool > 0 ? `（約 ${yen(pool * pct / 100)}）` : "";
-    el.textContent = head + `資産の ${Math.round(pct)}%${amount}まで`
+    const sellNow = pool > 0 ? Math.max(0, pool * (cc.share - pct) / 100) : 0;
+    el.textContent = head
+      + `この銘柄が運用資産の ${Math.round(pct)}%${amount} になるまで`
+      + (sellNow > 0 ? `（いまの評価額からは約 ${yen(sellNow)} を売る計算）` : "")
       + "年360万円ペースで売り、同額を分散資産に買い直す前提で計算します"
       + "（NISAの残り枠を先に使います）。売却益には課税されます。";
   }
@@ -3413,14 +3420,15 @@ function renderStrategyPremise() {
   const cp = lastConcPlan;
   if (cp) {
     const pct = p.conc_keep != null ? p.conc_keep : 100;
-    chips.push([`${cp.cc.name}（現在 ${cp.cc.share}%）`,
-                pct >= cp.cc.share ? "そのまま保有" : `${Math.round(pct)}%まで減らす`]);
+    chips.push([`${cp.cc.name}（運用資産の ${cp.cc.share}%）`,
+                pct >= cp.cc.share ? "そのまま保有"
+                                   : `運用資産の ${Math.round(pct)}% まで減らす`]);
   }
   el.innerHTML = chips.map(([k, v]) =>
     `<span class="premise-chip"><span class="premise-key">${k}</span>${escapeHtml(String(v))}</span>`).join("");
 }
 
-// 取り崩し戦略の画面は、決める材料を2つ（取り崩し方法・集中銘柄を残す割合）にしぼり、
+// 取り崩し戦略の画面は、決める材料を2つ（取り崩し方法・集中銘柄の目標比率）にしぼり、
 // 結果を「① 年齢ごとの取り崩し額」と「② 値動きのブレを含めた成功確率」の2つに集約する。
 // 方法ごと・残す割合ごとの比較は②の中に畳んである。
 function renderStrategy() {
@@ -3954,11 +3962,11 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
 
   // 残す割合は設定タブで決めるので、ここでは「いまの設定だとどうなるか」だけを説明する
   const keepNote = cp ? `
-    <p class="hint">${escapeHtml(cp.cc.name)}は資産の ${cp.cc.share}% を占めています。
-      設定の<strong>「集中している銘柄を残す割合」＝${cp.label(cp.target)}</strong>で計算しており、
+    <p class="hint">${escapeHtml(cp.cc.name)}は<strong>運用資産（投信・株）の ${cp.cc.share}%</strong>を占めています。
+      設定の<strong>「集中銘柄を運用資産の何%まで減らすか」＝${cp.label(cp.target)}</strong>で計算しており、
       この銘柄の変動率は年<strong>${cp.cc.vol}％</strong>、それ以外の保有は年
       <strong>${cp.cc.rest_vol}％</strong>（相関 ${cp.cc.corr}）です。
-      残す割合に応じた<strong>合成の変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
+      この比率に応じた<strong>合成の変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
       （いま）でブレを作っています。
       ${cp.reachOf(cp.target) > 0
         ? `その水準まで下げるのに <strong>約${cp.reachOf(cp.target).toFixed(1)}年</strong>かかる計算です。` : ""}
@@ -4091,7 +4099,7 @@ function renderSuccess(a, cur, rm, cp, path, man, yen, ageOf) {
     <p class="hint">平均リターンは他の項目と揃えて<strong>設定の想定年利 ${(a.baseRate * 100).toFixed(2)}％</strong>
       を使い、ブレ幅だけを実際の保有から推定しています（直近${portfolioRisk.months}ヶ月）。
       ${cp
-        ? `いまの残す割合では<strong>変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
+        ? `いまの設定（${cp.label(cp.target)}）では<strong>変動率 ${(cp.volAt(cp.wAt(cp.target, 0)) * 100).toFixed(1)}％</strong>
            （保有全体では ${portfolioRisk.annual_vol}％。${escapeHtml(cp.cc.name)}を減らすぶん小さくなります）。`
         : `<strong>変動率 ${portfolioRisk.annual_vol}％</strong>としています。`}
       <span class="hint-sub">※ 同じ期間の実績リターンは年率 ${portfolioRisk.annual_return}％ですが、
@@ -4138,7 +4146,7 @@ function buildStrategyAiFacts() {
   const targets = [0, 0.05, 0.10, 0.15, 0.20, 1];
   if (!targets.includes(cp.target)) targets.push(cp.target);
   targets.sort((x, y) => x - y);
-  facts.残す割合ごとの結果 = targets.map((t) => {
+  facts.集中銘柄の目標比率ごとの結果 = targets.map((t) => {
     const r = lastStrategyRun(cur, t);
     return {
       方針: cp.label(t),
@@ -4294,7 +4302,7 @@ function buildOverallFacts() {
       毎月の積立_円: p.monthly || 0,
       目標資産_円: p.goal || 0,
       取り崩し方法: DRAW_LABELS[p.draw_method || "fixed"],
-      集中銘柄を残す割合_パーセント: p.conc_keep != null ? p.conc_keep : 100,
+      集中銘柄を運用資産の何パーセントまで減らすか: p.conc_keep != null ? p.conc_keep : 100,
     },
     手元に置きたい現金: t ? {
       生活防衛資金_円: Math.round(t.emergency),
@@ -4479,8 +4487,9 @@ function concentrationPlan(a, rm) {
   const target = Math.min(1, Math.max(0, (pctSet != null ? pctSet : 100) / 100));
   return {
     cc, room, gain, share, poolAt, target,
+    // 「◯%残す」は「その銘柄の◯%を残す」と読まれやすいので、分母を明示する
     label: (t) => (t >= share ? "現状のまま持ち続ける"
-      : t === 0 ? "全部売る" : `${Math.round(t * 100)}% 残す`),
+      : t === 0 ? "全部売る" : `運用資産の ${Math.round(t * 100)}% まで減らす`),
     volAt: (w) => Math.sqrt(Math.max(0,
       w * w * ss * ss + (1 - w) * (1 - w) * sr * sr + 2 * w * (1 - w) * rho * ss * sr)),
     wAt: (target, m) => Math.max(0, Math.min(1,
