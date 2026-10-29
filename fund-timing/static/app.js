@@ -1909,6 +1909,24 @@ function tradeAmount(units, price) {
   return units * price / (tradeKind === "stock" ? 1 : 10000);
 }
 
+// 開始残高（記録を付け始める前から持っていた分）を1件記録する
+async function saveOpening() {
+  const units = parseNumComma($("open-units").value);
+  const price = parseNumComma($("open-price").value) || 0;
+  if (!(units > 0)) { toast("開始の数量を入力してください", "error"); return; }
+  try {
+    const d = await fetchJson("/api/trades/opening", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: tradeWatchId, units, price }),
+    }, 30000);
+    if (!d.ok) { toast(d.error || "記録に失敗しました", "error"); return; }
+    toast(d.replaced ? `開始残高を ${d.date} の内容に入れ替えました`
+                     : `開始残高を ${d.date} に記録しました`);
+    await loadTrades();
+    await loadWatchlist();
+  } catch (e) { toast(netErrMsg(e), "error"); }
+}
+
 async function loadTrades() {
   if (tradeWatchId == null) return;
   let d;
@@ -1934,6 +1952,40 @@ async function loadTrades() {
       </div>
       <p class="hint">この保有${unitLabel}数と取得原価は、銘柄一覧の「${unitLabel}数」「投資金額」に自動で反映されています。</p>`
     : `<p class="empty-watch">まだ売買の記録がありません。下のフォームから購入・売却を記録すると、平均取得単価と実現損益を計算します。</p>`;
+
+  // 記録に無い保有からの売却があると、その売却は計算で無視され、保有数が実態より
+  // 少なく出る（売却400株・200株のあとに100株買うと総株数が100株になる）。
+  // 原因と直し方を画面に出す。
+  const short = Number(p.short_units) || 0;
+  const warn = $("trade-short");
+  if (warn) {
+    if (short > 0) {
+      // すでに開始残高があるなら、それに不足分を足した数を初期値にする
+      // （入れ替えになるので、差分ではなく「あるべき開始残高」を入れてもらう）
+      const cur = (d.trades || []).find((t) => (t.note || "").indexOf("開始残高") === 0);
+      const need = short + (cur ? Number(cur.units) || 0 : 0);
+      const n = Math.round(short).toLocaleString();
+      warn.innerHTML = `⚠️ <b>記録に無い保有からの売却が ${n}${unitLabel} ぶんあります。</b>`
+        + `<br>記録を付け始める前から持っていた分を売ったため、その売却は計算に入らず、`
+        + `保有${unitLabel}数が実態より少なく出ています。`
+        + `<br>当時の保有を「開始残高」として入れると直ります`
+        + (cur ? `（いまの開始残高 ${Number(cur.units).toLocaleString()}${unitLabel} では`
+                 + ` ${n}${unitLabel} 足りません。入れ替えになります）。`
+              : `（最低 ${n}${unitLabel} 必要です）。`)
+        + `<div class="trade-short-form">`
+        + `<label>開始${unitLabel}数<input id="open-units" type="text" inputmode="numeric"`
+        + ` class="plan-input plan-input-sm" value="${Math.round(need)}"></label>`
+        + `<label>当時の${priceLabel.replace("あたり", "")}単価<input id="open-price" type="text"`
+        + ` inputmode="numeric" class="plan-input plan-input-sm" placeholder="分からなければ0"></label>`
+        + `<button type="button" id="open-save">開始残高を記録する</button></div>`;
+      warn.hidden = false;
+      const btn = $("open-save");
+      if (btn) btn.addEventListener("click", saveOpening);
+    } else {
+      warn.hidden = true;
+      warn.innerHTML = "";
+    }
+  }
 
   const rows = (d.trades || []).slice().reverse();   // 新しい順
   $("trade-list").innerHTML = rows.length ? `
@@ -2002,7 +2054,14 @@ $("trade-form").addEventListener("submit", async (e) => {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     })).json();
     if (!d.ok) { toast(d.error || "記録に失敗しました", "error"); return; }
-    toast("売買を記録しました");
+    // 最初の1件のときは、それまでの保有を「開始残高」として足している。
+    // 黙って行が増えると驚くので、何をしたかを伝える。
+    if (d.opening) {
+      const u = Math.round(d.opening.units).toLocaleString();
+      toast(`売買を記録しました（それまでの ${u} を「開始残高」として追加しました）`);
+    } else {
+      toast("売買を記録しました");
+    }
     ["trade-units", "trade-price", "trade-fee", "trade-note"].forEach((id) => { $(id).value = ""; });
     $("trade-amount-preview").textContent = "";
     tradeFeeEdited = false;
@@ -2773,7 +2832,9 @@ async function runCsvImport() {
       + (d.duplicates ? `（重複 ${d.duplicates} 件は登録済みのため除外）` : "")
       + (d.skipped ? `（対応づけ未選択 ${d.skipped} 件は取り込まず）` : "")
       + `。${d.holdings} 銘柄の口数・投資金額を更新しました。`
-      + (d.created ? `新しく ${d.created} 銘柄を一覧に追加しました。` : ""));
+      + (d.created ? `新しく ${d.created} 銘柄を一覧に追加しました。` : "")
+      + (d.opened ? `${d.opened} 銘柄は、それまでの保有を「開始残高」として`
+                    + `記録に足しています（📝で確認できます）。` : ""));
     toast("取引履歴を取り込みました");
     $("csv-preview").hidden = true;
     csvPreview = null;

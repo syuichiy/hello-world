@@ -1148,6 +1148,45 @@ def _add_watch_returning_id(catalog_id, broker="", account_type=""):
     return same[-1]["watch_id"] if same else None
 
 
+_OPENING_NOTE = "開始残高（記録を付け始める前から持っていた分）"
+
+
+def _ensure_opening_trade(watch_id, before_date):
+    """記録を付け始める前から持っていた分を「開始残高」として1件残す。
+
+    保有口数は、売買の記録が1件でもあると記録から計算し直す。そのため、手で入力した
+    口数しか無い保有に最初の1件を記録すると、それまでの保有が消えて新しい1件だけの
+    数になってしまう（100株買ったら総株数が100株になる）。先に現在の保有を
+    「開始残高」として記録しておけば、足し算になる。
+    """
+    watch_id = int(watch_id)
+    if db.list_trades(watch_id):
+        return None                     # すでに記録がある＝計算の土台はそろっている
+    it = db.get_watch(watch_id)
+    if not it:
+        return None
+    units = float(it.get("units") or 0)
+    if units <= 0:
+        return None                     # 持っていないなら残すものが無い
+    invested = float(it.get("invested") or 0)
+    # 1口（1株）あたりの単価に直す。投信は1万口あたりの基準価額で記録している。
+    div = 1.0 if (it.get("kind") or "fund") == "stock" else 10000.0
+    price = (invested * div / units) if invested > 0 else 0.0
+    # 日付は、新しい記録より前で、かつ一覧に追加した日より後にならないようにする
+    try:
+        d = dt.date.fromisoformat(str(before_date)[:10]) - dt.timedelta(days=1)
+    except ValueError:
+        d = dt.date.today() - dt.timedelta(days=1)
+    added = str(it.get("added_at") or "")[:10]
+    try:
+        if added and dt.date.fromisoformat(added) < d:
+            d = dt.date.fromisoformat(added)
+    except ValueError:
+        pass
+    db.add_trade(watch_id, d.isoformat(), "buy", units, price, 0, _OPENING_NOTE)
+    return {"units": units, "invested": invested, "date": d.isoformat()}
+
+
 def _sync_position_from_trades(watch_id, kind=None):
     """売買の記録から保有口数と投資金額（取得原価）を計算し、保有へ反映する。
     記録が1件も無い保有は手入力のままにする（自動で0にしない）。"""
@@ -1177,6 +1216,45 @@ def api_trades():
                     "trades": trades, "position": db.trade_position(trades, kind)})
 
 
+@app.route("/api/trades/opening", methods=["POST"])
+def api_trades_opening():
+    """記録を付け始める前から持っていた分を「開始残高」として1件記録する。
+
+    保有を超える売却が記録にあると、その売却は計算で無視され、保有数が実態より
+    少なく出る（売却400株・200株の後に100株買うと、総株数が100株になる）。
+    不足分を開始残高として入れれば、以降は正しく積み上がる。
+    """
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    try:
+        units = float(data.get("units") or 0)
+        price = float(data.get("price") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "数値を入力してください。"}), 400
+    if units <= 0:
+        return jsonify({"ok": False, "error": "開始残高の数量を入力してください。"}), 400
+    wid = int(watch_id)
+    trades = db.list_trades(wid)
+    # すでに開始残高があれば入れ替える。最初の1件を記録したときに自動で入れた開始残高が
+    # 足りないこともある（その時点の口数しか分からないため）ので、直せるようにしておく。
+    old = [t for t in trades if _OPENING_NOTE in (t.get("note") or "")]
+    for t in old:
+        db.delete_trade(int(t["id"]))
+    trades = [t for t in trades if t not in old]
+    # いちばん古い記録より前の日付にする（これより後だと売却に間に合わない）
+    dates = sorted(str(t.get("date") or "") for t in trades if t.get("date"))
+    try:
+        d = dt.date.fromisoformat(dates[0][:10]) - dt.timedelta(days=1)
+    except (IndexError, ValueError):
+        d = dt.date.today() - dt.timedelta(days=1)
+    db.add_trade(wid, d.isoformat(), "buy", units, price, 0, _OPENING_NOTE)
+    pos = _sync_position_from_trades(wid)
+    return jsonify({"ok": True, "position": pos, "date": d.isoformat(),
+                    "replaced": bool(old)})
+
+
 @app.route("/api/watchlist/fee-rate", methods=["POST"])
 def api_watchlist_fee_rate():
     """売買手数料の既定値（率%）を設定する。0なら自動計算しない。"""
@@ -1198,6 +1276,9 @@ def api_trades_add():
     watch_id = data.get("watch_id")
     if watch_id is None:
         return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    # 最初の1件を記録する前に、いまの保有を「開始残高」として残しておく。
+    # そうしないと、これまでの保有が消えて今回の1件だけの数になってしまう。
+    opening = _ensure_opening_trade(watch_id, data.get("date") or "")
     try:
         db.add_trade(int(watch_id), data.get("date") or "", data.get("side") or "buy",
                      data.get("units"), data.get("price"),
@@ -1205,7 +1286,7 @@ def api_trades_add():
     except (ValueError, TypeError) as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     pos = _sync_position_from_trades(watch_id)
-    return jsonify({"ok": True, "position": pos})
+    return jsonify({"ok": True, "position": pos, "opening": opening})
 
 
 @app.route("/api/trades/import-preview", methods=["POST"])
@@ -1332,6 +1413,7 @@ def api_trades_import():
     broker = (data.get("broker") or "").strip()
     added = skipped = dup = 0
     created = 0
+    opened = 0            # 開始残高を足した保有の数（画面に出して気づけるようにする）
     touched = set()
     resolved = {}          # 対応づけの解決結果（"c:12" の追加は1回だけ行う）
 
@@ -1375,6 +1457,9 @@ def api_trades_import():
             dup += 1
             continue
         try:
+            # この保有に記録が1件も無ければ、いまの保有を先に開始残高として残す
+            if _ensure_opening_trade(wid, r.get("date")):
+                opened += 1
             db.add_trade(wid, r.get("date"), r.get("side"), r.get("units"), r.get("price"),
                          r.get("fee") or 0, r.get("note") or "")
         except (ValueError, TypeError):
@@ -1387,7 +1472,7 @@ def api_trades_import():
     for wid in touched:
         _sync_position_from_trades(wid)
     return jsonify({"ok": True, "added": added, "duplicates": dup, "skipped": skipped,
-                    "holdings": len(touched), "created": created})
+                    "holdings": len(touched), "created": created, "opened": opened})
 
 
 @app.route("/api/trades", methods=["DELETE"])

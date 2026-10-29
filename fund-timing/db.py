@@ -706,6 +706,10 @@ def trade_position(trades, kind: str = "fund") -> dict:
     div = 1.0 if kind == "stock" else 10000.0
     units = cost = realized = 0.0
     buy_amount = sell_amount = fees = 0.0
+    # 記録に無い保有からの売却。記録を付け始める前から持っていた分を売ると、
+    # 買いの記録が無いので計算上は「持っていない物を売った」ことになる。
+    # 黙って捨てると保有数が実態と合わなくなるので、何口ぶんかを数えて返す。
+    short = 0.0
     for t in sorted(trades, key=lambda x: (x.get("date") or "", x.get("id") or 0)):
         u = float(t.get("units") or 0)
         p = float(t.get("price") or 0)
@@ -718,7 +722,10 @@ def trade_position(trades, kind: str = "fund") -> dict:
             buy_amount += amount
         else:
             if units <= 0:
-                continue                  # 保有していない売却は無視（入力ミス対策）
+                short += u                # 記録に無い保有からの売却（開始残高が要る）
+                continue
+            if u > units:
+                short += u - units        # 足りないぶん
             u = min(u, units)             # 保有を超える売却は保有分までに丸める
             amount = u * p / div
             avg_cost = cost / units       # 売却時点の平均取得単価（金額ベース）
@@ -738,6 +745,8 @@ def trade_position(trades, kind: str = "fund") -> dict:
         "realized": round(realized),            # 実現損益（累計・手数料込み）
         "buy_amount": round(buy_amount), "sell_amount": round(sell_amount),
         "fees": round(fees), "count": len(trades),
+        # これが0より大きい＝開始残高が足りていない（保有数が実態より少なく出る）
+        "short_units": round(short, 4),
     }
 
 
