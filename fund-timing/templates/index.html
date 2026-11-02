@@ -379,7 +379,9 @@
           <div class="pf-sum"><span class="pf-sum-key">損益</span><span class="pf-sum-val" id="sum-fund-pl">—</span></div>
           <div class="pf-sum"><span class="pf-sum-key">損益率</span><span class="pf-sum-val" id="sum-fund-plr">—</span></div>
           <div class="pf-sum"><span class="pf-sum-key">前日比</span><span class="pf-sum-val" id="sum-fund-dod">—</span></div>
+          <div class="pf-sum"><span class="pf-sum-key" id="sum-fund-ytd-key">年初来損益</span><span class="pf-sum-val" id="sum-fund-ytd">—</span></div>
         </div>
+        <p class="pf-sum-note" id="sum-fund-ytd-note" hidden></p>
       </div>
 
       <div class="card price-chart-card">
@@ -426,7 +428,9 @@
 
       <div class="card price-table-card" id="price-table-card" hidden>
         <h2>📋 金額の推移（評価額・円）</h2>
-        <p class="hint">日付ごとの各商品の評価額（円）です。最終行が合計評価額です。</p>
+        <p class="hint">日付ごとの各商品の評価額（円）です。最終行が合計評価額です。
+          <strong>年初来</strong>は、評価額の増加から今年足した元手（買い増し）を差し引いた値上がり益です。</p>
+        <p class="pf-sum-note" id="price-table-note" hidden></p>
         <div class="table-scroll">
           <table class="price-table" id="price-table">
             <thead><tr id="price-table-head"></tr></thead>

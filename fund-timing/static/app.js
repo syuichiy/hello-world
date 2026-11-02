@@ -635,6 +635,7 @@ function renderPriceSkipped(skipped) {
 }
 
 let lastActualData = null;
+let lastYtdFund = null;   // 投資信託だけの年初来（サマリーに併記）
 let priceMode = "ratio";   // "ratio"（比率%）| "amount"（実額円）
 let lineMode = "products";  // "products"（商品別）| "total"（合計のみ）
 let priceRange = "6m";      // 価格推移グラフの期間
@@ -661,8 +662,16 @@ function holdingTrend(h) {
 
 // 年初来の損益。買い増したぶん（純投資額）を差し引いた「値上がり益」だけを出す。
 // 単純に評価額の差を出すと、今年積み立てた金額まで儲けに見えてしまう。
-function renderYtd(y) {
-  const val = $("sum-ytd"), note = $("sum-ytd-note"), key = $("sum-ytd-key");
+// 金額（上段）と率（下段）の2段表示。1行6列だと「-5,054,919 円（-8.0%）」は
+// 横に入りきらないので、率を下に折る。
+function sumAmtPct(amt, pct) {
+  return `<b class="pf-sum-amt">${amt}</b>`
+    + (pct ? `<span class="pf-sum-pct">${pct}</span>` : "");
+}
+
+function renderYtd(y, prefix) {
+  const p = prefix || "sum";
+  const val = $(p + "-ytd"), note = $(p + "-ytd-note"), key = $(p + "-ytd-key");
   if (!val) return;
   const yen = (n) => (n >= 0 ? "+" : "") + Number(Math.round(n)).toLocaleString() + " 円";
   const md = (d) => String(d || "").slice(5).replace("-", "/");
@@ -671,6 +680,7 @@ function renderYtd(y) {
   if (!y || !y.ok) {
     val.textContent = "—";
     val.className = "pf-sum-val";
+    val.removeAttribute("title");
     note.hidden = false;
     if (y && y.reason === "no_this_year") {
       note.textContent = `年初来：${y.year}年の記録がまだありません`
@@ -683,8 +693,8 @@ function renderYtd(y) {
     }
     return;
   }
-  const r = (y.rate != null) ? `（${y.rate >= 0 ? "+" : ""}${y.rate.toFixed(1)}%）` : "";
-  val.textContent = `${yen(y.gain)} ${r}`;
+  const r = (y.rate != null) ? `${y.rate >= 0 ? "+" : ""}${y.rate.toFixed(1)}%` : "";
+  val.innerHTML = sumAmtPct(yen(y.gain), r);
   val.className = "pf-sum-val " + (y.gain >= 0 ? "up" : "down");
   // 途中からの集計なら「年初来」と言い切らない
   if (y.partial) {
@@ -721,14 +731,15 @@ function renderPriceSummary(data) {
     const prev = totals[totals.length - 2].amount;
     const diff = cur - prev;
     const dpct = prev > 0 ? (diff / prev * 100) : 0;
-    dod.textContent = `${diff >= 0 ? "+" : ""}${Number(diff).toLocaleString()} 円`
-      + `（${dpct >= 0 ? "+" : ""}${dpct.toFixed(2)}%）`;
+    dod.innerHTML = sumAmtPct(`${diff >= 0 ? "+" : ""}${Number(diff).toLocaleString()} 円`,
+                              `${dpct >= 0 ? "+" : ""}${dpct.toFixed(2)}%`);
     dod.className = "pf-sum-val pf-sum-dod " + (diff >= 0 ? "up" : "down");
   } else {
     dod.textContent = "—"; dod.className = "pf-sum-val pf-sum-dod";
   }
 
   renderYtd(data.ytd);
+  lastYtdFund = data.ytd_fund || null;
 
   // ── 投資信託のみのサマリー（個別株を含む場合に追加表示）──
   const hasStock = holds.some((h) => (h.kind || "fund") === "stock");
@@ -758,12 +769,14 @@ function renderPriceSummary(data) {
     const fdod = $("sum-fund-dod");
     if (haveCur && havePrev && fprev > 0) {
       const fdiff = fcur - fprev, fdp = fdiff / fprev * 100;
-      fdod.textContent = `${fdiff >= 0 ? "+" : ""}${Number(Math.round(fdiff)).toLocaleString()} 円`
-        + `（${fdp >= 0 ? "+" : ""}${fdp.toFixed(2)}%）`;
+      fdod.innerHTML = sumAmtPct(
+        `${fdiff >= 0 ? "+" : ""}${Number(Math.round(fdiff)).toLocaleString()} 円`,
+        `${fdp >= 0 ? "+" : ""}${fdp.toFixed(2)}%`);
       fdod.className = "pf-sum-val pf-sum-dod " + (fdiff >= 0 ? "up" : "down");
     } else {
       fdod.textContent = "—"; fdod.className = "pf-sum-val pf-sum-dod";
     }
+    renderYtd(lastYtdFund, "sum-fund");    // 投資信託だけの年初来
   }
 }
 
@@ -873,6 +886,38 @@ function renderPriceTable(holdings, dates, totals) {
     return `<td class="num pt-dodcol ${cls}"><b class="pt-amt">${yenSign(diff)}</b>`
       + `<span class="pt-pct">${sg}${pct.toFixed(2)}%</span></td>`;
   };
+  // 商品ごとの年初来。サーバーの _ytd_summary と同じ考え方で、
+  // 評価額の増加から取得原価の増加（＝今年足した元手）を差し引く。
+  const yearStr = String(new Date().getFullYear());
+  const ytdOf = (h) => {
+    const ds = h.dates || [], am = h.amount || [], bs = h.basis || [];
+    if (ds.length < 2) return null;
+    const jan1 = yearStr + "-01-01";
+    let si = -1;                                  // 起点＝前年最後の記録
+    for (let i = 0; i < ds.length; i++) { if (ds[i] < jan1) si = i; else break; }
+    let partial = false;
+    if (si < 0) {                                 // 前年の記録が無ければ今年の最初
+      si = ds.findIndex((d) => d >= jan1);
+      partial = true;
+    }
+    if (si < 0 || si >= ds.length - 1) return null;
+    const ei = ds.length - 1;
+    if (am[si] == null || am[ei] == null) return null;
+    const net = Number(bs[ei] || 0) - Number(bs[si] || 0);
+    const gain = (Number(am[ei]) - Number(am[si])) - net;
+    const base = Number(am[si] || 0) + Math.max(0, net);
+    return { gain, rate: base > 0 ? gain / base * 100 : null, from: ds[si], partial };
+  };
+  const ytdCell = (y) => {
+    if (!y) return `<td class="num pt-ytdcol">—</td>`;
+    const cls = y.gain >= 0 ? "up" : "down";
+    const pct = (y.rate == null) ? ""
+      : `<span class="pt-pct">${y.rate >= 0 ? "+" : ""}${y.rate.toFixed(1)}%</span>`;
+    const tip = `${y.from} から${y.partial ? "（年初の記録が無いため途中から）" : ""}`;
+    return `<td class="num pt-ytdcol ${cls}" title="${escapeHtml(tip)}">`
+      + `<b class="pt-amt">${yenSign(y.gain)}${y.partial ? "*" : ""}</b>${pct}</td>`;
+  };
+
   // 総利益＝最新の評価額 − 投資金額（投資金額が未入力なら出さない）
   const gainOf = (h) => {
     const inv = Number(h.invested || 0);
@@ -882,7 +927,8 @@ function renderPriceTable(holdings, dates, totals) {
   $("price-table-head").innerHTML =
     `<th class="pt-namecol">商品名</th>`
     + `<th class="num pt-plcol">総利益<span class="th-note">損益率</span></th>`
-    + `<th class="num pt-dodcol">前日益<span class="th-note">前日比</span></th>` +
+    + `<th class="num pt-dodcol">前日益<span class="th-note">前日比</span></th>`
+    + `<th class="num pt-ytdcol">年初来<span class="th-note">損益率</span></th>` +
     cols.map((d) => `<th class="num">${escapeHtml(d.slice(5))}</th>`).join("");
   // 証券会社順（SBI→三菱UFJ→楽天→その他）に並べ替え。色はグラフと合わせて元の並び順で固定
   const withColor = holdings.map((h, i) => ({ h, color: PRICE_COLORS[i % PRICE_COLORS.length] }));
@@ -897,7 +943,8 @@ function renderPriceTable(holdings, dates, totals) {
     if (bk !== curBroker) {   // 証券会社の区切り見出し行
       curBroker = bk;
       html += `<tr class="pt-broker-row"><td class="pt-namecol">🏦 ${escapeHtml(bk)}</td>` +
-        `<td class="pt-plcol"></td><td class="pt-dodcol"></td><td class="num" colspan="${ndates}"></td></tr>`;
+        `<td class="pt-plcol"></td><td class="pt-dodcol"></td><td class="pt-ytdcol"></td>`
+        + `<td class="num" colspan="${ndates}"></td></tr>`;
     }
     const m = {}; h.dates.forEach((d, k) => { m[d] = h.amount[k]; });
     const cells = cols.map((d) => {
@@ -906,7 +953,8 @@ function renderPriceTable(holdings, dates, totals) {
     }).join("");
     const acct = (h.account && h.account !== h.name)
       ? `<div class="pt-acct">${escapeHtml(h.account)}</div>` : "";
-    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>${plCell(h.latest_ratio, gainOf(h))}${dodCell(h.dates, h.amount)}${cells}</tr>`;
+    html += `<tr><td class="pt-namecol pt-col" style="--cc:${color}">${escapeHtml(h.name)}${acct}</td>`
+      + `${plCell(h.latest_ratio, gainOf(h))}${dodCell(h.dates, h.amount)}${ytdCell(ytdOf(h))}${cells}</tr>`;
   });
   const totRatio = totals.length ? totals[totals.length - 1].ratio : null;
   // 合計の総利益＝各保有の総利益の合計（投資金額が入っているものだけ）
@@ -920,8 +968,22 @@ function renderPriceTable(holdings, dates, totals) {
     return `<td class="num">${v == null ? "—" : Number(v).toLocaleString()}</td>`;
   }).join("");
   const totDod = dodCell(totals.map((t) => t.date), totals.map((t) => t.amount));
-  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>${plCell(totRatio, anyGain ? totGain : null)}${totDod}${totalCells}</tr>`;
+  // 合計の年初来は、合計の評価額・投資金額の推移から出す（各商品の足し算ではなく、
+  // サーバーが返す全体の年初来と同じ計算）
+  const totYtd = ytdOf({ dates: totals.map((t) => t.date),
+                         amount: totals.map((t) => t.amount),
+                         basis: totals.map((t) => t.invested) });
+  html += `<tr class="pt-total-row"><td class="pt-namecol">合計</td>`
+    + `${plCell(totRatio, anyGain ? totGain : null)}${totDod}${ytdCell(totYtd)}${totalCells}</tr>`;
   $("price-table-body").innerHTML = html;
+  const anyPartial = withColor.some(({ h }) => { const y = ytdOf(h); return y && y.partial; });
+  const note = $("price-table-note");
+  if (note) {
+    note.hidden = !anyPartial;
+    note.textContent = anyPartial
+      ? "※ 年初来に * が付いている商品は、年初（1月）より前の記録が無いため、"
+        + "記録の最初の日からの集計です（金額にマウスを乗せると起点の日付が出ます）。" : "";
+  }
 }
 
 // 保有全体（ポートフォリオ）の目安カード

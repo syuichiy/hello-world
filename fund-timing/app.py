@@ -1785,7 +1785,45 @@ def api_actual_history():
                     "total_invested": round(total_inv), "skipped": skipped,
                     "sold_out": sold_out, "mismatch": mismatch,
                     "totals": totals, "totals_full": totals_full,
-                    "ytd": _ytd_summary(totals)})
+                    "ytd": _ytd_summary(totals),
+                    # 投資信託だけの年初来（個別株を含むときにサマリーへ併記する）
+                    "ytd_fund": _ytd_summary(
+                        _totals_of(excel_dates,
+                                   [h for h in result if (h.get("kind") or "fund") != "stock"]))})
+
+
+def _totals_of(dates, hs):
+    """指定した保有だけで、日付ごとの合計評価額と合計取得原価を積み上げる。
+
+    合計（全体）と同じく「その日以前の最新値」を使う（キャリーフォワード）。
+    まだ持ち始めていない保有は、評価額も取得原価も足さない。
+    """
+    series = []
+    for h in hs:
+        ds = h.get("dates") or []
+        series.append((ds[0] if ds else None,
+                       sorted(zip(ds, h.get("amount") or [])),
+                       sorted(zip(ds, h.get("basis") or []))))
+
+    def carry(pairs, d):
+        v = 0
+        for dd, aa in pairs:
+            if dd <= d:
+                v = aa
+            else:
+                break
+        return v
+
+    out = []
+    for d in dates:
+        amt = inv = 0.0
+        for first, am, bs in series:
+            if first is None or first > d:
+                continue
+            amt += carry(am, d)
+            inv += carry(bs, d)
+        out.append({"date": d, "amount": round(amt), "invested": round(inv)})
+    return out
 
 
 def _ytd_summary(totals):

@@ -732,8 +732,14 @@ tr:hover .row-del { opacity: 1; }
 .price-table .pt-broker-row .pt-namecol { background: rgba(91,91,214,.12); box-shadow: 1px 0 0 var(--line); }
 
 /* 合計サマリ */
-.pf-sum-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-.pf-sum-val.pf-sum-dod { font-size: 15px; }
+/* 6項目を1行に並べる。入りきらないときは文字だけを縮め、折り返さない。
+   大きさは画面幅ではなく「カードの幅」で決める（カードは画面より狭いため、
+   vw で決めると列からあふれる）。 */
+.pf-sum-grid {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px;
+  container-type: inline-size;
+}
+.pf-sum-val.pf-sum-dod { font-size: inherit; }
 .pf-sum-title { font-size: 13px; font-weight: 800; color: var(--ink-soft); margin-bottom: 8px; letter-spacing: .02em; }
 .pf-sum-title-2 { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
 
@@ -1041,12 +1047,25 @@ tr:hover .row-del { opacity: 1; }
 .div-total-recv b { color: var(--up-text); font-size: 16px; }
 .div-total-sub { font-size: 12px; color: var(--ink-soft); }
 .div-total-sub b { font-size: 13px; }
-.pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
-.pf-sum-key { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
-.pf-sum-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pf-sum { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; min-width: 0; }
+.pf-sum-key { font-size: 11px; color: var(--ink-soft); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-sum-val { font-size: 15px; font-weight: 800;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+@supports (container-type: inline-size) {
+  .pf-sum-key { font-size: clamp(9.5px, 1.3cqw, 12px); }
+  .pf-sum-val { font-size: clamp(11px, 1.9cqw, 17px); }
+}
 .pf-sum-val.up { color: var(--up-text); }
 .pf-sum-val.down { color: var(--down-text); }
-@media (max-width: 680px) { .pf-sum-grid { grid-template-columns: 1fr 1fr; } }
+/* 狭い画面では1行をあきらめ、読める大きさに戻す */
+/* 狭い画面では1行をあきらめ、読める大きさに戻す */
+@media (max-width: 900px) {
+  .pf-sum-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .pf-sum-grid { grid-template-columns: 1fr 1fr; }
+}
 
 /* ------------------------------------------------ タブレット・タッチ操作向け */
 @media (pointer: coarse) {
@@ -1240,3 +1259,18 @@ main > section { display: block; }
 .pf-sum-note {
   margin: 8px 2px 0; font-size: 11.5px; line-height: 1.7; color: var(--ink-soft);
 }
+
+/* 金額の推移：商品ごとの年初来（前日比の右隣に固定） */
+.price-table .pt-ytdcol {
+  position: sticky; left: 416px; z-index: 2; background: var(--card);
+  min-width: 100px; max-width: 100px; text-align: right; font-weight: 800;
+  box-shadow: 1px 0 0 var(--line);
+}
+.price-table thead th.pt-ytdcol { z-index: 3; background: var(--bg); }
+.price-table tbody tr:nth-child(even) .pt-ytdcol { background: var(--bg); }
+.price-table .pt-broker-row .pt-ytdcol { background: rgba(91,91,214,.12); }
+.price-table .pt-total-row .pt-ytdcol { background: var(--bg); }
+
+/* サマリーの金額（上段）と率（下段）。1行6列でも切れないようにする */
+.pf-sum-amt { display: block; line-height: 1.2; }
+.pf-sum-pct { display: block; font-size: .7em; font-weight: 700; opacity: .75; line-height: 1.25; }
