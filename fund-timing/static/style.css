@@ -1235,3 +1235,8 @@ main > section { display: block; }
 }
 .trade-short-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-top: 8px; }
 .trade-short-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+
+/* 年初来損益の注記（年初のデータが無いときなど） */
+.pf-sum-note {
+  margin: 8px 2px 0; font-size: 11.5px; line-height: 1.7; color: var(--ink-soft);
+}

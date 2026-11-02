@@ -659,6 +659,45 @@ function holdingTrend(h) {
   return "flat";
 }
 
+// 年初来の損益。買い増したぶん（純投資額）を差し引いた「値上がり益」だけを出す。
+// 単純に評価額の差を出すと、今年積み立てた金額まで儲けに見えてしまう。
+function renderYtd(y) {
+  const val = $("sum-ytd"), note = $("sum-ytd-note"), key = $("sum-ytd-key");
+  if (!val) return;
+  const yen = (n) => (n >= 0 ? "+" : "") + Number(Math.round(n)).toLocaleString() + " 円";
+  const md = (d) => String(d || "").slice(5).replace("-", "/");
+  note.hidden = true; note.textContent = "";
+  key.textContent = "年初来損益";
+  if (!y || !y.ok) {
+    val.textContent = "—";
+    val.className = "pf-sum-val";
+    note.hidden = false;
+    if (y && y.reason === "no_this_year") {
+      note.textContent = `年初来：${y.year}年の記録がまだありません`
+        + `（最後の記録は ${y.last}）。「↻最新に更新」で今日の評価額を取り込めます。`;
+    } else if (y && y.reason === "too_short") {
+      note.textContent = `年初来：記録が ${y.from} の1日ぶんしかないため、まだ計算できません。`;
+    } else {
+      note.textContent = "年初来：評価額の記録がないため計算できません。"
+        + "銘柄一覧で口数を入力するか、取引履歴を取り込んでください。";
+    }
+    return;
+  }
+  const r = (y.rate != null) ? `（${y.rate >= 0 ? "+" : ""}${y.rate.toFixed(1)}%）` : "";
+  val.textContent = `${yen(y.gain)} ${r}`;
+  val.className = "pf-sum-val " + (y.gain >= 0 ? "up" : "down");
+  // 途中からの集計なら「年初来」と言い切らない
+  if (y.partial) {
+    key.textContent = `${md(y.from)}以降の損益`;
+    note.hidden = false;
+    note.textContent = `年初（${y.year}年1月）より前の記録が無いため、`
+      + `${y.from} を起点に集計しています。`;
+  }
+  val.title = `${y.from} の評価額 ${Number(y.start_value).toLocaleString()}円`
+    + ` → ${y.to} は ${Number(y.end_value).toLocaleString()}円。`
+    + `差から今年の純投資額 ${Number(y.net_invested).toLocaleString()}円を引いた額です。`;
+}
+
 function renderPriceSummary(data) {
   const card = $("price-summary-card");
   const holds = data.holdings || [];
@@ -688,6 +727,8 @@ function renderPriceSummary(data) {
   } else {
     dod.textContent = "—"; dod.className = "pf-sum-val pf-sum-dod";
   }
+
+  renderYtd(data.ytd);
 
   // ── 投資信託のみのサマリー（個別株を含む場合に追加表示）──
   const hasStock = holds.some((h) => (h.kind || "fund") === "stock");

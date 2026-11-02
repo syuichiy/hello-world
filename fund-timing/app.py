@@ -1784,7 +1784,48 @@ def api_actual_history():
                     "excel_dates": excel_dates, "range": range_key,
                     "total_invested": round(total_inv), "skipped": skipped,
                     "sold_out": sold_out, "mismatch": mismatch,
-                    "totals": totals, "totals_full": totals_full})
+                    "totals": totals, "totals_full": totals_full,
+                    "ytd": _ytd_summary(totals)})
+
+
+def _ytd_summary(totals):
+    """年初来の損益を出す。
+
+    単純な評価額の差ではなく、**今年に足した元手（純投資額）を差し引く**。
+    そうしないと、年内に買い増した金額まで「儲け」に見えてしまう。
+      年初来損益 ＝（いまの評価額 − 年初の評価額）−（いまの取得原価 − 年初の取得原価）
+
+    年初の記録が無いときは、今年いちばん古い記録を起点にして、その日付を返す
+    （画面に「◯/◯から」と断って出すため）。
+    """
+    if not totals:
+        return {"ok": False, "reason": "no_data"}
+    year = dt.date.today().year
+    jan1 = f"{year}-01-01"
+    before = [t for t in totals if t["date"] < jan1]       # 前年までの記録
+    this_year = [t for t in totals if t["date"] >= jan1]
+    if not this_year:
+        return {"ok": False, "reason": "no_this_year", "year": year,
+                "last": totals[-1]["date"]}
+    # 年初の基準は「前年最後の記録」。無ければ今年いちばん古い記録で代用する。
+    start = before[-1] if before else this_year[0]
+    end = this_year[-1]
+    if start["date"] >= end["date"]:
+        return {"ok": False, "reason": "too_short", "year": year, "from": start["date"]}
+    net_in = float(end.get("invested") or 0) - float(start.get("invested") or 0)
+    gain = (float(end["amount"]) - float(start["amount"])) - net_in
+    base = float(start["amount"] or 0) + max(0.0, net_in)   # 今年動かした元手
+    return {
+        "ok": True, "year": year,
+        "from": start["date"], "to": end["date"],
+        # 前年の記録が無い＝本当の年初ではなく、途中からの集計
+        "partial": not before,
+        "start_value": round(float(start["amount"])),
+        "end_value": round(float(end["amount"])),
+        "net_invested": round(net_in),
+        "gain": round(gain),
+        "rate": round(gain / base * 100, 2) if base > 0 else None,
+    }
 
 
 def _monthly_returns(dates, values):
