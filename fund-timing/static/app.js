@@ -3611,14 +3611,26 @@ function renderStrategy() {
   // NISA温存の進み具合。売った額の口座別内訳（上段）と、残っている運用資産（下段）。
   const nisaCell = (d, g) => {
     const b = balAtAge(curPath, g);
+    // 資産が尽きてその年齢まで届かない＝そもそもデータが無い
     if (!d || !b) return '<td class="num draw-none draw-nisa">—</td>';
     const sold = d.sellAll || 0;
     const sub = `<span class="draw-year">残 特${Math.round(b.taxV / 10000).toLocaleString()}`
       + ` / N${Math.round(b.nisaV / 10000).toLocaleString()}</span>`;
-    if (!(sold > 0)) return `<td class="num draw-cell draw-nisa"><b>—</b>${sub}</td>`;
+    // 売っていない年は「—」だと「データが無い」と区別が付かないので、はっきり書く。
+    // 年金・現金・債券・分配金で生活費をまかなえていると、投信・株は売らない。
+    if (!(sold > 0)) {
+      const why = (d.fund && d.fund.month > 0)
+        ? "この年の『投信・株（売却）』は、以前に売って現金にしてあった分です（この年は売っていません）"
+        : "年金・現金・債券・分配金で生活費をまかなえているため、この年は投信・株を売りません";
+      return `<td class="num draw-cell draw-nisa draw-nosell" title="${why}">`
+        + `<b>売却なし</b>${sub}</td>`;
+    }
     const pct = Math.round((d.sellTax || 0) / sold * 100);
     const tag = pct >= 99 ? "特定のみ" : (pct <= 1 ? "NISAのみ" : `特定${pct}%`);
-    return `<td class="num draw-cell draw-nisa"><b>${tag}</b>${sub}</td>`;
+    const tip = `この年に売る額 ${Math.round(sold).toLocaleString()}円`
+      + `（特定 ${Math.round(d.sellTax || 0).toLocaleString()}円`
+      + ` / NISA ${Math.round(d.sellNisa || 0).toLocaleString()}円）`;
+    return `<td class="num draw-cell draw-nisa" title="${tip}"><b>${tag}</b>${sub}</td>`;
   };
   // どちらのボタンを選んでいるかが数字で分かるように、実際の行から例を作る。
   // 分母はどちらも同じ「資産残高」で、変わるのは分子（どの列か）だけ。
@@ -3710,6 +3722,9 @@ function renderStrategy() {
       現金や債券でまかなえている年ほど2つの差が大きく、使い切ると同じ値になります。
       年率4%以上は色を変えています。
       <strong>売る口座</strong>は NISA温存（特定口座から先に売る）の結果です。
+      <strong>「売却なし」</strong>は、年金・現金・債券・分配金で生活費をまかなえていて、
+      その年は投信・株を売らないという意味です（データが無いわけではありません）。
+      資産が尽きてその年齢まで届かない場合は「—」になります。
       下段はその時点で残っている運用資産（特定／NISA）なので、
       <strong>特定が減ってNISAだけが残っていく様子</strong>が追えます。
       右端の<strong>資産残高</strong>は、その年齢になった時点（年初）の合計

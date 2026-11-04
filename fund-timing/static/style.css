@@ -1274,3 +1274,6 @@ main > section { display: block; }
 /* サマリーの金額（上段）と率（下段）。1行6列でも切れないようにする */
 .pf-sum-amt { display: block; line-height: 1.2; }
 .pf-sum-pct { display: block; font-size: .7em; font-weight: 700; opacity: .75; line-height: 1.25; }
+
+/* 売っていない年。「—」（データ無し）と区別が付くよう控えめな色にする */
+.draw-nosell b { color: var(--ink-soft); font-weight: 700; }
