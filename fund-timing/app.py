@@ -418,6 +418,37 @@ def _holding_timeline(trades, current_units, current_invested=0.0, kind="fund"):
     return (max(0.0, u), max(0.0, c)), items
 
 
+def _basis_series(timeline, dates, units, invested):
+    """日付ごとの取得原価（比率の分母）。さかのぼった原価が壊れている日は補正する。
+
+    売買の記録が足りない保有では、いまの投資金額から記録ぶんを引いてさかのぼると
+    「口数は多いのに原価がほぼ0」という状態ができる（記録より前から持っていた分の
+    買いが記録に無いため）。その日の比率が 評価額 ÷ ほぼ0 になり、グラフの縦軸が
+    数十万%まで伸びて他の線が潰れる。
+
+    口数に対して原価が極端に小さい日は、原価を戻しきれていないとみなし、
+    「いまの1口あたり原価 × その日の口数」で代用する。
+    """
+    out, fixed = [], 0
+    if not (units > 0 and invested > 0):
+        # 口数か投資金額が未入力。比率は出せないので、さかのぼった値をそのまま返す。
+        return [_basis_at(timeline, d) for d in dates], 0
+    for d in dates:
+        b = _basis_at(timeline, d)
+        u_at = _units_at(timeline, d)
+        if u_at <= 0:
+            out.append(0.0)              # その日は持っていない（比率は出さない）
+            continue
+        est = invested * u_at / units    # いまの1口あたり原価で見積もった額
+        # 1口あたりが現在の2%未満＝明らかに戻しきれていない。見積もりに差し替える。
+        if b < est * 0.02:
+            out.append(est)
+            fixed += 1
+        else:
+            out.append(b)
+    return out, fixed
+
+
 def _units_at(timeline, date):
     """その日付の時点で持っていた口数。"""
     (base_u, _), items = timeline
@@ -1678,15 +1709,25 @@ def api_actual_history():
         amounts = [merged[d] for d in dates]
         # 比率は「その日の評価額 ÷ その日の投資金額」。いまの投資金額で過去まで割ると、
         # 売る前で口数が多かった期間の比率が跳ね上がる（数百%の山になる）。
-        basis = []
-        for d in dates:
-            b = _basis_at(tl, d)
-            if b <= 0 and inv > 0 and units > 0:
-                # 記録が足りず原価を戻しきれない日は、口数に比例させる（線を切らさない）
-                b = inv * _units_at(tl, d) / units
-            basis.append(b)
-        ratio = ([round(a / b * 100, 2) if b > 0 else None for a, b in zip(amounts, basis)]
-                 if inv > 0 else None)
+        # 記録が足りず原価を戻しきれない日は、口数に比例させる（線を切らさない／
+        # 比率が数十万%に跳ねないようにする）
+        basis, basis_fixed = _basis_series(tl, dates, units, inv)
+        # 比率は「その日の評価額 ÷ その日の取得原価」。売買の記録が足りないと、
+        # 評価額（取り込んだ実額）と、さかのぼった口数・原価が別の状態を指してしまい、
+        # 比率が数万%に跳ねてグラフの縦軸が壊れる（他の線が潰れて読めなくなる）。
+        # いまの比率から大きく外れる日は「計算できない日」として出さない。
+        ratio, ratio_dropped = None, 0
+        if inv > 0:
+            cur_r = (amounts[-1] / inv * 100) if amounts else 100.0
+            limit = max(1000.0, abs(cur_r) * 20)     # いまの20倍か1000%の大きいほう
+            ratio = []
+            for a, b in zip(amounts, basis):
+                v = (a / b * 100) if b > 0 else None
+                if v is not None and v > limit:
+                    ratio.append(None)
+                    ratio_dropped += 1
+                else:
+                    ratio.append(round(v, 2) if v is not None else None)
         official = it.get("name") or it.get("label") or ""   # catalog（正式なファンド名）
         result.append({
             "id": it["watch_id"], "name": official,
@@ -1698,6 +1739,9 @@ def api_actual_history():
             "sell_policy": it.get("sell_policy", "full"),
             "invested": round(inv), "dates": dates, "amount": amounts, "ratio": ratio,
             "basis": [round(b) for b in basis],   # その日の投資金額（比率の分母）
+            # 売買の記録が足りず、過去の投資金額を推定した日／比率を出せなかった日
+            "basis_estimated": basis_fixed > 0 or ratio_dropped > 0,
+            "ratio_dropped": ratio_dropped,
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })

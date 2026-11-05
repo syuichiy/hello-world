@@ -566,6 +566,7 @@ async function loadPriceHistory(force) {
   renderPriceSummary(data);
   renderPriceChart(data.holdings || [], data.totals || []);
   renderPriceTable(data.holdings || [], data.excel_dates || data.dates || [], data.totals || []);
+  renderBasisNote(data.holdings || []);
 }
 
 // いつ時点のデータかを示す。投信の基準価額は当日中には公表されないため、
@@ -778,6 +779,24 @@ function renderPriceSummary(data) {
     }
     renderYtd(lastYtdFund, "sum-fund");    // 投資信託だけの年初来
   }
+}
+
+// 売買の記録が足りず、過去の投資金額を推定した保有を知らせる。
+// 黙って推定すると「なぜこの比率？」が分からないし、直し方も伝わらない。
+function renderBasisNote(holdings) {
+  const el = $("price-basis-note");
+  if (!el) return;
+  const names = (holdings || []).filter((h) => h.basis_estimated).map((h) => h.name);
+  if (!names.length) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
+  el.innerHTML = `⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
+    + "過去の投資金額（比率の分母）を推定しているか、"
+    + (dropped ? `<strong>比率を出せない日が${dropped}日あります</strong>（その日は線が飛びます）。` : "比率が正確でない日があります。")
+    + "記録を付け始める前から持っていた分の買いが無いと、さかのぼった口数・原価が"
+    + "実際の評価額と食い違い、比率が数万%に跳ね上がってグラフが読めなくなるためです。"
+    + `<br>対象: ${escapeHtml(names.join("、"))}`
+    + "<br>銘柄一覧の <strong>📝</strong> から<strong>開始残高</strong>を入れると、推定ではなく実際の記録で計算します。";
 }
 
 function renderPriceChart(holdings, totals) {
