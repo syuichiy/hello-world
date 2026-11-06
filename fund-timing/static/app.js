@@ -801,10 +801,25 @@ function renderBasisNote(holdings) {
   // 1日で2倍以上に跳ぶ段差がある保有。上限で落とすほど大きくない跳ね上がりでも、
   // どの銘柄のいつが怪しいかを名指しできるようにする。
   const steps = (holdings || []).filter((h) => (h.ratio_steps || []).length);
-  if (!names.length && !gaps.length && !costs.length && !steps.length) {
+  // 売買の記録では説明できない口数がある保有。開始残高を入れれば直る。
+  const units = (holdings || []).filter((h) => h.unit_gap);
+  if (!names.length && !gaps.length && !costs.length && !steps.length && !units.length) {
     el.hidden = true; el.innerHTML = ""; return;
   }
   el.hidden = false;
+  let unitHtml = "";
+  if (units.length) {
+    const rows = units.map((h) => `<li>${escapeHtml(h.name)}：`
+      + `<strong>${h.unit_gap.units.toLocaleString()}</strong> 口`
+      + `（全体の ${h.unit_gap.pct}%）が記録になく、`
+      + `いちばん古い記録は <strong>${h.unit_gap.first_trade}</strong> です</li>`).join("");
+    unitHtml = `🧩 <strong>${units.length}件は、売買の記録では口数を説明できません。</strong>`
+      + "取引CSVは直近1年ぶんしか出ないことが多く、それより前から持っていた分は"
+      + "記録に残らないためです。<ul class=\"pb-gaps\">" + rows + "</ul>"
+      + "銘柄一覧の <strong>📝</strong> →<strong>開始残高を入れる</strong> で、"
+      + "この口数と、その当時の取得金額を1件入れてください。"
+      + "入れるまでは、その期間の取得原価を<strong>いまの平均取得単価で見積もって</strong>描いています。";
+  }
   let stepHtml = "";
   if (steps.length) {
     const rows = steps.map((h) => {
@@ -850,7 +865,7 @@ function renderBasisNote(holdings) {
       + "<strong>記録を付け始める前の口数と、その当時の取得金額</strong>を1件入れてください"
       + "（証券会社の口数・取得金額から、記録にある買いぶんを引いた差が開始残高です）。";
   }
-  const parts = [stepHtml, gapHtml, costHtml].filter(Boolean);
+  const parts = [unitHtml, stepHtml, gapHtml, costHtml].filter(Boolean);
   if (!names.length) { el.innerHTML = parts.join("<hr class=\"pb-sep\">"); return; }
   const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
   parts.push(`⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
@@ -2103,11 +2118,20 @@ async function loadAmounts() {
       + `<td class="num">${calc}</td><td class="num">${gap}</td>`
       + `<td class="num">${r.units.toLocaleString()}</td></tr>`;
   }).join("");
-  const head = d.odd
-    ? `<p class="amt-warn">⚠️ <strong>${d.odd}日</strong>は、記録された評価額が`
+  let head;
+  if (d.odd) {
+    head = `<p class="amt-warn">⚠️ <strong>${d.odd}日</strong>は、記録された評価額が`
       + `「基準価額 × ${unitWord}」と2倍以上ずれています（黄色の行）。`
-      + "その期間を下で消すと、基準価額から計算し直します。</p>"
-    : `<p class="hint">記録 ${rows.length}日。「基準価額 × ${unitWord}」と大きくずれている日はありません。</p>`;
+      + "その期間を下で消すと、基準価額から計算し直します。</p>";
+  } else if (!d.compared) {
+    // 1日も比べられていないのに「ずれは無い」と書くと、問題を見落とす
+    head = `<p class="amt-warn">⚠️ 記録 ${rows.length}日。`
+      + "<strong>基準価額が取得できず、比べられませんでした</strong>"
+      + "（「比」の列が全て「—」）。この表では判断できません。</p>";
+  } else {
+    head = `<p class="hint">記録 ${rows.length}日（うち ${d.compared}日を比較）。`
+      + `「基準価額 × ${unitWord}」と大きくずれている日はありません。</p>`;
+  }
   el.innerHTML = head
     + "<div class=\"amt-scroll\"><table class=\"amt-table\"><thead><tr>"
     + `<th>日付</th><th class="num">記録された評価額</th>`

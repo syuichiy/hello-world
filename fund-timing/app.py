@@ -54,7 +54,7 @@ DEMO_MODE = False
 
 # フォルダを入れ替えたのに古い版が動いている、という取り違えを一目で分かるようにする。
 # 更新のたびに手で上げる番号と、ファイルの日付（zipを展開した時刻が残る）の両方を出す。
-APP_VERSION = "2026-11-06.5"
+APP_VERSION = "2026-11-06.6"
 _VERSION_FILES = ("app.py", "static/app.js", "static/style.css", "templates/index.html")
 
 
@@ -467,6 +467,18 @@ def _walk_back(rows, current_units, current_invested, div, k=1.0, collect=False)
     return u, c, items
 
 
+def _base_cost_target(base_u, current_units, current_invested):
+    """記録を付け始める前から持っていた口数に、見合うだけの取得原価。
+
+    記録に無い口数があるのに原価が0だと、その時期の比率が跳ね上がる
+    （口数は多いのに分母がほぼ0）。いまの平均取得単価をあてて下限を置く。
+    記録が口数をすべて説明できていれば0（＝従来どおり）。
+    """
+    if base_u <= 0 or not (current_units and current_units > 0):
+        return 0.0
+    return float(current_invested) * base_u / float(current_units)
+
+
 def _cost_scale(rows, current_units, current_invested, div):
     """記録の購入額の合計が、いまの取得金額より多いときに、記録を縮める率を返す。
 
@@ -481,19 +493,38 @@ def _cost_scale(rows, current_units, current_invested, div):
     """
     if not rows or not (current_invested and current_invested > 0):
         return 1.0
-    _u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
-    if c_end >= -0.5:
+    base_u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
+    target = _base_cost_target(base_u, current_units, current_invested)
+    if c_end >= target - 0.5:
         return 1.0            # 記録と取得金額が合っている（従来どおり）
-    # c_end は k について単調減少。0 以上に収まる最大の k を二分探索で求める。
+    # c_end は k について単調減少。target 以上に収まる最大の k を二分探索で求める。
     lo, hi = 0.0, 1.0
     for _ in range(60):
         mid = (lo + hi) / 2
         _u, c_mid, _ = _walk_back(rows, current_units, current_invested, div, mid)
-        if c_mid < 0:
+        if c_mid < target:
             hi = mid
         else:
             lo = mid
     return lo
+
+
+def _unit_gap(trades, current_units, kind="fund"):
+    """売買の記録では説明できない口数（記録を付け始める前から持っていた分）。
+
+    取引CSVは直近1年ぶんしか出ないことが多い。それより前から持っていた分は
+    記録に無いので、さかのぼると「口数はあるのに取得原価が0」になり、
+    その時期の比率が跳ね上がる。開始残高を1件入れれば直る。
+    """
+    div = 1.0 if kind == "stock" else 10000.0
+    rows = _trade_rows(trades)
+    if not rows or not (current_units and current_units > 0):
+        return None
+    base_u, _c, _ = _walk_back(rows, current_units, 0.0, div, 1.0)
+    pct = base_u / float(current_units) * 100
+    if pct < 1.0:          # 1%未満は端数。知らせても直しようがない
+        return None
+    return {"units": round(base_u), "pct": round(pct, 1), "first_trade": rows[-1][0]}
 
 
 def _cost_gap(trades, current_units, current_invested, kind="fund"):
@@ -506,9 +537,14 @@ def _cost_gap(trades, current_units, current_invested, kind="fund"):
     rows = _trade_rows(trades)
     if not rows or not (current_invested and current_invested > 0):
         return None
-    _u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
+    base_u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
+    target = _base_cost_target(base_u, current_units, current_invested)
     # 100円に満たない差は端数（単価の丸め）。知らせても直しようがないので出さない。
-    if c_end >= -100.0:
+    if c_end >= target - 100.0:
+        return None
+    # 記録に無い口数があるなら、足りないのは元本払戻金ではなく開始残高の取得金額。
+    # そちらは _unit_gap が知らせるので、ここでは出さない（原因を取り違えさせない）。
+    if _unit_gap(trades, current_units, kind):
         return None
     bought = sum(n * p / div + fee for _d, side, n, p, fee in rows if side == "buy")
     sold = sum(1 for _d, side, _n, _p, _f in rows if side == "sell")
@@ -1396,7 +1432,8 @@ def api_amounts():
     prices = {}
     try:
         series = load_series(it.get("isin"), it.get("assoc_code"), it.get("name"), kind=kind)
-        prices = {d: p for d, p in zip(series.get("dates") or [], series.get("prices") or [])}
+        # 価格の列は "nav"（基準価額／株価）。"prices" ではない。
+        prices = {d: p for d, p in zip(series.get("dates") or [], series.get("nav") or [])}
     except Exception:
         pass
     rows, odd = [], 0
@@ -1410,8 +1447,10 @@ def api_amounts():
             odd += 1
         rows.append({"date": d, "recorded": round(recorded[d]), "calculated": calc,
                      "units": round(u), "bad": bad})
+    # 基準価額が1日も取れなければ「ずれは無い」とは言えない。比べられなかったと伝える。
+    compared = sum(1 for r in rows if r["calculated"] is not None)
     return jsonify({"ok": True, "watch_id": int(watch_id), "kind": kind,
-                    "rows": rows, "odd": odd,
+                    "rows": rows, "odd": odd, "compared": compared,
                     "name": it.get("name") or "", "units": round(float(it.get("units") or 0))})
 
 
@@ -1928,6 +1967,8 @@ def api_actual_history():
                     opening_gap = {"from": rec_first, "to": trade_first, "days": gap}
         # 記録の購入額の合計が、いまの取得金額を上回っている保有（元本払戻金など）
         cost_gap = _cost_gap(hs_trades, units, inv, kind)
+        # 売買の記録では説明できない口数（＝開始残高が足りていない）
+        unit_gap = _unit_gap(hs_trades, units, kind)
 
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
@@ -1996,6 +2037,8 @@ def api_actual_history():
             "opening_gap": opening_gap,
             # 記録の購入額の合計 ＞ いまの取得金額（元本払戻金のぶん按分して補正した）
             "cost_gap": cost_gap,
+            # 売買の記録では説明できない口数（開始残高が足りていない）
+            "unit_gap": unit_gap,
             # 1日で2倍以上に跳ぶ段差（記録と評価額の履歴の食い違い）。多くても6件まで
             "ratio_steps": ratio_steps[:6],
             "latest": amounts[-1] if amounts else None,
