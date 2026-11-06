@@ -1277,3 +1277,8 @@ main > section { display: block; }
 
 /* 売っていない年。「—」（データ無し）と区別が付くよう控えめな色にする */
 .draw-nosell b { color: var(--ink-soft); font-weight: 700; }
+
+/* 開始残高が足りない保有の一覧（価格推移の注記） */
+.pb-gaps { margin: 6px 0 8px; padding-left: 20px; }
+.pb-gaps li { margin: 2px 0; }
+.pb-sep { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }

@@ -1705,6 +1705,25 @@ def api_actual_history():
                     "units": round(units), "ratio": round(calc / real, 2),
                 })
 
+        # 「評価額の履歴は前からあるのに、売買の記録はあとから始まっている」保有を見つける。
+        # 取引CSVは直近1年ぶんしか出ないことが多く、それより前から持っていた分は
+        # 記録に無い。するとさかのぼったときに「口数は多いのに原価はほぼ0」になり、
+        # 比率が跳ね上がる。開始残高を1件入れれば直るので、どの保有かを知らせる。
+        opening_gap = None
+        hs_trades = trades_by_watch.get(it["watch_id"]) or []
+        if hs_trades and units > 0 and not any(
+                _OPENING_NOTE in (t.get("note") or "") for t in hs_trades):
+            rec_first = min(excel.keys()) if excel else None
+            trade_first = min((t.get("date") or "") for t in hs_trades)
+            if rec_first and trade_first and rec_first < trade_first:
+                try:
+                    gap = (dt.date.fromisoformat(trade_first)
+                           - dt.date.fromisoformat(rec_first)).days
+                except ValueError:
+                    gap = 0
+                if gap >= 20:        # 数日のずれは記録漏れとは言えない
+                    opening_gap = {"from": rec_first, "to": trade_first, "days": gap}
+
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
         # 比率は「その日の評価額 ÷ その日の投資金額」。いまの投資金額で過去まで割ると、
@@ -1751,6 +1770,8 @@ def api_actual_history():
             "ratio_dropped": ratio_dropped,
             # 出せなかった日の範囲。📝のどのあたりを見ればよいか分かるようにする
             "ratio_drop_from": drop_from, "ratio_drop_to": drop_to,
+            # 売買の記録より前から評価額の履歴がある＝開始残高が足りていない可能性
+            "opening_gap": opening_gap,
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })

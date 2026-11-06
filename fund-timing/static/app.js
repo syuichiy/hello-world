@@ -791,10 +791,27 @@ function renderBasisNote(holdings) {
     + (h.ratio_drop_from
        ? `（${h.ratio_drop_from}${h.ratio_drop_to !== h.ratio_drop_from ? "〜" + h.ratio_drop_to : ""}）`
        : ""));
-  if (!names.length) { el.hidden = true; el.textContent = ""; return; }
+  // 評価額の履歴より売買の記録があとから始まっている保有。原因がはっきり分かるので、
+  // 「推定した」という曖昧な注意ではなく、どの保有に開始残高が要るかを名指しで出す。
+  const gaps = (holdings || []).filter((h) => h.opening_gap);
+  if (!names.length && !gaps.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
+  let gapHtml = "";
+  if (gaps.length) {
+    const rows = gaps.map((h) => `<li>${escapeHtml(h.name)}：評価額は `
+      + `<strong>${h.opening_gap.from}</strong> からあるのに、売買の記録は `
+      + `<strong>${h.opening_gap.to}</strong> から（${h.opening_gap.days}日ぶん不足）</li>`).join("");
+    gapHtml = `📌 <strong>${gaps.length}件は開始残高が入っていません。</strong>`
+      + "取引CSVは直近1年ぶんしか出ないことが多く、それより前から持っていた分は"
+      + "記録に残りません。<ul class=\"pb-gaps\">" + rows + "</ul>"
+      + "銘柄一覧の <strong>📝</strong> →<strong>開始残高を入れる</strong> で、"
+      + "<strong>記録を付け始める前の口数と、その当時の取得金額</strong>を1件入れてください"
+      + "（証券会社の口数・取得金額から、記録にある買いぶんを引いた差が開始残高です）。";
+  }
+  if (!names.length) { el.innerHTML = gapHtml; return; }
   const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
-  el.innerHTML = `⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
+  el.innerHTML = (gapHtml ? gapHtml + "<hr class=\"pb-sep\">" : "")
+    + `⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
     + "過去の投資金額（比率の分母）を推定しているか、"
     + (dropped ? `<strong>比率を出せない日が${dropped}日あります</strong>（その日は線が飛びます）。` : "比率が正確でない日があります。")
     + "記録を付け始める前から持っていた分の買いが無いと、さかのぼった口数・原価が"
