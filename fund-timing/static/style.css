@@ -1282,3 +1282,17 @@ main > section { display: block; }
 .pb-gaps { margin: 6px 0 8px; padding-left: 20px; }
 .pb-gaps li { margin: 2px 0; }
 .pb-sep { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+
+/* 取り込んだ評価額の確認（売買の記録ダイアログ内） */
+.amt-box { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.amt-box > summary { cursor: pointer; font-weight: 600; }
+.amt-scroll { max-height: 280px; overflow: auto; margin: 8px 0; }
+.amt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.amt-table th, .amt-table td { padding: 3px 8px; border-bottom: 1px solid var(--line); }
+.amt-table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+.amt-table td.num, .amt-table th.num { text-align: right; }
+.amt-table tr.amt-bad { background: rgba(240, 180, 40, 0.18); }
+.amt-warn { color: #a66300; font-size: 13px; margin: 6px 0; }
+.amt-del { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+button.danger { background: #c0392b; }
+button.danger:hover { background: #a93226; }

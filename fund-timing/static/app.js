@@ -823,11 +823,13 @@ function renderBasisNote(holdings) {
   }
   let costHtml = "";
   if (costs.length) {
-    const rows = costs.map((h) => `<li>${escapeHtml(h.name)}：記録の購入額 `
-      + `<strong>${h.cost_gap.bought.toLocaleString()} 円</strong> に対し、`
-      + `取得金額は <strong>${h.cost_gap.invested.toLocaleString()} 円</strong>`
-      + `（<strong>${h.cost_gap.short.toLocaleString()} 円</strong>少ない）</li>`).join("");
-    costHtml = `💡 <strong>${costs.length}件は、買った合計より取得金額が少なくなっています。</strong>`
+    // 売却がある銘柄では「購入額 − 取得金額」が不足額と一致しない（売ったぶん原価が
+    // 減っているため）。引き算が合わない数字を並べると混乱するので、不足額を主役にする。
+    const rows = costs.map((h) => `<li>${escapeHtml(h.name)}：取得金額が `
+      + `<strong>${h.cost_gap.short.toLocaleString()} 円</strong> 足りません`
+      + `（いまの取得金額 ${h.cost_gap.invested.toLocaleString()} 円`
+      + (h.cost_gap.has_sell ? "、売却ぶんを差し引いたうえで" : "") + "）</li>").join("");
+    costHtml = `💡 <strong>${costs.length}件は、売買の記録より取得金額が少なくなっています。</strong>`
       + "<ul class=\"pb-gaps\">" + rows + "</ul>"
       + "毎月分配型・予想分配金提示型で<strong>元本払戻金（特別分配金）</strong>が出ると、"
       + "口数はそのままで取得金額だけ下がるため、これは異常ではありません"
@@ -2064,8 +2066,59 @@ async function openTradeModal(watchId) {
   $("trade-side").value = "buy";
   $("trade-amount-preview").textContent = "";
   tradeFeeEdited = false;
+  const box = $("trade-amounts-box");
+  if (box) { box.open = false; $("trade-amounts").innerHTML = ""; }
   $("trade-modal").hidden = false;
   await loadTrades();
+  loadAmounts();
+}
+
+// 取り込んだ評価額と「基準価額 × その日の口数」を並べて出す。
+// 取り込み時に別の口座とまざっていると、口数と合わない金額が残り、
+// グラフの比率が跳ね上がる。どの期間が合っていないかを目で確かめられるようにする。
+async function loadAmounts() {
+  const el = $("trade-amounts");
+  if (!el || tradeWatchId == null) return;
+  el.innerHTML = "<p class=\"hint\">読み込み中…</p>";
+  let d;
+  try {
+    d = await (await fetch(`/api/amounts?watch_id=${tradeWatchId}`)).json();
+  } catch (e) {
+    el.innerHTML = `<p class="hint">${escapeHtml(netErrMsg(e))}</p>`; return;
+  }
+  if (!d.ok) { el.innerHTML = `<p class="hint">${escapeHtml(d.error || "")}</p>`; return; }
+  const rows = d.rows || [];
+  if (!rows.length) {
+    el.innerHTML = "<p class=\"hint\">取り込んだ評価額の記録はありません"
+      + "（グラフは基準価額 × 口数で描いています）。</p>";
+    return;
+  }
+  const unitWord = d.kind === "stock" ? "株数" : "口数";
+  const body = rows.map((r) => {
+    const calc = r.calculated == null ? "—" : r.calculated.toLocaleString();
+    const gap = (r.calculated && r.calculated > 0)
+      ? (r.recorded / r.calculated * 100).toFixed(0) + "%" : "—";
+    return `<tr class="${r.bad ? "amt-bad" : ""}"><td>${r.date}</td>`
+      + `<td class="num">${r.recorded.toLocaleString()}</td>`
+      + `<td class="num">${calc}</td><td class="num">${gap}</td>`
+      + `<td class="num">${r.units.toLocaleString()}</td></tr>`;
+  }).join("");
+  const head = d.odd
+    ? `<p class="amt-warn">⚠️ <strong>${d.odd}日</strong>は、記録された評価額が`
+      + `「基準価額 × ${unitWord}」と2倍以上ずれています（黄色の行）。`
+      + "その期間を下で消すと、基準価額から計算し直します。</p>"
+    : `<p class="hint">記録 ${rows.length}日。「基準価額 × ${unitWord}」と大きくずれている日はありません。</p>`;
+  el.innerHTML = head
+    + "<div class=\"amt-scroll\"><table class=\"amt-table\"><thead><tr>"
+    + `<th>日付</th><th class="num">記録された評価額</th>`
+    + `<th class="num">基準価額×${unitWord}</th><th class="num">比</th>`
+    + `<th class="num">${unitWord}</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  // 合っていない期間を、消す欄の初期値として入れておく
+  const bad = rows.filter((r) => r.bad);
+  if (bad.length) {
+    $("amt-del-from").value = bad[0].date;
+    $("amt-del-to").value = bad[bad.length - 1].date;
+  }
 }
 
 // 手数料を自動で埋める。率が設定されていれば「売買金額×率」、無ければ前回入力額。
@@ -2279,6 +2332,27 @@ $("trade-list").addEventListener("click", async (e) => {
 });
 
 $("trade-close").addEventListener("click", closeTradeModal);
+
+// 口数と合わない評価額の記録を、期間を指定して消す（基準価額×口数で計算し直させる）
+$("amt-del-btn").addEventListener("click", async () => {
+  if (tradeWatchId == null) return;
+  const from = $("amt-del-from").value, to = $("amt-del-to").value;
+  if (!from || !to) { toast("消す期間を指定してください", "error"); return; }
+  if (!confirm(`${from} 〜 ${to} の評価額の記録を消します。\n`
+      + "消した日は「基準価額 × その日の口数」で計算し直します。よろしいですか？")) return;
+  try {
+    const d = await (await fetch("/api/amounts", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watch_id: tradeWatchId, from, to }),
+    })).json();
+    if (!d.ok) { toast(d.error || "削除に失敗しました", "error"); return; }
+    toast(`${d.deleted}日分の記録を消しました`, "ok");
+    await loadAmounts();
+    if (currentView === "price") loadPriceHistory();
+  } catch (e) {
+    toast(netErrMsg(e), "error");
+  }
+});
 $("trade-modal").addEventListener("click", (e) => {
   if (e.target === $("trade-modal")) closeTradeModal();   // 背景クリックで閉じる
 });

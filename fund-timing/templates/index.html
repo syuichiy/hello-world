@@ -149,6 +149,23 @@
           </div>
           <p class="hint">※ 平均取得単価は<strong>移動平均法</strong>（特定口座の取得価額の計算に準じる方法）で計算し、手数料は購入時は取得原価に含め、売却時は受取額から差し引きます。
             率を0にしている場合は、その商品で<strong>前回入力した手数料</strong>を初期値にします（定額手数料の株などはこちらが便利です）。</p>
+
+          <!-- 取り込んだ評価額が実際の保有と食い違っていると、比率のグラフが跳ね上がる。
+               中身を見て、おかしい期間を消せるようにする（消すと基準価額×口数で計算し直す）。 -->
+          <details class="amt-box" id="trade-amounts-box">
+            <summary>📈 取り込んだ評価額の記録を確かめる</summary>
+            <p class="hint">グラフは、ここに記録がある日はその金額を優先して使います。
+              取り込み時に別の口座とまざっていると、口数と合わない金額が残り、比率のグラフが跳ね上がります。
+              <strong>合わない期間は消してください</strong>（消した日は<strong>基準価額 × その日の口数</strong>で計算し直します）。</p>
+            <div id="trade-amounts"></div>
+            <div class="amt-del">
+              <label class="plan-label">消す期間（開始）
+                <input id="amt-del-from" type="date" class="plan-input"></label>
+              <label class="plan-label">（終了）
+                <input id="amt-del-to" type="date" class="plan-input"></label>
+              <button type="button" id="amt-del-btn" class="danger">この期間の記録を消す</button>
+            </div>
+          </details>
         </div>
       </div>
 

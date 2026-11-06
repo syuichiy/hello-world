@@ -54,7 +54,7 @@ DEMO_MODE = False
 
 # フォルダを入れ替えたのに古い版が動いている、という取り違えを一目で分かるようにする。
 # 更新のたびに手で上げる番号と、ファイルの日付（zipを展開した時刻が残る）の両方を出す。
-APP_VERSION = "2026-11-06.4"
+APP_VERSION = "2026-11-06.5"
 _VERSION_FILES = ("app.py", "static/app.js", "static/style.css", "templates/index.html")
 
 
@@ -507,10 +507,12 @@ def _cost_gap(trades, current_units, current_invested, kind="fund"):
     if not rows or not (current_invested and current_invested > 0):
         return None
     _u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
-    if c_end >= -0.5:
+    # 100円に満たない差は端数（単価の丸め）。知らせても直しようがないので出さない。
+    if c_end >= -100.0:
         return None
     bought = sum(n * p / div + fee for _d, side, n, p, fee in rows if side == "buy")
-    return {"short": round(-c_end), "bought": round(bought),
+    sold = sum(1 for _d, side, _n, _p, _f in rows if side == "sell")
+    return {"short": round(-c_end), "bought": round(bought), "has_sell": sold > 0,
             "invested": round(float(current_invested)),
             "from": rows[-1][0], "to": rows[0][0]}
 
@@ -1371,6 +1373,64 @@ def _sync_position_from_trades(watch_id, kind=None):
     pos = dict(pos)
     pos["cost"] = round(cost)
     return pos
+
+
+@app.route("/api/amounts")
+def api_amounts():
+    """ある保有の「取り込んだ評価額」と「基準価額 × その日の口数」を並べて返す。
+
+    取り込み時に別の口座とまざっていると、口数と合わない金額が記録に残り、
+    グラフの比率が跳ね上がる。どの期間が合っていないかを目で確かめられるようにする。
+    """
+    watch_id = request.args.get("watch_id")
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    it = db.get_watch(int(watch_id))
+    if not it:
+        return jsonify({"ok": False, "error": "保有が見つかりません。"}), 404
+    kind = it.get("kind") or "fund"
+    div = 1.0 if kind == "stock" else 10000.0
+    recorded = db.get_amount_history(int(watch_id))
+    tl = _holding_timeline(db.list_trades(int(watch_id)),
+                           float(it.get("units") or 0), float(it.get("invested") or 0), kind)
+    prices = {}
+    try:
+        series = load_series(it.get("isin"), it.get("assoc_code"), it.get("name"), kind=kind)
+        prices = {d: p for d, p in zip(series.get("dates") or [], series.get("prices") or [])}
+    except Exception:
+        pass
+    rows, odd = [], 0
+    for d in sorted(recorded):
+        u = _units_at(tl, d)
+        p = prices.get(d)
+        calc = round(p * u / div) if (p is not None and u > 0) else None
+        # 2倍以上ずれている日は「合っていない」とみなす（値動きでは起きない差）
+        bad = bool(calc and calc > 0 and (recorded[d] / calc >= 2 or recorded[d] / calc <= 0.5))
+        if bad:
+            odd += 1
+        rows.append({"date": d, "recorded": round(recorded[d]), "calculated": calc,
+                     "units": round(u), "bad": bad})
+    return jsonify({"ok": True, "watch_id": int(watch_id), "kind": kind,
+                    "rows": rows, "odd": odd,
+                    "name": it.get("name") or "", "units": round(float(it.get("units") or 0))})
+
+
+@app.route("/api/amounts", methods=["DELETE"])
+def api_amounts_delete():
+    """ある保有の、指定した期間の評価額の記録を消す（基準価額×口数で計算し直させる）。"""
+    data = request.get_json(silent=True) or {}
+    watch_id = data.get("watch_id")
+    d_from = (data.get("from") or "").strip()
+    d_to = (data.get("to") or "").strip()
+    if watch_id is None:
+        return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
+    for d in (d_from, d_to):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            return jsonify({"ok": False, "error": "日付は YYYY-MM-DD の形式で指定してください。"}), 400
+    if d_from > d_to:
+        return jsonify({"ok": False, "error": "開始日は終了日より前にしてください。"}), 400
+    n = db.delete_amounts(int(watch_id), d_from, d_to)
+    return jsonify({"ok": True, "deleted": n})
 
 
 @app.route("/api/trades")

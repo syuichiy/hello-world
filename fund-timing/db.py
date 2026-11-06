@@ -363,6 +363,20 @@ def upsert_amount(watch_id: int, date: str, amount: float, db_path: Optional[str
                       (watch_id, date, float(amount)))
 
 
+def delete_amounts(watch_id: int, date_from: str, date_to: str,
+                   db_path: Optional[str] = None) -> int:
+    """ある保有の、指定した期間の評価額の記録を消す。消した件数を返す。
+
+    取り込み時に別の口座とまざるなどして、口数と合わない金額が残ることがある。
+    消しておけば、その日は基準価額 × その日の口数で計算し直される。
+    """
+    with _conn(db_path) as c:
+        cur = c.execute(
+            "DELETE FROM amount_history WHERE watch_id=? AND date>=? AND date<=?",
+            (int(watch_id), date_from, date_to))
+        return cur.rowcount or 0
+
+
 def seed_catalog(db_path: Optional[str] = None):
     """既定の人気投信・個別株を投入する。毎回 INSERT OR IGNORE で「不足分だけ」追加するので、
     アプリを新しい版に更新すると、増えた内蔵銘柄が既存DBにも自動で反映される
