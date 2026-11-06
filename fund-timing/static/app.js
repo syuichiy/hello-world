@@ -786,7 +786,11 @@ function renderPriceSummary(data) {
 function renderBasisNote(holdings) {
   const el = $("price-basis-note");
   if (!el) return;
-  const names = (holdings || []).filter((h) => h.basis_estimated).map((h) => h.name);
+  const bad = (holdings || []).filter((h) => h.basis_estimated);
+  const names = bad.map((h) => h.name
+    + (h.ratio_drop_from
+       ? `（${h.ratio_drop_from}${h.ratio_drop_to !== h.ratio_drop_from ? "〜" + h.ratio_drop_to : ""}）`
+       : ""));
   if (!names.length) { el.hidden = true; el.textContent = ""; return; }
   el.hidden = false;
   const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
@@ -796,7 +800,9 @@ function renderBasisNote(holdings) {
     + "記録を付け始める前から持っていた分の買いが無いと、さかのぼった口数・原価が"
     + "実際の評価額と食い違い、比率が数万%に跳ね上がってグラフが読めなくなるためです。"
     + `<br>対象: ${escapeHtml(names.join("、"))}`
-    + "<br>銘柄一覧の <strong>📝</strong> から<strong>開始残高</strong>を入れると、推定ではなく実際の記録で計算します。";
+    + "<br>銘柄一覧の <strong>📝</strong> で<strong>その時期の売買</strong>を確かめ、"
+    + "記録を付け始める前から持っていた分は<strong>開始残高</strong>として入れてください"
+    + "（かっこ内が、比率を出せなかった日の範囲です）。";
 }
 
 function renderPriceChart(holdings, totals) {

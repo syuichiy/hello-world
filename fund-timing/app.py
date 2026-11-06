@@ -1716,16 +1716,23 @@ def api_actual_history():
         # 評価額（取り込んだ実額）と、さかのぼった口数・原価が別の状態を指してしまい、
         # 比率が数万%に跳ねてグラフの縦軸が壊れる（他の線が潰れて読めなくなる）。
         # いまの比率から大きく外れる日は「計算できない日」として出さない。
-        ratio, ratio_dropped = None, 0
+        # 基準は「その銘柄自身の水準」にする。全銘柄に同じ上限を当てると、
+        # ふだん120%の銘柄が600%に跳ねても見逃す一方、本当に何倍にもなった
+        # 銘柄を切ってしまう。中央値といまの値の大きいほうの3倍を上限にする。
+        ratio, ratio_dropped, drop_from, drop_to = None, 0, None, None
         if inv > 0:
+            raw = [(a / b * 100) if b > 0 else None for a, b in zip(amounts, basis)]
+            vals = sorted(v for v in raw if v is not None)
+            med = vals[len(vals) // 2] if vals else 100.0
             cur_r = (amounts[-1] / inv * 100) if amounts else 100.0
-            limit = max(1000.0, abs(cur_r) * 20)     # いまの20倍か1000%の大きいほう
+            limit = max(300.0, abs(med) * 3, abs(cur_r) * 3)
             ratio = []
-            for a, b in zip(amounts, basis):
-                v = (a / b * 100) if b > 0 else None
+            for d, v in zip(dates, raw):
                 if v is not None and v > limit:
                     ratio.append(None)
                     ratio_dropped += 1
+                    drop_from = d if drop_from is None else min(drop_from, d)
+                    drop_to = d if drop_to is None else max(drop_to, d)
                 else:
                     ratio.append(round(v, 2) if v is not None else None)
         official = it.get("name") or it.get("label") or ""   # catalog（正式なファンド名）
@@ -1742,6 +1749,8 @@ def api_actual_history():
             # 売買の記録が足りず、過去の投資金額を推定した日／比率を出せなかった日
             "basis_estimated": basis_fixed > 0 or ratio_dropped > 0,
             "ratio_dropped": ratio_dropped,
+            # 出せなかった日の範囲。📝のどのあたりを見ればよいか分かるようにする
+            "ratio_drop_from": drop_from, "ratio_drop_to": drop_to,
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })
