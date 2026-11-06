@@ -798,10 +798,29 @@ function renderBasisNote(holdings) {
   // 予想分配金提示型で元本払戻金（特別分配金）が出ると、口数はそのままで
   // 取得金額だけ下がるので普通に起きる。補正したことと理由を伝える。
   const costs = (holdings || []).filter((h) => h.cost_gap);
-  if (!names.length && !gaps.length && !costs.length) {
+  // 1日で2倍以上に跳ぶ段差がある保有。上限で落とすほど大きくない跳ね上がりでも、
+  // どの銘柄のいつが怪しいかを名指しできるようにする。
+  const steps = (holdings || []).filter((h) => (h.ratio_steps || []).length);
+  if (!names.length && !gaps.length && !costs.length && !steps.length) {
     el.hidden = true; el.innerHTML = ""; return;
   }
   el.hidden = false;
+  let stepHtml = "";
+  if (steps.length) {
+    const rows = steps.map((h) => {
+      const s = h.ratio_steps;
+      const one = s.map((x) => `${x.prev_date} の ${x.from}% → ${x.date} の `
+        + `<strong>${x.to}%</strong>`).slice(0, 3).join("、");
+      return `<li>${escapeHtml(h.name)}：${one}`
+        + (s.length > 3 ? `ほか${s.length - 3}件` : "") + "</li>";
+    }).join("");
+    stepHtml = `⚡ <strong>${steps.length}件のグラフに、1日で2倍以上に跳ぶ段差があります。</strong>`
+      + "<ul class=\"pb-gaps\">" + rows + "</ul>"
+      + "値動きでこうはならないので、<strong>その日の前後で売買の記録と"
+      + "評価額の履歴が食い違っています</strong>（記録に無い買い増し・移管・口座の分割など）。"
+      + "銘柄一覧の <strong>📝</strong> でその日の前後を確かめ、"
+      + "足りない売買か<strong>開始残高</strong>を入れてください。";
+  }
   let costHtml = "";
   if (costs.length) {
     const rows = costs.map((h) => `<li>${escapeHtml(h.name)}：記録の購入額 `
@@ -829,7 +848,7 @@ function renderBasisNote(holdings) {
       + "<strong>記録を付け始める前の口数と、その当時の取得金額</strong>を1件入れてください"
       + "（証券会社の口数・取得金額から、記録にある買いぶんを引いた差が開始残高です）。";
   }
-  const parts = [gapHtml, costHtml].filter(Boolean);
+  const parts = [stepHtml, gapHtml, costHtml].filter(Boolean);
   if (!names.length) { el.innerHTML = parts.join("<hr class=\"pb-sep\">"); return; }
   const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
   parts.push(`⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`

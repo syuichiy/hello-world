@@ -1859,6 +1859,7 @@ def api_actual_history():
         # ふだん120%の銘柄が600%に跳ねても見逃す一方、本当に何倍にもなった
         # 銘柄を切ってしまう。中央値といまの値の大きいほうの3倍を上限にする。
         ratio, ratio_dropped, drop_from, drop_to = None, 0, None, None
+        raw = []
         if inv > 0:
             raw = [(a / b * 100) if b > 0 else None for a, b in zip(amounts, basis)]
             vals = sorted(v for v in raw if v is not None)
@@ -1874,6 +1875,22 @@ def api_actual_history():
                     drop_to = d if drop_to is None else max(drop_to, d)
                 else:
                     ratio.append(round(v, 2) if v is not None else None)
+        # 1日で2倍以上に跳ぶ段差を探す。投資信託も株も、1日で評価額が倍になることは
+        # まず無いので、そういう段差は「売買の記録と評価額の履歴が食い違っている」印。
+        # 上限を超えるほど大きくない跳ね上がり（例: 110%→350%）は上では落とせないため、
+        # どの銘柄のいつが怪しいかを名指しできるようにこちらで拾う。
+        ratio_steps = []
+        prev = None
+        for d, v in zip(dates, raw):
+            if v is None or v <= 0:
+                prev = None
+                continue
+            if prev is not None:
+                f = v / prev[1]
+                if f >= 2.0 or f <= 0.5:
+                    ratio_steps.append({"date": d, "prev_date": prev[0],
+                                        "from": round(prev[1], 1), "to": round(v, 1)})
+            prev = (d, v)
         official = it.get("name") or it.get("label") or ""   # catalog（正式なファンド名）
         result.append({
             "id": it["watch_id"], "name": official,
@@ -1894,6 +1911,8 @@ def api_actual_history():
             "opening_gap": opening_gap,
             # 記録の購入額の合計 ＞ いまの取得金額（元本払戻金のぶん按分して補正した）
             "cost_gap": cost_gap,
+            # 1日で2倍以上に跳ぶ段差（記録と評価額の履歴の食い違い）。多くても6件まで
+            "ratio_steps": ratio_steps[:6],
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })
