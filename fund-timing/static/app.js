@@ -794,8 +794,29 @@ function renderBasisNote(holdings) {
   // 評価額の履歴より売買の記録があとから始まっている保有。原因がはっきり分かるので、
   // 「推定した」という曖昧な注意ではなく、どの保有に開始残高が要るかを名指しで出す。
   const gaps = (holdings || []).filter((h) => h.opening_gap);
-  if (!names.length && !gaps.length) { el.hidden = true; el.innerHTML = ""; return; }
+  // 記録の購入額の合計が、いまの取得金額を上回っている保有。毎月分配型・
+  // 予想分配金提示型で元本払戻金（特別分配金）が出ると、口数はそのままで
+  // 取得金額だけ下がるので普通に起きる。補正したことと理由を伝える。
+  const costs = (holdings || []).filter((h) => h.cost_gap);
+  if (!names.length && !gaps.length && !costs.length) {
+    el.hidden = true; el.innerHTML = ""; return;
+  }
   el.hidden = false;
+  let costHtml = "";
+  if (costs.length) {
+    const rows = costs.map((h) => `<li>${escapeHtml(h.name)}：記録の購入額 `
+      + `<strong>${h.cost_gap.bought.toLocaleString()} 円</strong> に対し、`
+      + `取得金額は <strong>${h.cost_gap.invested.toLocaleString()} 円</strong>`
+      + `（<strong>${h.cost_gap.short.toLocaleString()} 円</strong>少ない）</li>`).join("");
+    costHtml = `💡 <strong>${costs.length}件は、買った合計より取得金額が少なくなっています。</strong>`
+      + "<ul class=\"pb-gaps\">" + rows + "</ul>"
+      + "毎月分配型・予想分配金提示型で<strong>元本払戻金（特別分配金）</strong>が出ると、"
+      + "口数はそのままで取得金額だけ下がるため、これは異常ではありません"
+      + "（払い戻された分だけ、もとのお金が返ってきています）。"
+      + "比率のグラフは、差を期間全体に按分して補正しています。"
+      + "<br>分配金が出ない商品でこの表示が出る場合は、"
+      + "<strong>銘柄一覧の投資金額</strong>が実際と違っていないか確かめてください。";
+  }
   let gapHtml = "";
   if (gaps.length) {
     const rows = gaps.map((h) => `<li>${escapeHtml(h.name)}：評価額は `
@@ -808,10 +829,10 @@ function renderBasisNote(holdings) {
       + "<strong>記録を付け始める前の口数と、その当時の取得金額</strong>を1件入れてください"
       + "（証券会社の口数・取得金額から、記録にある買いぶんを引いた差が開始残高です）。";
   }
-  if (!names.length) { el.innerHTML = gapHtml; return; }
+  const parts = [gapHtml, costHtml].filter(Boolean);
+  if (!names.length) { el.innerHTML = parts.join("<hr class=\"pb-sep\">"); return; }
   const dropped = (holdings || []).reduce((a, h) => a + (h.ratio_dropped || 0), 0);
-  el.innerHTML = (gapHtml ? gapHtml + "<hr class=\"pb-sep\">" : "")
-    + `⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
+  parts.push(`⚠️ ${names.length}件は<strong>売買の記録が足りない</strong>ため、`
     + "過去の投資金額（比率の分母）を推定しているか、"
     + (dropped ? `<strong>比率を出せない日が${dropped}日あります</strong>（その日は線が飛びます）。` : "比率が正確でない日があります。")
     + "記録を付け始める前から持っていた分の買いが無いと、さかのぼった口数・原価が"
@@ -819,7 +840,8 @@ function renderBasisNote(holdings) {
     + `<br>対象: ${escapeHtml(names.join("、"))}`
     + "<br>銘柄一覧の <strong>📝</strong> で<strong>その時期の売買</strong>を確かめ、"
     + "記録を付け始める前から持っていた分は<strong>開始残高</strong>として入れてください"
-    + "（かっこ内が、比率を出せなかった日の範囲です）。";
+    + "（かっこ内が、比率を出せなかった日の範囲です）。");
+  el.innerHTML = parts.join("<hr class=\"pb-sep\">");
 }
 
 function renderPriceChart(holdings, totals) {
@@ -1209,6 +1231,12 @@ async function saveInvested(watchId, invested) {
     });
     const data = await resp.json();
     if (!data.ok) { toast(data.error || "保存に失敗しました", "error"); return; }
+    // 売買の記録の購入合計より少ない額を入れた場合（元本払戻金のぶん）は、
+    // その差を覚えたことを伝える。覚えていないと次のCSV取り込みで元に戻るため。
+    if (data.cost_adjust > 0) {
+      toast(`売買の記録より ${data.cost_adjust.toLocaleString()} 円少ない額として覚えました`
+            + "（元本払戻金のぶん。CSVを取り込み直しても戻りません）", "ok");
+    }
     // 価格推移タブを開いていれば再計算
     if (currentView === "price") loadPriceHistory();
   } catch (e) {

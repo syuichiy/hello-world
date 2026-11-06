@@ -372,6 +372,7 @@ def api_watchlist_remove():
     if watch_id is None:
         return jsonify({"ok": False, "error": "watch_id が必要です。"}), 400
     db.remove_watch(int(watch_id))
+    _set_cost_adjust(watch_id, 0)   # 取得金額の補正も一緒に捨てる（IDが使い回される）
     return jsonify({"ok": True})
 
 
@@ -392,30 +393,101 @@ def _holding_timeline(trades, current_units, current_invested=0.0, kind="fund"):
     戻り値は ((最初の記録より前の口数, 原価), [(日付, 口数, 原価), ...])。
     """
     div = 1.0 if kind == "stock" else 10000.0
-    u = float(current_units or 0)
-    c = float(current_invested or 0)
-    items = []
+    rows = _trade_rows(trades)
+    k = _cost_scale(rows, current_units, current_invested, div)
+    u, c, items = _walk_back(rows, current_units, current_invested, div, k, collect=True)
+    items.reverse()
+    return (max(0.0, u), max(0.0, c)), items
+
+
+def _trade_rows(trades):
+    """売買の記録を、さかのぼる向き（新しい順）に並べた (日付, 売買, 口数, 単価, 手数料)。"""
+    rows = []
     for t in sorted(trades or [], key=lambda x: ((x.get("date") or ""), x.get("id") or 0),
                     reverse=True):
         d = t.get("date") or ""
         n = float(t.get("units") or 0)
-        p = float(t.get("price") or 0)
-        fee = float(t.get("fee") or 0)
         if not d or n <= 0:
             continue
-        items.append((d, max(0.0, u), max(0.0, c)))     # その売買の直後（＝その日）の状態
-        if t.get("side") == "buy":
+        rows.append((d, t.get("side"), n, float(t.get("price") or 0),
+                     float(t.get("fee") or 0)))
+    return rows
+
+
+def _walk_back(rows, current_units, current_invested, div, k=1.0, collect=False):
+    """いまの口数・取得原価から売買をさかのぼる。k は記録の購入額にかける縮小率。
+
+    collect=True のとき、各売買の直後（＝その日）の状態も集める（新しい順）。
+    縮小率を決める試算では collect=False・原価を0で止めずに最後まで通す
+    （どれだけ足りないかを知るため）。
+    """
+    u = float(current_units or 0)
+    c = float(current_invested or 0)
+    items = [] if collect else None
+    for d, side, n, p, fee in rows:
+        if collect:
+            items.append((d, max(0.0, u), max(0.0, c)))
+        if side == "buy":
             u -= n
-            c -= n * p / div + fee
+            c -= (n * p / div + fee) * k
         else:
             before = u + n
             # 売却は移動平均法で原価を按分するので、さかのぼるときは口数に比例して戻す。
             # 売り切っていて按分できないときは、その売買の単価で買っていたとみなす。
-            c = c * (before / u) if u > 0 else c + n * p / div
+            c = c * (before / u) if u > 0 else c + (n * p / div) * k
             u = before
-        u, c = max(0.0, u), max(0.0, c)
-    items.reverse()
-    return (max(0.0, u), max(0.0, c)), items
+        u = max(0.0, u)
+        if collect:
+            c = max(0.0, c)
+    return u, c, items
+
+
+def _cost_scale(rows, current_units, current_invested, div):
+    """記録の購入額の合計が、いまの取得金額より多いときに、記録を縮める率を返す。
+
+    分配金のうち元本払戻金（特別分配金）が出ると、口数はそのままで取得金額だけが
+    下がる。毎月分配型・予想分配金提示型では普通に起きる。すると
+    「記録の購入額の合計 ＞ いまの取得金額」になり、さかのぼったときに古い時期の
+    原価だけが先に尽きて0に張り付く（口数は多いのに原価0）。その日の比率が
+    評価額 ÷ ほぼ0 になり、グラフが数百〜数千%に跳ね上がる。
+
+    記録の購入額を一律に縮めて、いちばん古い記録より前がちょうど0になるようにする。
+    どの時期にいくら払い戻されたかは記録に無いため、期間全体へ按分する。
+    """
+    if not rows or not (current_invested and current_invested > 0):
+        return 1.0
+    _u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
+    if c_end >= -0.5:
+        return 1.0            # 記録と取得金額が合っている（従来どおり）
+    # c_end は k について単調減少。0 以上に収まる最大の k を二分探索で求める。
+    lo, hi = 0.0, 1.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        _u, c_mid, _ = _walk_back(rows, current_units, current_invested, div, mid)
+        if c_mid < 0:
+            hi = mid
+        else:
+            lo = mid
+    return lo
+
+
+def _cost_gap(trades, current_units, current_invested, kind="fund"):
+    """記録の購入額の合計が、いまの取得金額をどれだけ上回っているか。
+
+    上回っていなければ None。上回っていれば、その差を返す（元本払戻金のぶん、
+    または投資金額の入力が実際と違う）。
+    """
+    div = 1.0 if kind == "stock" else 10000.0
+    rows = _trade_rows(trades)
+    if not rows or not (current_invested and current_invested > 0):
+        return None
+    _u, c_end, _ = _walk_back(rows, current_units, current_invested, div, 1.0)
+    if c_end >= -0.5:
+        return None
+    bought = sum(n * p / div + fee for _d, side, n, p, fee in rows if side == "buy")
+    return {"short": round(-c_end), "bought": round(bought),
+            "invested": round(float(current_invested)),
+            "from": rows[-1][0], "to": rows[0][0]}
 
 
 def _basis_series(timeline, dates, units, invested):
@@ -1107,7 +1179,16 @@ def api_watchlist_invested():
     if invested < 0:
         return jsonify({"ok": False, "error": "投資金額は0以上で入力してください。"}), 400
     saved = db.set_invested(int(watch_id), invested)
-    return jsonify({"ok": True, "invested": saved})
+    # 売買の記録がある保有で、記録の購入合計より少ない額を入れた場合は、その差を覚えておく。
+    # 元本払戻金（特別分配金）で取得金額が下がったぶんで、記録には出てこない。
+    # 覚えておかないと、次にCSVを取り込んだときに記録の合計で上書きされて元に戻ってしまう。
+    adjusted = 0
+    trades = db.list_trades(int(watch_id))
+    if trades:
+        pos = db.trade_position(trades, _watch_kind(watch_id))
+        adjusted = round(max(0.0, float(pos["cost"]) - invested))
+        _set_cost_adjust(watch_id, adjusted)
+    return jsonify({"ok": True, "invested": saved, "cost_adjust": adjusted})
 
 
 @app.route("/api/watchlist/label", methods=["POST"])
@@ -1218,15 +1299,52 @@ def _ensure_opening_trade(watch_id, before_date):
     return {"units": units, "invested": invested, "date": d.isoformat()}
 
 
+_COST_ADJ_KEY = "cost_adjust"      # 保有ID → 取得金額の引き下げ額（元本払戻金のぶん）
+
+
+def _cost_adjust(watch_id=None):
+    """元本払戻金（特別分配金）などで、記録の購入合計より取得金額が下がっているぶん。
+
+    毎月分配型・予想分配金提示型では、分配金の一部が元本払戻金になり、口数は
+    そのままで取得金額だけが下がる。これは売買の記録には出てこないので、
+    記録から計算した取得原価をそのまま使うと実際より高くなる。
+    利用者が証券会社の取得金額を入力したときの差を覚えておき、
+    CSVを取り込み直しても上書きで消えないようにする。
+    """
+    adj = db.get_setting(_COST_ADJ_KEY, {}) or {}
+    if not isinstance(adj, dict):
+        adj = {}
+    if watch_id is None:
+        return adj
+    try:
+        return max(0.0, float(adj.get(str(int(watch_id))) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _set_cost_adjust(watch_id, amount):
+    adj = _cost_adjust()
+    key = str(int(watch_id))
+    if amount and amount > 0.5:
+        adj[key] = round(float(amount))
+    else:
+        adj.pop(key, None)
+    db.set_setting(_COST_ADJ_KEY, adj)
+
+
 def _sync_position_from_trades(watch_id, kind=None):
     """売買の記録から保有口数と投資金額（取得原価）を計算し、保有へ反映する。
-    記録が1件も無い保有は手入力のままにする（自動で0にしない）。"""
+    記録が1件も無い保有は手入力のままにする（自動で0にしない）。
+    元本払戻金のぶん（利用者が入力した取得金額との差）は引いたまま保つ。"""
     trades = db.list_trades(int(watch_id))
     if not trades:
         return None
     pos = db.trade_position(trades, kind or _watch_kind(watch_id))
     db.set_units(int(watch_id), pos["units"])
-    db.set_invested(int(watch_id), pos["cost"])
+    cost = max(0.0, float(pos["cost"]) - _cost_adjust(watch_id))
+    db.set_invested(int(watch_id), cost)
+    pos = dict(pos)
+    pos["cost"] = round(cost)
     return pos
 
 
@@ -1723,6 +1841,8 @@ def api_actual_history():
                     gap = 0
                 if gap >= 20:        # 数日のずれは記録漏れとは言えない
                     opening_gap = {"from": rec_first, "to": trade_first, "days": gap}
+        # 記録の購入額の合計が、いまの取得金額を上回っている保有（元本払戻金など）
+        cost_gap = _cost_gap(hs_trades, units, inv, kind)
 
         dates = sorted(merged.keys())
         amounts = [merged[d] for d in dates]
@@ -1772,6 +1892,8 @@ def api_actual_history():
             "ratio_drop_from": drop_from, "ratio_drop_to": drop_to,
             # 売買の記録より前から評価額の履歴がある＝開始残高が足りていない可能性
             "opening_gap": opening_gap,
+            # 記録の購入額の合計 ＞ いまの取得金額（元本払戻金のぶん按分して補正した）
+            "cost_gap": cost_gap,
             "latest": amounts[-1] if amounts else None,
             "latest_ratio": ratio[-1] if ratio else None,
         })
