@@ -52,6 +52,31 @@ def _no_store_static(resp):
 
 DEMO_MODE = False
 
+# フォルダを入れ替えたのに古い版が動いている、という取り違えを一目で分かるようにする。
+# 更新のたびに手で上げる番号と、ファイルの日付（zipを展開した時刻が残る）の両方を出す。
+APP_VERSION = "2026-11-06.4"
+_VERSION_FILES = ("app.py", "static/app.js", "static/style.css", "templates/index.html")
+
+
+def _app_built_at():
+    """アプリ本体のファイルのうち、いちばん新しい更新日時。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    newest = 0.0
+    for rel in _VERSION_FILES:
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(here, rel)))
+        except OSError:
+            pass
+    if not newest:
+        return ""
+    return dt.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
+
+
+@app.route("/api/version")
+def api_version():
+    """いま動いているアプリの版を返す。"""
+    return jsonify({"ok": True, "version": APP_VERSION, "built": _app_built_at()})
+
 
 @app.errorhandler(Exception)
 def _handle_error(e):

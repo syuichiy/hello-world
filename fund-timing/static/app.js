@@ -2482,7 +2482,25 @@ let lastAiAdvice = null;    // 直近のAIアドバイス全体 {overall, rebala
 let lastAiModel = null;
 let aiLoadedOnce = false;
 
+// いま動いているアプリの版。フォルダを入れ替えたのに古い版が動いている、
+// という取り違えを一目で分かるようにする。
+async function loadAppVersion() {
+  const el = $("app-version");
+  if (!el) return;
+  try {
+    const d = await (await fetch("/api/version")).json();
+    el.innerHTML = `バージョン <strong>${escapeHtml(d.version || "?")}</strong>`
+      + (d.built ? `（ファイルの日付 ${escapeHtml(d.built)}）` : "")
+      + "<br>アプリのフォルダを入れ替えたのに数字が変わらない場合は、"
+      + "<strong>古いフォルダのまま起動しています</strong>。"
+      + "いったん終了し、新しいフォルダから起動し直してください。";
+  } catch (_) {
+    el.textContent = "バージョンを取得できませんでした（古い版の可能性があります）。";
+  }
+}
+
 async function loadSettings() {
+  loadAppVersion();
   try {
     const r = await fetch("/api/settings");
     const d = await r.json();
